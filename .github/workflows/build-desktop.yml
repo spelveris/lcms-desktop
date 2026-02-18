@@ -60,6 +60,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SMOKE_PORT=18741
 
           ZIP_FILE="$(ls release/*-mac.zip | head -n1)"
           DMG_FILE="$(ls release/*.dmg | head -n1)"
@@ -80,7 +81,7 @@ jobs:
             exit 1
           fi
 
-          "$BACKEND_BIN" > "$SMOKE_DIR/backend.log" 2>&1 &
+          LCMS_PORT="$SMOKE_PORT" "$BACKEND_BIN" > "$SMOKE_DIR/backend.log" 2>&1 &
           BACKEND_PID=$!
           cleanup() {
             kill "$BACKEND_PID" >/dev/null 2>&1 || true
@@ -89,9 +90,12 @@ jobs:
           trap cleanup EXIT
 
           OK=0
-          for _ in {1..30}; do
-            if curl -fsS "http://127.0.0.1:8741/api/health" > "$SMOKE_DIR/health.json"; then
+          for _ in {1..90}; do
+            if curl -fsS "http://127.0.0.1:${SMOKE_PORT}/api/health" > "$SMOKE_DIR/health.json"; then
               OK=1
+              break
+            fi
+            if ! kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
               break
             fi
             sleep 1
@@ -99,6 +103,7 @@ jobs:
 
           if [[ "$OK" -ne 1 ]]; then
             echo "Smoke test failed: packaged backend did not answer /api/health"
+            echo "Backend process running? $(kill -0 "$BACKEND_PID" >/dev/null 2>&1 && echo yes || echo no)"
             echo "Backend log:"
             cat "$SMOKE_DIR/backend.log" || true
             exit 1
@@ -111,6 +116,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $port = 18741
 
           $zipFile = Get-ChildItem -Path release -Filter '*-win.zip' -Recurse | Select-Object -First 1
           $exeFile = Get-ChildItem -Path release -Filter '*.exe' -Recurse | Select-Object -First 1
@@ -132,23 +138,48 @@ jobs:
             throw "Could not find packaged backend binary in Windows app zip."
           }
 
-          $proc = Start-Process -FilePath $backendExe.FullName -WorkingDirectory $backendExe.Directory.FullName -PassThru -WindowStyle Hidden
+          $stdoutLog = Join-Path $smokeDir 'backend.stdout.log'
+          $stderrLog = Join-Path $smokeDir 'backend.stderr.log'
+          if (Test-Path $stdoutLog) { Remove-Item -Path $stdoutLog -Force }
+          if (Test-Path $stderrLog) { Remove-Item -Path $stderrLog -Force }
+
+          $env:LCMS_PORT = "$port"
+          $proc = Start-Process `
+            -FilePath $backendExe.FullName `
+            -WorkingDirectory $backendExe.Directory.FullName `
+            -PassThru `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutLog `
+            -RedirectStandardError $stderrLog
+
           try {
             $ok = $false
             $health = $null
-            for ($i = 0; $i -lt 30; $i++) {
+            for ($i = 0; $i -lt 90; $i++) {
               try {
-                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8741/api/health' -TimeoutSec 2
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2
                 if ($health.status -eq 'ok') {
                   $ok = $true
                   break
                 }
               } catch {
               }
+              if ($proc.HasExited) {
+                break
+              }
               Start-Sleep -Seconds 1
             }
 
             if (-not $ok) {
+              Write-Host "Backend process exited: $($proc.HasExited) ExitCode: $($proc.ExitCode)"
+              if (Test-Path $stdoutLog) {
+                Write-Host "--- backend stdout ---"
+                Get-Content -Path $stdoutLog -Tail 200 | ForEach-Object { Write-Host $_ }
+              }
+              if (Test-Path $stderrLog) {
+                Write-Host "--- backend stderr ---"
+                Get-Content -Path $stderrLog -Tail 200 | ForEach-Object { Write-Host $_ }
+              }
               throw "Smoke test failed: packaged backend did not answer /api/health"
             }
 
