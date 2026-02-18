@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LC-MS Analysis</title>
+  <link rel="stylesheet" href="css/style.css?v=20260218aa">
+  <link rel="stylesheet" href="../node_modules/jsme-editor/jsa.css">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+  <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
+</head>
+<body>
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay" class="hidden">
+    <div class="spinner"></div>
+    <span class="loading-text">Loading...</span>
+  </div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <h2>LC-MS Analysis</h2>
+      <button id="sidebar-toggle-collapse" class="icon-btn" title="Collapse sidebar">&laquo;</button>
+    </div>
+
+    <!-- File Browser -->
+    <div class="sidebar-section">
+      <div class="section-header" data-toggle="file-browser-content">
+        <span>File Browser</span>
+        <span class="chevron">&#9660;</span>
+      </div>
+      <div id="file-browser-content" class="section-content">
+        <div class="path-bar">
+          <input type="text" id="path-input" placeholder="/path/to/data" spellcheck="false">
+          <button id="btn-go" class="btn btn-sm btn-primary">Go</button>
+        </div>
+        <div class="nav-buttons">
+          <button id="btn-up" class="btn btn-sm">&#8679; Up</button>
+          <button id="btn-home" class="btn btn-sm">&#8962; Home</button>
+          <button id="btn-volumes" class="btn btn-sm">&#128190; Volumes</button>
+        </div>
+        <div id="mount-buttons" class="mount-buttons" style="display:none;"></div>
+        <div class="sort-bar">
+          <label>Sort:</label>
+          <select id="sort-select">
+            <option value="date-desc">Date Newest</option>
+            <option value="date-asc">Date Oldest</option>
+            <option value="name-asc">Name A-Z</option>
+            <option value="name-desc">Name Z-A</option>
+          </select>
+        </div>
+        <div id="file-list" class="file-list"></div>
+      </div>
+    </div>
+
+    <!-- Selected Files -->
+    <div class="sidebar-section">
+      <div class="section-header" data-toggle="selected-files-content">
+        <span>Selected Files (<span id="selected-count">0</span>)</span>
+        <span class="chevron">&#9660;</span>
+      </div>
+      <div id="selected-files-content" class="section-content">
+        <div id="selected-files-list" class="selected-files-list">
+          <p class="muted">No files selected</p>
+        </div>
+        <button id="btn-clear-all" class="btn btn-sm btn-danger" style="margin-top:6px;display:none;">Clear All</button>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="sidebar-section">
+      <div class="section-header" data-toggle="settings-content">
+        <span>Settings</span>
+        <span class="chevron">&#9660;</span>
+      </div>
+      <div id="settings-content" class="section-content">
+
+        <!-- UV Wavelengths -->
+        <fieldset class="settings-group">
+          <legend data-toggle="uv-wl-inner">UV Wavelengths <span class="chevron-sm">&#9660;</span></legend>
+          <div id="uv-wl-inner" class="inner-content">
+            <div id="uv-wavelength-checks" class="checkbox-group">
+              <p class="muted">Load a sample to see wavelengths</p>
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- Ionization Mode -->
+        <fieldset class="settings-group">
+          <legend data-toggle="ion-mode-inner">Ionization Mode <span class="chevron-sm">&#9660;</span></legend>
+          <div id="ion-mode-inner" class="inner-content">
+            <label class="radio-label"><input type="radio" name="ion-mode" value="positive" checked> Positive (+)</label>
+            <label class="radio-label"><input type="radio" name="ion-mode" value="negative"> Negative (&minus;)</label>
+          </div>
+        </fieldset>
+
+        <!-- Smoothing -->
+        <fieldset class="settings-group">
+          <legend data-toggle="smoothing-inner">Smoothing <span class="chevron-sm">&#9660;</span></legend>
+          <div id="smoothing-inner" class="inner-content">
+            <label>UV Smoothing: <span id="uv-smooth-val">36</span></label>
+            <input type="range" id="uv-smoothing" min="1" max="99" value="36" step="2">
+            <label>EIC Smoothing: <span id="eic-smooth-val">5</span></label>
+            <input type="range" id="eic-smoothing" min="1" max="49" value="5" step="2">
+          </div>
+        </fieldset>
+
+        <!-- Target m/z -->
+        <fieldset class="settings-group">
+          <legend data-toggle="target-mz-inner">Target m/z Values <span class="chevron-sm">&#9660;</span></legend>
+          <div id="target-mz-inner" class="inner-content">
+            <label>m/z Window: <span id="mz-window-val">0.5</span></label>
+            <input type="range" id="mz-window" min="0.1" max="2.0" value="0.5" step="0.1">
+            <div class="input-row">
+              <input type="number" id="mz-add-input" placeholder="Enter m/z" step="0.01">
+              <button id="btn-add-mz" class="btn btn-sm btn-primary">Add</button>
+            </div>
+            <div id="mz-targets-list" class="tag-list"></div>
+          </div>
+        </fieldset>
+
+        <!-- Graph & Export -->
+        <fieldset class="settings-group">
+          <legend data-toggle="graph-export-inner">Graph &amp; Export <span class="chevron-sm">&#9660;</span></legend>
+          <div id="graph-export-inner" class="inner-content">
+            <label>DPI: <span id="dpi-val">300</span></label>
+            <input type="range" id="export-dpi" min="72" max="600" value="300" step="1">
+            <label>Figure Width: <span id="fig-width-val">6</span></label>
+            <input type="range" id="fig-width" min="4" max="20" value="6" step="0.5">
+            <label>Line Width: <span id="line-width-val">0.8</span></label>
+            <input type="range" id="line-width" min="0.5" max="5" value="0.8" step="0.1">
+            <label class="checkbox-label"><input type="checkbox" id="show-grid"> Show Grid</label>
+            <label class="checkbox-label"><input type="checkbox" id="deconv-show-title" checked> Show Deconvolution Titles</label>
+            <label class="checkbox-label"><input type="checkbox" id="deconv-show-subtitle" checked> Show Deconvolution Subtitles</label>
+            <div class="input-row">
+              <label>Mass Axis Min<input type="number" id="mass-axis-min" placeholder="auto" step="100"></label>
+              <label>Mass Axis Max<input type="number" id="mass-axis-max" placeholder="auto" step="100"></label>
+            </div>
+            <div class="color-row">
+              <label>Initial <input type="color" id="color-initial" value="#808080"></label>
+              <label>Mid <input type="color" id="color-mid" value="#1f77b4"></label>
+              <label>Final <input type="color" id="color-final" value="#d62728"></label>
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- Labels & Titles -->
+        <fieldset class="settings-group">
+          <legend data-toggle="labels-inner">Labels &amp; Titles <span class="chevron-sm">&#9660;</span></legend>
+          <div id="labels-inner" class="inner-content">
+            <label>Single Sample Title<input type="text" id="label-single-title" value="Sample: {name}" placeholder="Sample: {name}"></label>
+            <label>Progression Title<input type="text" id="label-prog-title" value="Time Progression Analysis" placeholder="Time Progression Analysis"></label>
+            <label>X-Axis Label<input type="text" id="label-x-axis" value="Time (min)" placeholder="Time (min)"></label>
+            <label>Y-Axis Label<input type="text" id="label-y-axis" value="Intensity" placeholder="Intensity"></label>
+            <label>UV Panel Title<input type="text" id="label-uv-panel" value="UV Chromatogram ({wavelength} nm)" placeholder="UV Chromatogram ({wavelength} nm)"></label>
+            <label>TIC Panel Title<input type="text" id="label-tic-panel" value="Total Ion Chromatogram (TIC)" placeholder="Total Ion Chromatogram (TIC)"></label>
+          </div>
+        </fieldset>
+
+      </div>
+    </div>
+  </aside>
+
+  <!-- Sidebar expand button (shown when collapsed) -->
+  <button id="sidebar-expand" class="sidebar-expand-btn hidden" title="Expand sidebar">&raquo;</button>
+
+  <!-- Main Content -->
+  <main id="main-content" class="main-content">
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tab-single">Single Sample</button>
+      <button class="tab-btn" data-tab="tab-eic-batch">EIC Batch</button>
+      <button class="tab-btn" data-tab="tab-deconv">Deconvolution</button>
+      <button class="tab-btn" data-tab="tab-batch-deconv">Batch Deconvolution</button>
+      <button class="tab-btn" data-tab="tab-progression">Time Progression</button>
+      <button class="tab-btn" data-tab="tab-time-change-ms">Time Change MS</button>
+      <button class="tab-btn" data-tab="tab-masscalc">Mass Calculator</button>
+      <button class="tab-btn" data-tab="tab-report">Report Export</button>
+    </nav>
+
+    <!-- Tab: Single Sample -->
+    <div id="tab-single" class="tab-panel active">
+      <div class="tab-toolbar">
+        <label>Sample:
+          <select id="single-sample-select"><option value="">-- Load samples --</option></select>
+        </label>
+        <label>m/z target:
+          <input type="number" id="single-mz-add-input" placeholder="e.g. 688.00" step="0.01" style="width:120px;">
+        </label>
+        <button id="btn-single-add-mz" class="btn btn-sm">Add m/z</button>
+        <button id="btn-load-single" class="btn btn-primary">Load &amp; Analyze</button>
+        <div class="export-group">
+          <button class="btn btn-sm btn-export" data-format="png">PNG</button>
+          <button class="btn btn-sm btn-export" data-format="svg">SVG</button>
+          <button class="btn btn-sm btn-export" data-format="pdf">PDF</button>
+        </div>
+        <div id="single-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
+      </div>
+      <div class="molecule-tools">
+        <div class="molecule-tools-row">
+          <label style="min-width:360px;flex:1;">SMILES:
+            <input type="text" id="single-smiles-input" placeholder="e.g. CC(=O)OC1=CC=CC=C1C(=O)O" spellcheck="false">
+          </label>
+          <label>Adduct:
+            <select id="single-smiles-adduct">
+              <option value="auto" selected>Auto</option>
+              <option value="[M+H]+">[M+H]+</option>
+              <option value="[M+Na]+">[M+Na]+</option>
+              <option value="[M+K]+">[M+K]+</option>
+              <option value="[M+2H]2+">[M+2H]2+</option>
+              <option value="[M-H]-">[M-H]-</option>
+              <option value="[M-2H]2-">[M-2H]2-</option>
+            </select>
+          </label>
+          <button id="btn-single-smiles-to-target" class="btn btn-sm btn-primary">Calc m/z &amp; Add Target</button>
+          <button id="btn-single-toggle-sketcher" class="btn btn-sm">Draw Molecule</button>
+          <button id="btn-single-use-drawn" class="btn btn-sm">Use Drawn Structure</button>
+        </div>
+        <div id="single-smiles-result" class="toolbar-note">Enter SMILES or draw a molecule, then compute and add target m/z automatically.</div>
+        <div id="single-sketcher-wrap" class="hidden">
+          <div id="single-sketcher-canvas"></div>
+        </div>
+      </div>
+      <div id="single-metrics" class="metrics-bar"></div>
+      <div class="two-col">
+        <div class="col" id="single-left">
+          <div id="single-uv-plots" class="plot-stack"></div>
+          <div id="single-tic-plot" class="plot-container"></div>
+        </div>
+        <div class="col" id="single-right">
+          <div id="single-eic-plots" class="plot-stack"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Time Progression -->
+    <div id="tab-progression" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <span class="toolbar-note">Requires 2+ selected samples</span>
+        <button id="btn-load-progression" class="btn btn-primary">Generate Progression</button>
+        <div class="export-group">
+          <button class="btn btn-sm btn-export-prog" data-format="png">PNG</button>
+          <button class="btn btn-sm btn-export-prog" data-format="svg">SVG</button>
+          <button class="btn btn-sm btn-export-prog" data-format="pdf">PDF</button>
+        </div>
+      </div>
+      <div id="progression-assignments" class="assignment-grid"></div>
+      <div id="progression-plots" class="plot-stack"></div>
+    </div>
+
+    <!-- Tab: EIC Batch Analysis -->
+    <div id="tab-eic-batch" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <label>Sample:
+          <select id="eic-sample-select"><option value="">-- Load samples --</option></select>
+        </label>
+        <label>m/z target:
+          <input type="number" id="eic-mz-add-input" placeholder="e.g. 688.00" step="0.01" style="width:120px;">
+        </label>
+        <button id="btn-eic-add-mz" class="btn btn-sm">Add m/z</button>
+        <button id="btn-run-eic" class="btn btn-primary">Run EIC Analysis</button>
+        <label class="checkbox-label"><input type="checkbox" id="eic-overlay"> Overlay</label>
+        <label class="checkbox-label"><input type="checkbox" id="eic-normalize"> Normalize</label>
+        <button id="btn-export-eic-csv" class="btn btn-sm">Export CSV</button>
+        <div id="eic-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
+      </div>
+      <div id="eic-batch-content">
+        <div id="eic-combined-plot" class="plot-container"></div>
+        <div id="eic-peak-sections"></div>
+        <div id="eic-results-table-container"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Deconvolution -->
+    <div id="tab-deconv" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <label>Sample:
+          <select id="deconv-sample-select"><option value="">-- Load samples --</option></select>
+        </label>
+        <button id="btn-auto-detect-window" class="btn btn-sm">Auto-Detect Window</button>
+        <button id="btn-run-deconv" class="btn btn-primary">Run Deconvolution</button>
+      </div>
+      <div class="deconv-controls">
+        <div class="input-row">
+          <label>Start (min)<input type="number" id="deconv-start" step="0.01" value="0" min="0"></label>
+          <label>End (min)<input type="number" id="deconv-end" step="0.01" value="30" min="0"></label>
+        </div>
+        <label class="checkbox-label toggle-expert">
+          <input type="checkbox" id="expert-mode-toggle"> Expert Mode
+        </label>
+        <div id="expert-params" class="expert-params hidden">
+          <div class="param-grid">
+            <label>Min Charge<input type="number" id="dp-min-charge" value="1" min="1" max="50"></label>
+            <label>Max Charge<input type="number" id="dp-max-charge" value="50" min="5" max="100"></label>
+            <label>MW Agreement %<input type="number" id="dp-mw-agree" value="0.02" min="0.001" max="0.1" step="0.001"></label>
+            <label>Contiguity Min<input type="number" id="dp-contig-min" value="3" min="2" max="10"></label>
+            <label>Abundance Cutoff %<input type="number" id="dp-abundance" value="5" min="1" max="50"></label>
+            <label>Envelope R&sup2; %<input type="number" id="dp-r2" value="50" min="10" max="100"></label>
+            <label>Peak Width FWHM<input type="number" id="dp-fwhm" value="0.6" min="0.1" max="5.0" step="0.1"></label>
+            <label>Mass Range Low<input type="number" id="dp-mass-low" placeholder="auto" step="100"></label>
+            <label>Mass Range High<input type="number" id="dp-mass-high" placeholder="auto" step="100"></label>
+            <label>Noise Cutoff<input type="number" id="dp-noise" placeholder="auto" step="100"></label>
+            <label class="checkbox-label"><input type="checkbox" id="dp-monoisotopic"> Monoisotopic Proton</label>
+          </div>
+        </div>
+      </div>
+      <div id="deconv-window-context" class="two-col">
+        <div class="col">
+          <div id="deconv-uv-plot" class="plot-container"></div>
+        </div>
+        <div class="col">
+          <div id="deconv-tic-plot" class="plot-container"></div>
+        </div>
+      </div>
+      <div id="deconv-results" class="hidden">
+        <div id="deconv-spectrum-plot" class="plot-container"></div>
+        <div id="deconv-mass-plot" class="plot-container"></div>
+        <div class="tab-toolbar" style="margin:8px 0 4px 0;">
+          <span class="toolbar-note">Ion Selection per Component</span>
+          <div class="export-group">
+            <button class="btn btn-sm btn-export-ion-selection" data-format="png">Download PNG (ion selection)</button>
+            <button class="btn btn-sm btn-export-ion-selection" data-format="svg">Download SVG (ion selection)</button>
+            <button class="btn btn-sm btn-export-ion-selection" data-format="pdf">Download PDF (ion selection)</button>
+          </div>
+        </div>
+        <div id="deconv-ion-selection-plot" class="plot-container">
+          <p class="placeholder-msg">Run deconvolution to render ion selection graph.</p>
+        </div>
+        <div id="deconv-results-table-container"></div>
+        <div id="deconv-ion-detail"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Batch Deconvolution -->
+    <div id="tab-batch-deconv" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <span class="toolbar-note">Requires 2+ selected samples</span>
+        <button id="btn-run-batch-deconv" class="btn btn-primary">Run Batch Deconvolution</button>
+        <label>Top N masses:
+          <input type="number" id="batch-deconv-top-n" min="1" max="20" step="1" value="5" style="width:90px;">
+        </label>
+        <button id="btn-export-batch-deconv-csv" class="btn btn-sm">Export CSV</button>
+        <div class="export-group">
+          <button class="btn btn-sm btn-export-batch-deconv" data-format="png">PNG</button>
+          <button class="btn btn-sm btn-export-batch-deconv" data-format="svg">SVG</button>
+          <button class="btn btn-sm btn-export-batch-deconv" data-format="pdf">PDF</button>
+        </div>
+      </div>
+      <div id="batch-deconv-summary" class="metrics-bar"></div>
+      <div id="batch-deconv-samples" class="plot-stack"></div>
+      <div id="batch-deconv-table-container"></div>
+    </div>
+
+    <!-- Tab: Time Change MS -->
+    <div id="tab-time-change-ms" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <span class="toolbar-note">Requires 2+ selected samples</span>
+        <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS Comparison</button>
+        <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
+        <div class="export-group">
+          <button class="btn btn-sm btn-export-timechange" data-format="png">PNG</button>
+          <button class="btn btn-sm btn-export-timechange" data-format="svg">SVG</button>
+          <button class="btn btn-sm btn-export-timechange" data-format="pdf">PDF</button>
+        </div>
+      </div>
+      <div id="timechange-ms-plot" class="plot-container"></div>
+      <div id="timechange-ms-offset-plot" class="plot-container"></div>
+      <div id="timechange-ms-table-container"></div>
+    </div>
+
+    <!-- Tab: Mass Calculator -->
+    <div id="tab-masscalc" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <label style="min-width:300px;flex:1;">Amino acid sequence or mass(es) (Da):
+          <input type="text" id="masscalc-input" placeholder="MQIFVKTLTGK... or 10651.3 or 3497.5, 3748.6, 3999.8">
+        </label>
+        <label>Sample:
+          <select id="masscalc-sample-select"><option value="">-- Select sample --</option></select>
+        </label>
+        <label>Tolerance (Da):
+          <input type="number" id="masscalc-tol" value="2.0" min="0.5" max="10.0" step="0.5" style="width:90px;">
+        </label>
+        <label>Top N:
+          <input type="number" id="masscalc-top-n" value="5" min="1" max="20" step="1" style="width:80px;">
+        </label>
+        <button id="btn-run-masscalc" class="btn btn-primary">Run Mass Calculator</button>
+      </div>
+      <div id="masscalc-results">
+        <div id="masscalc-summary" class="metrics-bar"></div>
+        <div id="masscalc-mod-table-container"></div>
+        <div id="masscalc-compare-table-container"></div>
+        <div class="masscalc-figure-grid" style="margin-top:10px;">
+          <div class="masscalc-figure-card">
+            <div class="tab-toolbar">
+              <span class="toolbar-note">Mass Calculator Figure</span>
+              <div class="export-group">
+                <button class="btn btn-sm btn-export-masscalc" data-target="main" data-format="png">PNG</button>
+                <button class="btn btn-sm btn-export-masscalc" data-target="main" data-format="svg">SVG</button>
+                <button class="btn btn-sm btn-export-masscalc" data-target="main" data-format="pdf">PDF</button>
+              </div>
+            </div>
+            <div id="masscalc-figure-main" class="plot-container masscalc-figure-panel">
+              <p class="placeholder-msg">Run Mass Calculator to generate figure.</p>
+            </div>
+          </div>
+          <div class="masscalc-figure-card">
+            <div class="tab-toolbar">
+              <span class="toolbar-note">Mass Calculator Figure (clean)</span>
+              <div class="export-group">
+                <button class="btn btn-sm btn-export-masscalc" data-target="clean" data-format="png">PNG</button>
+                <button class="btn btn-sm btn-export-masscalc" data-target="clean" data-format="svg">SVG</button>
+                <button class="btn btn-sm btn-export-masscalc" data-target="clean" data-format="pdf">PDF</button>
+              </div>
+            </div>
+            <div id="masscalc-figure-clean" class="plot-container masscalc-figure-panel">
+              <p class="placeholder-msg">Run Mass Calculator to generate clean figure.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Report Export -->
+    <div id="tab-report" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <select id="report-sample-select">
+          <option value="">-- Select sample --</option>
+        </select>
+        <label class="checkbox-label"><input type="checkbox" id="report-include-uv" checked> Include UV chromatogram</label>
+        <label class="checkbox-label"><input type="checkbox" id="report-include-deconv" checked> Include deconvolution results</label>
+        <button id="btn-export-report-pdf" class="btn btn-sm btn-primary">Export PDF Report</button>
+        <button id="btn-export-session-json" class="btn btn-primary">Export Session JSON</button>
+        <button id="btn-export-report-summary-csv" class="btn btn-sm">Export Summary CSV</button>
+      </div>
+      <div id="report-summary" class="plot-container">
+        <p class="placeholder-msg">Generate analyses in other tabs, then export a session report here.</p>
+      </div>
+    </div>
+  </main>
+
+  <script src="../node_modules/jsme-editor/jsme.nocache.js"></script>
+  <script src="js/api.js?v=20260218aa"></script>
+  <script src="js/charts.js?v=20260218aa"></script>
+  <script src="js/app.js?v=20260218aa"></script>
+</body>
+</html>

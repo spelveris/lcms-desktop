@@ -1,0 +1,72 @@
+{
+  "name": "lcms-desktop",
+  "version": "0.1.0",
+  "description": "LC-MS Analysis Desktop App (Electron + FastAPI)",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "backend": "./start-dev.sh",
+    "setup": "./setup-dev.sh",
+    "frontend-only": "open frontend/index.html",
+    "build:backend": "node scripts/build-backend.js",
+    "dist": "npm run build:backend && electron-builder --publish never",
+    "dist:mac": "npm run build:backend && electron-builder --mac dmg zip --publish never",
+    "dist:win": "npm run build:backend && electron-builder --win nsis portable zip --publish never",
+    "dist:linux": "npm run build:backend && electron-builder --linux AppImage deb --publish never"
+  },
+  "dependencies": {
+    "jsme-editor": "^2024.4.29",
+    "jspdf": "^4.1.0",
+    "openchemlib": "^9.20.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.lcms.desktop",
+    "productName": "LCMS Desktop",
+    "asar": false,
+    "files": [
+      "electron/**/*",
+      "frontend/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/backend/lcms-backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.science",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable",
+        "zip"
+      ]
+    },
+    "linux": {
+      "category": "Science",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  }
+}
