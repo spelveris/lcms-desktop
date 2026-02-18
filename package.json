@@ -29,6 +29,7 @@
     "appId": "com.lcms.desktop",
     "productName": "LCMS Desktop",
     "asar": false,
+    "icon": "build/icons/icon.png",
     "files": [
       "electron/**/*",
       "frontend/**/*",
@@ -48,6 +49,7 @@
       "output": "release"
     },
     "mac": {
+      "icon": "build/icons/icon.icns",
       "category": "public.app-category.science",
       "target": [
         "dmg",
@@ -55,11 +57,17 @@
       ]
     },
     "win": {
+      "icon": "build/icons/icon.ico",
       "target": [
         "nsis",
         "portable",
         "zip"
       ]
+    },
+    "nsis": {
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico",
+      "installerHeaderIcon": "build/icons/icon.ico"
     },
     "linux": {
       "category": "Science",
