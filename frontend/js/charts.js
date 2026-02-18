@@ -451,10 +451,10 @@ const charts = {
       });
     });
 
-    const axisFrame = options.axisFrame !== false;
+    const hideGrid = options.hideGrid === true;
+    const axisFrame = options.axisFrame !== false && !hideGrid;
     const axisLineColor = axisFrame ? '#000000' : 'rgba(0,0,0,0)';
     const axisTickColor = axisFrame ? '#000000' : '#555555';
-    const hideGrid = options.hideGrid === true;
     const layout = mergeLayout({
       title: { text: 'Deconvoluted Masses', font: { size: 14 } },
       xaxis: {
@@ -478,8 +478,26 @@ const charts = {
       annotations,
     });
     if (hideGrid) {
-      layout.xaxis = { ...(layout.xaxis || {}), showgrid: false };
-      layout.yaxis = { ...(layout.yaxis || {}), showgrid: false };
+      layout.xaxis = {
+        ...(layout.xaxis || {}),
+        showgrid: false,
+        showline: true,
+        linecolor: '#000000',
+        ticks: 'outside',
+        mirror: false,
+        zeroline: false,
+        color: '#000000',
+      };
+      layout.yaxis = {
+        ...(layout.yaxis || {}),
+        showgrid: false,
+        showline: true,
+        linecolor: '#000000',
+        ticks: 'outside',
+        mirror: false,
+        zeroline: false,
+        color: '#000000',
+      };
     }
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -640,12 +658,15 @@ const charts = {
       layoutOverrides[yAxisName] = {
         domain: [domainBottom, domainTop],
         anchor: xRef,
-        title: col === 0 ? 'Intensity' : '',
-        side: col === 0 ? 'left' : 'right',
+        title: 'Intensity',
+        side: 'left',
         showticklabels: true,
         exponentformat: 'e',
         showexponent: 'all',
         showgrid: true,
+        showline: true,
+        linecolor: '#000000',
+        ticks: 'outside',
         range: [0, yMax],
         automargin: true,
       };
@@ -655,7 +676,7 @@ const charts = {
       title: { text: options.title || 'Ion Selection per Component', font: { size: 14 } },
       showlegend: false,
       height: Math.max(420, 250 * rows + 70),
-      margin: { l: 58, r: 18, t: 40, b: 45 },
+      margin: { l: 62, r: 70, t: 40, b: 45 },
       annotations,
       ...layoutOverrides,
     });

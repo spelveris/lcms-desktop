@@ -8,6 +8,9 @@ import os
 import sys
 import io
 import datetime
+import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -120,6 +123,141 @@ def _coerce_bool(value, default: bool) -> bool:
 def _sanitize_filename(name: str, fallback: str = "sample") -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in str(name)).strip("_")
     return safe or fallback
+
+
+def _resolve_node_command() -> Optional[str]:
+    preferred = os.environ.get("LCMS_NODE")
+    candidates = []
+    if preferred:
+        candidates.append(preferred)
+    candidates.extend(["node", "nodejs"])
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_path = candidate if os.path.isabs(candidate) else shutil.which(candidate)
+        if not candidate_path:
+            continue
+        try:
+            check = subprocess.run(
+                [candidate_path, "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            if check.returncode == 0:
+                return candidate_path
+        except Exception:
+            continue
+    return None
+
+
+def _compute_smiles_properties(smiles: str) -> dict:
+    node_cmd = _resolve_node_command()
+    if not node_cmd:
+        raise HTTPException(status_code=500, detail="Node.js runtime not available for SMILES calculation")
+
+    smiles = str(smiles or "").strip()
+    if not smiles:
+        raise HTTPException(status_code=400, detail="smiles is required")
+
+    env = dict(os.environ)
+    node_modules_dir = env.get("LCMS_NODE_MODULES", "").strip()
+    if node_modules_dir and os.path.isdir(node_modules_dir):
+        existing_node_path = env.get("NODE_PATH", "")
+        env["NODE_PATH"] = f"{node_modules_dir}{os.pathsep}{existing_node_path}" if existing_node_path else node_modules_dir
+
+    if env.get("LCMS_NODE") and os.path.abspath(node_cmd) == os.path.abspath(env["LCMS_NODE"]):
+        env["ELECTRON_RUN_AS_NODE"] = "1"
+
+    if node_modules_dir and os.path.isdir(node_modules_dir):
+        run_cwd = os.path.dirname(node_modules_dir)
+    else:
+        project_root = os.path.abspath(os.path.join(BACKEND_DIR, ".."))
+        run_cwd = project_root if os.path.isdir(os.path.join(project_root, "node_modules")) else BACKEND_DIR
+
+    node_script = r"""
+const chunks = [];
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => chunks.push(d));
+process.stdin.on('end', async () => {
+  try {
+    const payload = JSON.parse(chunks.join('') || '{}');
+    const smiles = String(payload.smiles || '').trim();
+    if (!smiles) throw new Error('smiles is required');
+
+    const mod = await import('openchemlib');
+    const OCL = mod.default || mod;
+    let mol;
+    try {
+      mol = OCL.Molecule.fromSmiles(smiles);
+    } catch (e) {
+      throw new Error('Invalid SMILES syntax');
+    }
+    if (!mol) throw new Error('Could not parse SMILES');
+
+    const mf = mol.getMolecularFormula();
+    const exactMass = Number(mf.absoluteWeight);
+    if (!Number.isFinite(exactMass) || exactMass <= 0) {
+      throw new Error('Unable to calculate molecular mass');
+    }
+
+    let netCharge = 0;
+    const atomCount = Number(mol.getAllAtoms?.()) || 0;
+    for (let i = 0; i < atomCount; i++) {
+      netCharge += Number(mol.getAtomCharge?.(i)) || 0;
+    }
+
+    process.stdout.write(JSON.stringify({
+      formula: String(mf.formula || ''),
+      exact_mass: exactMass,
+      net_charge: netCharge
+    }));
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    process.stderr.write(msg);
+    process.exit(1);
+  }
+});
+"""
+
+    try:
+        result = subprocess.run(
+            [node_cmd, "-e", node_script],
+            input=json.dumps({"smiles": smiles}),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=run_cwd,
+            env=env,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="SMILES calculation timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"SMILES calculation failed: {exc}")
+
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or (result.stdout or "").strip() or "Unknown SMILES calculation error"
+        raise HTTPException(status_code=400, detail=err)
+
+    try:
+        parsed = json.loads(result.stdout or "{}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Invalid SMILES calculator response")
+
+    formula = str(parsed.get("formula", ""))
+    exact_mass = float(parsed.get("exact_mass", 0.0))
+    net_charge = int(parsed.get("net_charge", 0))
+    if not np.isfinite(exact_mass) or exact_mass <= 0:
+        raise HTTPException(status_code=400, detail="Unable to calculate molecular mass from this SMILES")
+
+    return {
+        "formula": formula,
+        "exact_mass": exact_mass,
+        "net_charge": net_charge,
+    }
 
 
 def _detect_deconvolution_window_for_sample(sample: SampleData) -> tuple[float, float]:
@@ -462,6 +600,13 @@ def detect_deconv_window(path: str = Query(...)):
     if auto_end <= auto_start:
         raise HTTPException(status_code=404, detail="No MS time data")
     return {"start": auto_start, "end": auto_end}
+
+
+@app.post("/api/smiles-mz")
+def smiles_mz(payload: dict = Body(...)):
+    """Calculate exact mass/formula/charge from SMILES using OpenChemLib in Node."""
+    smiles = str((payload or {}).get("smiles", "")).strip()
+    return _compute_smiles_properties(smiles)
 
 
 @app.post("/api/deconvolute")

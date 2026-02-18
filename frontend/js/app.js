@@ -35,8 +35,8 @@ const state = {
   browseItems: [],
   singleSketcher: null,
   singleSketcherType: '',
-  singleJSMEDisabled: true,
-  openChemLibPromise: null,
+  singleSketcherWheelGuardBound: false,
+  singleSketcherWheelHandler: null,
 };
 
 const DECONV_DISPLAY_TOP_N = 5;
@@ -78,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initMassCalc();
   initReportExport();
   restoreState();
+  window.addEventListener('resize', () => schedulePlotlyResize(), { passive: true });
 });
 
 // ===== Toast Notifications =====
@@ -87,7 +88,10 @@ function toast(message, type = 'info') {
   el.className = `toast ${type}`;
   el.textContent = message;
   container.appendChild(el);
-  setTimeout(() => { el.remove(); }, 4000);
+  const msg = String(message || '').toLowerCase();
+  const isLoadToast = msg.includes('loaded') || msg.startsWith('load:') || msg.startsWith('loaded:');
+  const ttlMs = type === 'success' ? 2000 : (isLoadToast ? 2000 : 4000);
+  setTimeout(() => { el.remove(); }, ttlMs);
 }
 
 // ===== Loading Overlay =====
@@ -102,17 +106,49 @@ function hideLoading() {
   document.getElementById('loading-overlay').classList.add('hidden');
 }
 
+function resizePlotlyById(plotId) {
+  if (!plotId || !(window.Plotly && window.Plotly.Plots && typeof window.Plotly.Plots.resize === 'function')) return;
+  const el = document.getElementById(plotId);
+  if (!el || !el.classList.contains('js-plotly-plot')) return;
+  try {
+    window.Plotly.Plots.resize(el);
+  } catch (_) {
+    // Ignore transient Plotly resize failures during layout transitions.
+  }
+}
+
+function schedulePlotlyResize(plotIds = []) {
+  const ids = (Array.isArray(plotIds) && plotIds.length > 0)
+    ? plotIds
+    : [
+      'deconv-spectrum-plot',
+      'deconv-mass-plot',
+      'deconv-ion-selection-plot',
+      'single-tic-plot',
+      'eic-overlay-plot',
+      'timechange-ms-plot',
+      'timechange-ms-offset-plot',
+    ];
+  [0, 120, 280].forEach((delayMs) => {
+    setTimeout(() => ids.forEach((id) => resizePlotlyById(id)), delayMs);
+  });
+}
+
 // ===== Sidebar =====
 function initSidebar() {
   // Collapse/expand
   document.getElementById('sidebar-toggle-collapse').addEventListener('click', () => {
     document.getElementById('sidebar').classList.add('collapsed');
     document.getElementById('sidebar-expand').classList.remove('hidden');
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 180);
+    schedulePlotlyResize();
   });
 
   document.getElementById('sidebar-expand').addEventListener('click', () => {
     document.getElementById('sidebar').classList.remove('collapsed');
     document.getElementById('sidebar-expand').classList.add('hidden');
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 180);
+    schedulePlotlyResize();
   });
 
   // Collapsible sections
@@ -147,6 +183,7 @@ function initTabs() {
       btn.classList.add('active');
       const panel = document.getElementById(btn.dataset.tab);
       if (panel) panel.classList.remove('hidden');
+      schedulePlotlyResize();
     });
   });
 }
@@ -614,39 +651,6 @@ function initSingleSample() {
   });
 }
 
-async function getOpenChemLib() {
-  if (!state.openChemLibPromise) {
-    const globalObj = typeof window !== 'undefined' ? window : globalThis;
-    const hadOwnProcess = Object.prototype.hasOwnProperty.call(globalObj, 'process');
-    const previousProcess = globalObj.process;
-    const restoreProcess = () => {
-      try {
-        if (hadOwnProcess) globalObj.process = previousProcess;
-        else delete globalObj.process;
-      } catch (_) {
-        // Ignore non-writable globals.
-      }
-    };
-
-    try {
-      globalObj.process = undefined;
-    } catch (_) {
-      // Ignore non-writable globals.
-    }
-
-    state.openChemLibPromise = import('../../node_modules/openchemlib/dist/openchemlib.js')
-      .then((mod) => mod.default || mod)
-      .catch((err) => {
-        state.openChemLibPromise = null;
-        throw err;
-      })
-      .finally(() => {
-        restoreProcess();
-      });
-  }
-  return state.openChemLibPromise;
-}
-
 function setSingleSmilesResult(message, tone = 'muted') {
   const resultEl = document.getElementById('single-smiles-result');
   if (!resultEl) return;
@@ -668,26 +672,12 @@ function getSingleSmilesAdduct() {
 }
 
 async function computeSmilesMz(smiles, adductKey) {
-  const OCL = await getOpenChemLib();
-  let mol;
-  try {
-    mol = OCL.Molecule.fromSmiles(smiles);
-  } catch (_) {
-    throw new Error('Invalid SMILES syntax');
-  }
-
-  if (!mol) throw new Error('Could not parse SMILES');
-  const mf = mol.getMolecularFormula();
-  const formula = String(mf.formula || '');
-  const exactMass = Number(mf.absoluteWeight);
+  const props = await api.computeSmiles(smiles);
+  const formula = String(props.formula || '');
+  const exactMass = Number(props.exact_mass);
+  const netCharge = Number(props.net_charge || 0);
   if (!Number.isFinite(exactMass) || exactMass <= 0) {
     throw new Error('Unable to calculate molecular mass from this SMILES');
-  }
-
-  let netCharge = 0;
-  const atomCount = Number(mol.getAllAtoms?.()) || 0;
-  for (let i = 0; i < atomCount; i++) {
-    netCharge += Number(mol.getAtomCharge?.(i)) || 0;
   }
 
   let mz;
@@ -757,38 +747,63 @@ async function waitForJSME(timeoutMs = 10000) {
   throw new Error('JSME editor did not finish loading');
 }
 
+function bindSingleSketcherWheelGuard(host) {
+  if (!host || state.singleSketcherWheelGuardBound) return;
+  const handler = (event) => {
+    // Prevent JSME wheel zoom so scrolling over the gray canvas behaves like page scroll.
+    event.preventDefault();
+    event.stopPropagation();
+    const panel = host.closest('.tab-panel');
+    if (panel && Number.isFinite(event.deltaY)) {
+      panel.scrollTop += event.deltaY;
+    }
+  };
+  host.addEventListener('wheel', handler, { passive: false, capture: true });
+  state.singleSketcherWheelGuardBound = true;
+  state.singleSketcherWheelHandler = handler;
+}
+
 async function ensureSingleSketcher() {
   if (state.singleSketcher) return state.singleSketcher;
 
   const host = document.getElementById('single-sketcher-canvas');
   if (!host) throw new Error('Sketcher container is missing');
   host.innerHTML = '';
+  await waitForJSME(10000);
+  const widthPx = Math.max(420, Math.floor(host.clientWidth || 760));
+  const heightPx = Math.max(380, Math.floor(host.clientHeight || 420));
+  const JSME = window.JSApplet && window.JSApplet.JSME;
+  if (typeof JSME !== 'function') {
+    throw new Error('JSME constructor is unavailable');
+  }
 
-  if (!state.singleJSMEDisabled) {
+  // Some builds reject certain option combinations; try safe fallbacks.
+  const optionCandidates = ['hydrogens', '', 'oldlook'];
+  let lastErr = null;
+  for (const opts of optionCandidates) {
     try {
-      await waitForJSME(2000);
-      const widthPx = Math.max(380, host.clientWidth || 760);
-      state.singleSketcher = new window.JSApplet.JSME(
+      host.innerHTML = '';
+      state.singleSketcher = new JSME(
         'single-sketcher-canvas',
         `${widthPx}px`,
-        '320px',
-        'query,hydrogens'
+        `${heightPx}px`,
+        opts
       );
-      state.singleSketcherType = 'jsme';
-      return state.singleSketcher;
-    } catch (_) {
-      state.singleJSMEDisabled = true;
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      state.singleSketcher = null;
     }
   }
 
-  const OCL = await getOpenChemLib();
-  state.singleSketcher = new OCL.CanvasEditor(host, {
-    initialMode: 'molecule',
-    initialFragment: false,
-    readOnly: false,
-  });
-  state.singleSketcherType = 'ocl';
-  setSingleSmilesResult('Using built-in molecule drawer fallback (OpenChemLib editor).', 'muted');
+  if (!state.singleSketcher) {
+    const msg = lastErr && lastErr.message ? lastErr.message : String(lastErr || 'Unknown initialization error');
+    throw new Error(`JSME initialization failed: ${msg}`);
+  }
+
+  bindSingleSketcherWheelGuard(host);
+  state.singleSketcherType = 'jsme';
   return state.singleSketcher;
 }
 
@@ -823,14 +838,7 @@ async function useDrawnStructureAsSmiles() {
   try {
     const sketcher = await ensureSingleSketcher();
     let smiles = '';
-    if (state.singleSketcherType === 'jsme') {
-      smiles = typeof sketcher.smiles === 'function' ? String(sketcher.smiles() || '').trim() : '';
-    } else {
-      const mol = typeof sketcher.getMolecule === 'function' ? sketcher.getMolecule() : null;
-      if (mol && typeof mol.toSmiles === 'function') {
-        smiles = String(mol.toSmiles() || '').trim();
-      }
-    }
+    smiles = typeof sketcher.smiles === 'function' ? String(sketcher.smiles() || '').trim() : '';
     if (!smiles) {
       toast('Draw a molecule first', 'warning');
       return;
@@ -2137,6 +2145,9 @@ function initDeconvolution() {
   document.getElementById('btn-run-deconv').addEventListener('click', runDeconvolution);
   document.getElementById('deconv-start').addEventListener('change', () => refreshDeconvWindowContext());
   document.getElementById('deconv-end').addEventListener('change', () => refreshDeconvWindowContext());
+  document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
+    btn.addEventListener('click', () => exportDeconvMasses(btn.dataset.format));
+  });
   document.querySelectorAll('.btn-export-ion-selection').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvIonSelection(btn.dataset.format));
   });
@@ -2388,6 +2399,9 @@ function renderDeconvResults(data) {
     document.getElementById('deconv-mass-plot').innerHTML = '<p class="placeholder-msg">No masses deconvoluted</p>';
   }
 
+  // Ensure both side-by-side Plotly canvases reflow to container width.
+  schedulePlotlyResize(['deconv-spectrum-plot', 'deconv-mass-plot']);
+
   // Results table
   const tableContainer = document.getElementById('deconv-results-table-container');
   tableContainer.innerHTML = '';
@@ -2538,28 +2552,53 @@ async function exportDeconvIonSelection(format) {
   }
 }
 
+async function exportDeconvMasses(format) {
+  const samplePath = state.deconvSamplePath;
+  const components = getDeconvDisplayComponents();
+  if (!samplePath || components.length === 0) {
+    toast('Run deconvolution first', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
+  const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
+
+  showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
+  try {
+    const response = await api.exportDeconvolutedMasses({
+      sample_name: sampleName,
+      components,
+      format,
+      dpi,
+      style: buildCurrentDeconvStyle(),
+    });
+    const blob = await response.blob();
+    downloadBlob(blob, `${sanitizeFilename(sampleName)}_deconvoluted_masses.${format}`);
+    toast(`Exported ${String(format || '').toUpperCase()} (deconvoluted masses)`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
 function showIonDetail(component) {
   const container = document.getElementById('deconv-ion-detail');
   container.innerHTML = '';
 
   const card = document.createElement('div');
   card.className = 'ion-detail-card';
-  card.innerHTML = `<h4>Ion Detail: ${component.mass.toFixed(1)} Da</h4>
-    <div id="ion-detail-plot" style="min-height:280px;"></div>`;
+  card.innerHTML = `<h4>Ion Detail: ${component.mass.toFixed(1)} Da</h4>`;
   container.appendChild(card);
 
   const charges = component.ion_charges || [];
   const mzs = component.ion_mzs || [];
   const intensities = component.ion_intensities || [];
 
-  if (charges.length > 0) {
-    charts.plotIonDetail('ion-detail-plot', component);
-  }
-
   // Also show a small table of ions
   if (charges.length > 0) {
     const PROTON = 1.00784;
-    let html = `<div class="data-table-wrapper" style="margin-top:10px;"><table class="data-table">
+    let html = `<div class="data-table-wrapper ion-detail-table-wrapper"><table class="data-table ion-detail-table">
       <thead><tr><th>z</th><th>m/z Theoretical</th><th>m/z Observed</th><th>Intensity</th><th>&Delta; ppm</th></tr></thead><tbody>`;
 
     charges.forEach((z, i) => {
@@ -2578,6 +2617,8 @@ function showIonDetail(component) {
 
     html += '</tbody></table></div>';
     card.insertAdjacentHTML('beforeend', html);
+  } else {
+    card.insertAdjacentHTML('beforeend', '<p class="muted" style="margin-top:8px;">No ion assignments available for this component.</p>');
   }
 }
 
@@ -2892,7 +2933,7 @@ function renderBatchDeconvolution(data) {
       </div>
     `);
     section.insertAdjacentHTML('beforeend', `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+      <div class="batch-deconv-download-row">
         <button class="btn btn-sm" data-format="png">Download PNG</button>
         <button class="btn btn-sm" data-format="svg">Download SVG</button>
         <button class="btn btn-sm" data-format="pdf">Download PDF</button>

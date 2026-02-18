@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LC-MS Analysis</title>
-  <link rel="stylesheet" href="css/style.css?v=20260218aa">
+  <link rel="stylesheet" href="css/style.css?v=20260218aj">
   <link rel="stylesheet" href="../node_modules/jsme-editor/jsa.css">
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -315,8 +315,21 @@
         </div>
       </div>
       <div id="deconv-results" class="hidden">
-        <div id="deconv-spectrum-plot" class="plot-container"></div>
-        <div id="deconv-mass-plot" class="plot-container"></div>
+        <div class="two-col">
+          <div class="col">
+            <div id="deconv-spectrum-plot" class="plot-container"></div>
+          </div>
+          <div class="col">
+            <div class="plot-container deconv-mass-card">
+              <div id="deconv-mass-plot" class="deconv-mass-plot-inner"></div>
+              <div class="deconv-mass-download-row">
+                <button class="btn btn-sm btn-export-deconv-masses" data-format="png">Download PNG</button>
+                <button class="btn btn-sm btn-export-deconv-masses" data-format="svg">Download SVG</button>
+                <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf">Download PDF</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="tab-toolbar" style="margin:8px 0 4px 0;">
           <span class="toolbar-note">Ion Selection per Component</span>
           <div class="export-group">
@@ -373,7 +386,7 @@
     <!-- Tab: Mass Calculator -->
     <div id="tab-masscalc" class="tab-panel hidden">
       <div class="tab-toolbar">
-        <label style="min-width:300px;flex:1;">Amino acid sequence or mass(es) (Da):
+        <label class="masscalc-query-label">Amino acid sequence or mass(es) (Da):
           <input type="text" id="masscalc-input" placeholder="MQIFVKTLTGK... or 10651.3 or 3497.5, 3748.6, 3999.8">
         </label>
         <label>Sample:
@@ -441,8 +454,8 @@
   </main>
 
   <script src="../node_modules/jsme-editor/jsme.nocache.js"></script>
-  <script src="js/api.js?v=20260218aa"></script>
-  <script src="js/charts.js?v=20260218aa"></script>
-  <script src="js/app.js?v=20260218aa"></script>
+  <script src="js/api.js?v=20260218aj"></script>
+  <script src="js/charts.js?v=20260218aj"></script>
+  <script src="js/app.js?v=20260218aj"></script>
 </body>
 </html>

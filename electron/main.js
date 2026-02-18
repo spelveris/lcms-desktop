@@ -63,10 +63,22 @@ function resolveBackendCommand() {
 
 function startBackend() {
   const backendCmd = resolveBackendCommand();
+  const backendEnv = { ...process.env, LCMS_PORT: String(BACKEND_PORT) };
+
+  if (app.isPackaged) {
+    const packagedNodeModules = path.join(process.resourcesPath, "app", "node_modules");
+    if (fs.existsSync(packagedNodeModules)) {
+      backendEnv.LCMS_NODE_MODULES = packagedNodeModules;
+      backendEnv.NODE_PATH = backendEnv.NODE_PATH
+        ? `${packagedNodeModules}${path.delimiter}${backendEnv.NODE_PATH}`
+        : packagedNodeModules;
+    }
+    backendEnv.LCMS_NODE = process.execPath;
+  }
 
   backendProcess = spawn(backendCmd.cmd, backendCmd.args, {
     cwd: backendCmd.cwd,
-    env: { ...process.env, LCMS_PORT: String(BACKEND_PORT) },
+    env: backendEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

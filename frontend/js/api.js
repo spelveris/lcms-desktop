@@ -170,6 +170,14 @@ const api = {
     });
   },
 
+  computeSmiles(smiles) {
+    return apiFetch('/api/smiles-mz', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ smiles }),
+    });
+  },
+
   getVolumes() {
     return apiFetch('/api/volumes');
   },
@@ -240,7 +248,15 @@ const api = {
     const results = await Promise.all(targets.map(async (mz) => {
       const [eicData, peakData] = await Promise.all([
         this.getEIC(path, mz, mz_window, smoothing).catch(() => null),
-        this.findPeaks(path, 'eic', { mz, mzWindow: mz_window, smooth: smoothing }).catch(() => ({ peaks: [] })),
+        // EIC batch uses a slightly more sensitive detector to avoid missing
+        // lower-abundance shoulder peaks in multi-peak traces.
+        this.findPeaks(path, 'eic', {
+          mz,
+          mzWindow: mz_window,
+          smooth: smoothing,
+          heightThreshold: 0.06,
+          prominence: 0.03,
+        }).catch(() => ({ peaks: [] })),
       ]);
 
       const peaks = (peakData.peaks || []).map(p => ({

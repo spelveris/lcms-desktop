@@ -188,7 +188,7 @@ input[type="radio"] {
   left: 0;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 20;
+  z-index: 2000;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-left: none;
@@ -200,6 +200,14 @@ input[type="radio"] {
   transition: all var(--transition);
 }
 .sidebar-expand-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+
+/* Keep sidebar restore button reliable even if JS hidden class toggling desyncs */
+#sidebar.collapsed + #sidebar-expand {
+  display: block !important;
+}
+#sidebar:not(.collapsed) + #sidebar-expand {
+  display: none !important;
+}
 
 /* Sidebar sections */
 .sidebar-section {
@@ -525,6 +533,19 @@ input[type="radio"] {
   width: auto;
 }
 .tab-toolbar select { min-width: 200px; }
+.masscalc-query-label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  flex: 1 1 680px;
+  min-width: 560px;
+  white-space: normal;
+}
+.masscalc-query-label #masscalc-input {
+  width: 100%;
+  min-width: 520px;
+}
 .toolbar-note { font-size: 12px; color: var(--text-muted); font-style: italic; }
 .tab-mz-targets-inline {
   flex: 1 1 100%;
@@ -567,7 +588,36 @@ input[type="radio"] {
 
 #single-sketcher-canvas {
   width: 100%;
-  min-height: 320px;
+  min-height: 420px;
+  height: 420px;
+  overflow: hidden;
+}
+
+/* Isolate JSME internals from app-wide reset rules (fixes icon/square misalignment). */
+#single-sketcher-canvas,
+#single-sketcher-canvas * {
+  box-sizing: content-box !important;
+}
+#single-sketcher-canvas table,
+#single-sketcher-canvas tr,
+#single-sketcher-canvas td,
+#single-sketcher-canvas div,
+#single-sketcher-canvas img,
+#single-sketcher-canvas canvas {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: normal !important;
+}
+#single-sketcher-canvas table {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+}
+#single-sketcher-canvas td {
+  vertical-align: middle !important;
+  text-align: center !important;
+}
+#single-sketcher-canvas img {
+  display: block !important;
 }
 
 .export-group {
@@ -619,6 +669,14 @@ input[type="radio"] {
   padding: 8px;
   margin-bottom: 16px;
   min-height: 300px;
+  overflow: hidden;
+}
+.plot-container.js-plotly-plot,
+.deconv-mass-plot-inner.js-plotly-plot,
+.batch-deconv-interactive-plot.js-plotly-plot,
+#deconv-ion-selection-plot.js-plotly-plot {
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 .plot-stack {
@@ -661,6 +719,31 @@ input[type="radio"] {
 }
 .param-grid input {
   margin-top: 4px;
+}
+
+.deconv-mass-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  border-color: transparent;
+}
+
+.deconv-mass-plot-inner {
+  min-height: 320px;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.deconv-mass-download-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+#deconv-spectrum-plot {
+  border-color: transparent;
 }
 
 /* ===== Progression Assignments ===== */
@@ -800,6 +883,14 @@ input[type="radio"] {
   max-height: 100%;
   object-fit: contain;
 }
+.batch-deconv-download-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  width: 100%;
+  justify-content: flex-end;
+}
 
 /* ===== Tables ===== */
 .data-table-wrapper {
@@ -917,6 +1008,13 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
     padding: 10px 12px;
     font-size: 12px;
   }
+  .masscalc-query-label {
+    min-width: 320px;
+    flex-basis: 100%;
+  }
+  .masscalc-query-label #masscalc-input {
+    min-width: 0;
+  }
 }
 
 @media (max-width: 600px) {
@@ -979,6 +1077,22 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   color: var(--accent);
   margin-bottom: 10px;
 }
+.ion-detail-table-wrapper {
+  margin-top: 8px;
+}
+.ion-detail-table th {
+  position: static;
+  top: auto;
+  white-space: nowrap;
+  text-align: right;
+}
+.ion-detail-table td {
+  text-align: right;
+}
+.ion-detail-table th:first-child,
+.ion-detail-table td:first-child {
+  text-align: center;
+}
 
 #deconv-ion-selection-plot {
   max-height: 820px;
@@ -986,7 +1100,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 }
 #deconv-ion-selection-plot.interactive-ion-selection {
   background: #ffffff;
-  border-color: #cfcfcf;
+  border-color: transparent;
 }
 #deconv-ion-selection-plot.has-image {
   background: #ffffff;
