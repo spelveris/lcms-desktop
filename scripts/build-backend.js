@@ -30,7 +30,8 @@ function resolvePythonCommand() {
   });
 
   if (process.platform === "win32") {
-    candidates.push("py", "python");
+    // Prefer the same interpreter configured by actions/setup-python.
+    candidates.push("python", "py");
   } else {
     candidates.push("python3", "python");
   }
@@ -51,6 +52,7 @@ function run() {
   const dataSep = process.platform === "win32" ? ";" : ":";
   const lcmsAppPath = path.join(repoRoot, "backend", "lcms_app");
   const serverPath = path.join(repoRoot, "backend", "server.py");
+  const requirementsPath = path.join(repoRoot, "requirements.txt");
 
   const args = [];
   const pyPrefix = [];
@@ -58,6 +60,47 @@ function run() {
     pyPrefix.push("-3");
   }
   args.push(...pyPrefix);
+
+  const pyVersion = spawnSync(python, [...pyPrefix, "--version"], { encoding: "utf8" });
+  if (pyVersion.status === 0) {
+    const versionText = (pyVersion.stdout || pyVersion.stderr || "").trim();
+    console.log(`Using Python interpreter: ${python} (${versionText})`);
+  } else {
+    console.log(`Using Python interpreter: ${python}`);
+  }
+
+  // Ensure backend runtime dependencies exist in the *same* interpreter that runs PyInstaller.
+  const depsCheck = spawnSync(
+    python,
+    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas"],
+    { stdio: "ignore" }
+  );
+  if (depsCheck.status !== 0) {
+    if (!fs.existsSync(requirementsPath)) {
+      console.error(`Missing requirements file: ${requirementsPath}`);
+      process.exit(1);
+    }
+    console.log("Installing backend Python dependencies into selected interpreter...");
+    const depsInstall = spawnSync(
+      python,
+      [...pyPrefix, "-m", "pip", "install", "-r", requirementsPath],
+      { stdio: "inherit" }
+    );
+    if (depsInstall.status !== 0) {
+      console.error("Failed to install backend Python dependencies.");
+      process.exit(depsInstall.status || 1);
+    }
+  }
+
+  const depsRecheck = spawnSync(
+    python,
+    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas"],
+    { stdio: "ignore" }
+  );
+  if (depsRecheck.status !== 0) {
+    console.error("Required Python backend modules are still missing in selected interpreter.");
+    process.exit(1);
+  }
 
   const pyInstallerCheck = spawnSync(
     python,
@@ -95,6 +138,8 @@ function run() {
     lcmsAppPath,
     "--add-data",
     `${lcmsAppPath}${dataSep}lcms_app`,
+    "--hidden-import",
+    "uvicorn",
     serverPath
   );
 

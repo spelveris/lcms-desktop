@@ -614,12 +614,11 @@ const charts = {
           y: ionY,
           text: ionText,
           type: 'scatter',
-          mode: 'markers+text',
+          mode: 'text',
           xaxis: xRef,
           yaxis: yRef,
           textposition: 'top center',
           textfont: { size: 8, color },
-          marker: { size: 5, color },
           hovertemplate: '%{text}<br>m/z %{x:.2f}<extra></extra>',
           showlegend: false,
         });
