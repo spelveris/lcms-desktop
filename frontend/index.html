@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LC-MS Analysis</title>
-  <link rel="stylesheet" href="css/style.css?v=20260218aj">
-  <link rel="stylesheet" href="../node_modules/jsme-editor/jsa.css">
+  <link rel="stylesheet" href="css/style.css?v=20260218ak">
+  <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
 </head>
@@ -108,19 +108,7 @@
           </div>
         </fieldset>
 
-        <!-- Target m/z -->
-        <fieldset class="settings-group">
-          <legend data-toggle="target-mz-inner">Target m/z Values <span class="chevron-sm">&#9660;</span></legend>
-          <div id="target-mz-inner" class="inner-content">
-            <label>m/z Window: <span id="mz-window-val">0.5</span></label>
-            <input type="range" id="mz-window" min="0.1" max="2.0" value="0.5" step="0.1">
-            <div class="input-row">
-              <input type="number" id="mz-add-input" placeholder="Enter m/z" step="0.01">
-              <button id="btn-add-mz" class="btn btn-sm btn-primary">Add</button>
-            </div>
-            <div id="mz-targets-list" class="tag-list"></div>
-          </div>
-        </fieldset>
+        <!-- Target m/z moved to Single Sample and EIC Batch tabs -->
 
         <!-- Graph & Export -->
         <fieldset class="settings-group">
@@ -186,16 +174,20 @@
         <label>Sample:
           <select id="single-sample-select"><option value="">-- Load samples --</option></select>
         </label>
-        <label>m/z target:
-          <input type="number" id="single-mz-add-input" placeholder="e.g. 688.00" step="0.01" style="width:120px;">
-        </label>
-        <button id="btn-single-add-mz" class="btn btn-sm">Add m/z</button>
         <button id="btn-load-single" class="btn btn-primary">Load &amp; Analyze</button>
         <div class="export-group">
           <button class="btn btn-sm btn-export" data-format="png">PNG</button>
           <button class="btn btn-sm btn-export" data-format="svg">SVG</button>
           <button class="btn btn-sm btn-export" data-format="pdf">PDF</button>
         </div>
+      </div>
+      <div class="mz-toolbar">
+        <label>m/z Window: <span id="mz-window-val">0.5</span>
+          <input type="range" id="mz-window" min="0.1" max="2.0" value="0.5" step="0.1">
+        </label>
+        <input type="number" id="single-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
+        <button id="btn-single-add-mz" class="btn btn-sm btn-primary">Add</button>
+        <button id="btn-clear-mz" class="btn btn-sm btn-danger">Clear All</button>
         <div id="single-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
       </div>
       <div class="molecule-tools">
@@ -220,7 +212,7 @@
         </div>
         <div id="single-smiles-result" class="toolbar-note">Enter SMILES or draw a molecule, then compute and add target m/z automatically.</div>
         <div id="single-sketcher-wrap" class="hidden">
-          <div id="single-sketcher-canvas"></div>
+          <iframe id="single-sketcher-frame" src="jsme-frame.html" style="width:100%;height:420px;border:none;background:#e0e0e0;"></iframe>
         </div>
       </div>
       <div id="single-metrics" class="metrics-bar"></div>
@@ -256,14 +248,15 @@
         <label>Sample:
           <select id="eic-sample-select"><option value="">-- Load samples --</option></select>
         </label>
-        <label>m/z target:
-          <input type="number" id="eic-mz-add-input" placeholder="e.g. 688.00" step="0.01" style="width:120px;">
-        </label>
-        <button id="btn-eic-add-mz" class="btn btn-sm">Add m/z</button>
         <button id="btn-run-eic" class="btn btn-primary">Run EIC Analysis</button>
         <label class="checkbox-label"><input type="checkbox" id="eic-overlay"> Overlay</label>
         <label class="checkbox-label"><input type="checkbox" id="eic-normalize"> Normalize</label>
         <button id="btn-export-eic-csv" class="btn btn-sm">Export CSV</button>
+      </div>
+      <div class="mz-toolbar">
+        <input type="number" id="eic-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
+        <button id="btn-eic-add-mz" class="btn btn-sm btn-primary">Add</button>
+        <button id="btn-eic-clear-mz" class="btn btn-sm btn-danger">Clear All</button>
         <div id="eic-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
       </div>
       <div id="eic-batch-content">
@@ -315,12 +308,12 @@
         </div>
       </div>
       <div id="deconv-results" class="hidden">
-        <div class="two-col">
+        <div class="two-col deconv-results-grid">
           <div class="col">
-            <div id="deconv-spectrum-plot" class="plot-container"></div>
+            <div id="deconv-spectrum-plot" class="plot-container" style="border-color:transparent;"></div>
           </div>
           <div class="col">
-            <div class="plot-container deconv-mass-card">
+            <div class="deconv-mass-card">
               <div id="deconv-mass-plot" class="deconv-mass-plot-inner"></div>
               <div class="deconv-mass-download-row">
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="png">Download PNG</button>
@@ -453,9 +446,9 @@
     </div>
   </main>
 
-  <script src="../node_modules/jsme-editor/jsme.nocache.js"></script>
-  <script src="js/api.js?v=20260218aj"></script>
-  <script src="js/charts.js?v=20260218aj"></script>
-  <script src="js/app.js?v=20260218aj"></script>
+  <!-- JSME loaded in iframe -->
+  <script src="js/api.js?v=20260218ak"></script>
+  <script src="js/charts.js?v=20260218ak"></script>
+  <script src="js/app.js?v=20260218ak"></script>
 </body>
 </html>

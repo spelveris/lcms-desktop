@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="../node_modules/jsme-editor/jsa.css">
+<style>
+html, body { margin: 0; padding: 0; overflow: hidden; background: #e0e0e0; }
+</style>
+</head>
+<body>
+<div id="jsme-host"></div>
+<script src="../node_modules/jsme-editor/jsme.nocache.js"></script>
+<script>
+var sketcher = null;
+
+function waitReady(cb, timeout) {
+  var t0 = Date.now();
+  (function poll() {
+    if (window.JSApplet && window.JSApplet.JSME) return cb();
+    if (Date.now() - t0 > (timeout || 10000)) return cb(new Error('JSME timeout'));
+    setTimeout(poll, 100);
+  })();
+}
+
+function init(w, h) {
+  waitReady(function(err) {
+    if (err) { parent.postMessage({type:'jsme-error', msg: err.message}, '*'); return; }
+    var host = document.getElementById('jsme-host');
+    host.innerHTML = '';
+    var opts = ['hydrogens', '', 'oldlook'];
+    for (var i = 0; i < opts.length; i++) {
+      try {
+        host.innerHTML = '';
+        sketcher = new JSApplet.JSME('jsme-host', w + 'px', h + 'px', opts[i]);
+        break;
+      } catch(e) { sketcher = null; }
+    }
+    if (sketcher) {
+      parent.postMessage({type:'jsme-ready'}, '*');
+    } else {
+      parent.postMessage({type:'jsme-error', msg:'JSME init failed'}, '*');
+    }
+  });
+}
+
+function getSmiles() {
+  if (!sketcher) return '';
+  return typeof sketcher.smiles === 'function' ? String(sketcher.smiles() || '') : '';
+}
+
+window.addEventListener('message', function(e) {
+  if (!e.data || !e.data.type) return;
+  if (e.data.type === 'jsme-init') init(e.data.width || 760, e.data.height || 420);
+  if (e.data.type === 'jsme-get-smiles') {
+    parent.postMessage({type:'jsme-smiles', smiles: getSmiles()}, '*');
+  }
+});
+</script>
+</body>
+</html>

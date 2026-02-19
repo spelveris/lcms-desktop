@@ -79,6 +79,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initReportExport();
   restoreState();
   window.addEventListener('resize', () => schedulePlotlyResize(), { passive: true });
+  window.addEventListener('focus', () => schedulePlotlyResize(), { passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) schedulePlotlyResize();
+  });
 });
 
 // ===== Toast Notifications =====
@@ -111,10 +115,41 @@ function resizePlotlyById(plotId) {
   const el = document.getElementById(plotId);
   if (!el || !el.classList.contains('js-plotly-plot')) return;
   try {
+    const width = Math.floor(el.clientWidth || 0);
+    const height = Math.floor(el.clientHeight || 0);
+    if (typeof window.Plotly.relayout === 'function' && width > 80 && height > 120) {
+      window.Plotly.relayout(el, { width, height });
+    }
     window.Plotly.Plots.resize(el);
   } catch (_) {
     // Ignore transient Plotly resize failures during layout transitions.
   }
+}
+
+function syncDeconvBottomLayout() {
+  const spectrumPlot = document.getElementById('deconv-spectrum-plot');
+  const massCard = document.querySelector('#deconv-results .deconv-mass-card');
+  const massPlot = document.getElementById('deconv-mass-plot');
+  if (!spectrumPlot || !massCard || !massPlot) return;
+
+  const targetCardHeight = 440;
+  spectrumPlot.style.height = `${targetCardHeight}px`;
+  spectrumPlot.style.minHeight = `${targetCardHeight}px`;
+  massCard.style.height = `${targetCardHeight}px`;
+  massCard.style.minHeight = `${targetCardHeight}px`;
+
+  const downloadRow = massCard.querySelector('.deconv-mass-download-row');
+  const rowHeight = downloadRow ? downloadRow.offsetHeight : 0;
+  const styles = window.getComputedStyle(massCard);
+  const padTop = parseFloat(styles.paddingTop) || 0;
+  const padBottom = parseFloat(styles.paddingBottom) || 0;
+  const gap = 8;
+  const plotHeight = Math.max(300, targetCardHeight - padTop - padBottom - rowHeight - gap);
+  massPlot.style.height = `${plotHeight}px`;
+  massPlot.style.minHeight = `${plotHeight}px`;
+
+  const spectrumPlotHeight = Math.max(320, Math.floor(spectrumPlot.clientHeight || targetCardHeight));
+  spectrumPlot.dataset.plotHeight = String(spectrumPlotHeight);
 }
 
 function schedulePlotlyResize(plotIds = []) {
@@ -123,14 +158,20 @@ function schedulePlotlyResize(plotIds = []) {
     : [
       'deconv-spectrum-plot',
       'deconv-mass-plot',
+      'deconv-uv-plot',
+      'deconv-tic-plot',
       'deconv-ion-selection-plot',
       'single-tic-plot',
       'eic-overlay-plot',
       'timechange-ms-plot',
       'timechange-ms-offset-plot',
     ];
+  const includesDeconvBottom = ids.includes('deconv-spectrum-plot') || ids.includes('deconv-mass-plot');
   [0, 120, 280].forEach((delayMs) => {
-    setTimeout(() => ids.forEach((id) => resizePlotlyById(id)), delayMs);
+    setTimeout(() => {
+      if (includesDeconvBottom) syncDeconvBottomLayout();
+      ids.forEach((id) => resizePlotlyById(id));
+    }, delayMs);
   });
 }
 
@@ -208,11 +249,18 @@ function initSettings() {
     }
   });
 
-  // m/z target management
-  document.getElementById('btn-add-mz').addEventListener('click', addMzTarget);
-  document.getElementById('mz-add-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') addMzTarget();
-  });
+  // m/z window slider (now in Single Sample tab toolbar)
+  const mzWindowSlider = document.getElementById('mz-window');
+  const mzWindowVal = document.getElementById('mz-window-val');
+  if (mzWindowSlider && mzWindowVal) {
+    mzWindowSlider.addEventListener('input', () => { mzWindowVal.textContent = mzWindowSlider.value; });
+  }
+
+  // Clear all m/z buttons
+  const clearMzBtn = document.getElementById('btn-clear-mz');
+  if (clearMzBtn) clearMzBtn.addEventListener('click', clearAllMzTargets);
+  const eicClearMzBtn = document.getElementById('btn-eic-clear-mz');
+  if (eicClearMzBtn) eicClearMzBtn.addEventListener('click', clearAllMzTargets);
 
   renderMzTargets();
 
@@ -230,10 +278,6 @@ function initSettings() {
       if (state.masscalcData) renderMasscalcFigures();
     });
   });
-}
-
-function addMzTarget() {
-  addMzTargetFromInput('mz-add-input');
 }
 
 function addMzTargetFromInput(inputRef) {
@@ -261,21 +305,27 @@ function removeMzTarget(val) {
   renderMzTargets();
 }
 
+function clearAllMzTargets() {
+  if (state.mzTargets.length === 0) return;
+  state.mzTargets = [];
+  saveMzTargets();
+  renderMzTargets();
+  toast('All m/z targets cleared', 'info');
+}
+
 function saveMzTargets() {
   localStorage.setItem('lcms-mz-targets', JSON.stringify(state.mzTargets));
 }
 
 function renderMzTargets() {
-  const containerIds = ['mz-targets-list', 'single-mz-targets-inline', 'eic-mz-targets-inline'];
+  const containerIds = ['single-mz-targets-inline', 'eic-mz-targets-inline'];
   containerIds.forEach((id) => {
     const container = document.getElementById(id);
     if (!container) return;
     container.innerHTML = '';
 
     if (state.mzTargets.length === 0) {
-      if (id !== 'mz-targets-list') {
-        container.innerHTML = '<span class="muted">No m/z targets set</span>';
-      }
+      container.innerHTML = '<span class="muted">No m/z targets</span>';
       return;
     }
 
@@ -738,73 +788,58 @@ async function addSmilesMzTarget(smilesOverride = '') {
   }
 }
 
-async function waitForJSME(timeoutMs = 10000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (window.JSApplet && window.JSApplet.JSME) return;
-    await new Promise((resolve) => setTimeout(resolve, 120));
-  }
-  throw new Error('JSME editor did not finish loading');
+// JSME runs inside an iframe (jsme-frame.html) for complete CSS isolation.
+let _jsmeReady = false;
+
+function _jsmeFrame() {
+  return document.getElementById('single-sketcher-frame');
 }
 
-function bindSingleSketcherWheelGuard(host) {
-  if (!host || state.singleSketcherWheelGuardBound) return;
-  const handler = (event) => {
-    // Prevent JSME wheel zoom so scrolling over the gray canvas behaves like page scroll.
-    event.preventDefault();
-    event.stopPropagation();
-    const panel = host.closest('.tab-panel');
-    if (panel && Number.isFinite(event.deltaY)) {
-      panel.scrollTop += event.deltaY;
+function _initJsmeInFrame() {
+  return new Promise((resolve, reject) => {
+    const frame = _jsmeFrame();
+    if (!frame || !frame.contentWindow) { reject(new Error('Sketcher frame missing')); return; }
+
+    const timeout = setTimeout(() => { reject(new Error('JSME init timed out')); }, 15000);
+
+    function onMsg(e) {
+      if (!e.data || !e.data.type) return;
+      if (e.data.type === 'jsme-ready') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', onMsg);
+        _jsmeReady = true;
+        resolve();
+      }
+      if (e.data.type === 'jsme-error') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', onMsg);
+        reject(new Error(e.data.msg || 'JSME error'));
+      }
     }
-  };
-  host.addEventListener('wheel', handler, { passive: false, capture: true });
-  state.singleSketcherWheelGuardBound = true;
-  state.singleSketcherWheelHandler = handler;
+    window.addEventListener('message', onMsg);
+
+    const w = Math.max(420, frame.clientWidth || 760);
+    const h = Math.max(380, frame.clientHeight || 420);
+    frame.contentWindow.postMessage({ type: 'jsme-init', width: w, height: h }, '*');
+  });
 }
 
-async function ensureSingleSketcher() {
-  if (state.singleSketcher) return state.singleSketcher;
+function _getSmilesFromFrame() {
+  return new Promise((resolve) => {
+    const frame = _jsmeFrame();
+    if (!frame || !frame.contentWindow) { resolve(''); return; }
 
-  const host = document.getElementById('single-sketcher-canvas');
-  if (!host) throw new Error('Sketcher container is missing');
-  host.innerHTML = '';
-  await waitForJSME(10000);
-  const widthPx = Math.max(420, Math.floor(host.clientWidth || 760));
-  const heightPx = Math.max(380, Math.floor(host.clientHeight || 420));
-  const JSME = window.JSApplet && window.JSApplet.JSME;
-  if (typeof JSME !== 'function') {
-    throw new Error('JSME constructor is unavailable');
-  }
-
-  // Some builds reject certain option combinations; try safe fallbacks.
-  const optionCandidates = ['hydrogens', '', 'oldlook'];
-  let lastErr = null;
-  for (const opts of optionCandidates) {
-    try {
-      host.innerHTML = '';
-      state.singleSketcher = new JSME(
-        'single-sketcher-canvas',
-        `${widthPx}px`,
-        `${heightPx}px`,
-        opts
-      );
-      lastErr = null;
-      break;
-    } catch (err) {
-      lastErr = err;
-      state.singleSketcher = null;
+    const timeout = setTimeout(() => resolve(''), 3000);
+    function onMsg(e) {
+      if (e.data && e.data.type === 'jsme-smiles') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', onMsg);
+        resolve(String(e.data.smiles || '').trim());
+      }
     }
-  }
-
-  if (!state.singleSketcher) {
-    const msg = lastErr && lastErr.message ? lastErr.message : String(lastErr || 'Unknown initialization error');
-    throw new Error(`JSME initialization failed: ${msg}`);
-  }
-
-  bindSingleSketcherWheelGuard(host);
-  state.singleSketcherType = 'jsme';
-  return state.singleSketcher;
+    window.addEventListener('message', onMsg);
+    frame.contentWindow.postMessage({ type: 'jsme-get-smiles' }, '*');
+  });
 }
 
 async function toggleSingleSketcher() {
@@ -821,24 +856,25 @@ async function toggleSingleSketcher() {
 
   wrap.classList.remove('hidden');
   btn.textContent = 'Hide Drawer';
-  showLoading('Loading molecule drawer...');
-  try {
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await ensureSingleSketcher();
-  } catch (err) {
-    wrap.classList.add('hidden');
-    btn.textContent = 'Draw Molecule';
-    toast(`Molecule drawer failed: ${err.message}`, 'error');
-  } finally {
-    hideLoading();
+
+  if (!_jsmeReady) {
+    showLoading('Loading molecule drawer...');
+    try {
+      await _initJsmeInFrame();
+    } catch (err) {
+      wrap.classList.add('hidden');
+      btn.textContent = 'Draw Molecule';
+      toast(`Molecule drawer failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
   }
 }
 
 async function useDrawnStructureAsSmiles() {
   try {
-    const sketcher = await ensureSingleSketcher();
-    let smiles = '';
-    smiles = typeof sketcher.smiles === 'function' ? String(sketcher.smiles() || '').trim() : '';
+    if (!_jsmeReady) { toast('Open the molecule drawer first', 'warning'); return; }
+    const smiles = await _getSmilesFromFrame();
     if (!smiles) {
       toast('Draw a molecule first', 'warning');
       return;
@@ -2214,6 +2250,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
   } catch (_) {
     ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for this sample</p>';
   }
+  schedulePlotlyResize(['deconv-uv-plot', 'deconv-tic-plot']);
 }
 
 async function autoDetectDeconvWindow() {
@@ -2381,14 +2418,18 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
 function renderDeconvResults(data) {
   const resultsDiv = document.getElementById('deconv-results');
   resultsDiv.classList.remove('hidden');
+  syncDeconvBottomLayout();
 
   const components = getDeconvDisplayComponents();
 
   // Mass spectrum plot with annotations from detected components
   if (data.spectrum) {
     const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, components);
+    const spectrumPlotEl = document.getElementById('deconv-spectrum-plot');
+    const spectrumHeight = Number(spectrumPlotEl?.dataset?.plotHeight || 0);
     charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {
       guideMzs,
+      heightPx: Number.isFinite(spectrumHeight) && spectrumHeight > 0 ? spectrumHeight : undefined,
     });
   }
 
@@ -2407,20 +2448,22 @@ function renderDeconvResults(data) {
   tableContainer.innerHTML = '';
 
   if (components.length > 0) {
+    const maxIntensity = Math.max(...components.map(c => Number(c.intensity || 0)));
     let html = `<div class="data-table-wrapper"><table class="data-table">
       <thead><tr>
-        <th>#</th><th>Mass (Da)</th><th>Charges</th><th>Num Ions</th><th>R&sup2;</th><th>Intensity</th>
+        <th>#</th><th>Mass (Da)</th><th>Charges</th><th>Num Ions</th><th>R&sup2;</th><th>Rel. Intensity (%)</th>
       </tr></thead><tbody>`;
 
     components.forEach((m, i) => {
       const chargeStr = m.charge_states ? m.charge_states.join(', ') : (m.ion_charges ? m.ion_charges.join(', ') : '-');
+      const relInt = maxIntensity > 0 && m.intensity != null ? ((m.intensity / maxIntensity) * 100).toFixed(1) : '-';
       html += `<tr class="deconv-row" data-idx="${i}" style="cursor:pointer;">
         <td>${i + 1}</td>
         <td>${m.mass.toFixed(1)}</td>
         <td style="font-family:var(--font);max-width:150px;overflow:hidden;text-overflow:ellipsis;">${chargeStr}</td>
         <td>${m.peaks_found || m.num_charges || '-'}</td>
         <td>${m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
-        <td>${m.intensity != null ? m.intensity.toExponential(2) : '-'}</td>
+        <td>${relInt}</td>
       </tr>`;
     });
 
@@ -2484,6 +2527,7 @@ async function renderDeconvIonSelectionGraph() {
   if (!samplePath || !Array.isArray(tr) || tr.length < 2 || !Number.isFinite(tr[0]) || !Number.isFinite(tr[1]) || tr[1] <= tr[0] || components.length === 0) {
     container.classList.remove('interactive-ion-selection');
     container.classList.remove('has-image');
+    container.style.height = '';
     container.innerHTML = '<p class="placeholder-msg">Run deconvolution to render ion selection graph.</p>';
     return;
   }
@@ -2504,12 +2548,18 @@ async function renderDeconvIonSelectionGraph() {
     container.classList.remove('has-image');
     container.classList.add('interactive-ion-selection');
     container.innerHTML = '';
+    // Set container height based on number of subplot rows so Plotly autosize works
+    const nComps = Math.max(1, Math.min(10, components.length));
+    const cols = nComps > 1 ? 2 : 1;
+    const ionRows = Math.ceil(nComps / cols);
+    container.style.height = Math.max(400, 350 * ionRows + 70) + 'px';
     charts.plotIonSelectionInteractive('deconv-ion-selection-plot', mz, intensities, components, {
       title: 'Ion Selection per Component',
     });
   } catch (err) {
     container.classList.remove('interactive-ion-selection');
     container.classList.remove('has-image');
+    container.style.height = '';
     const msg = err && err.message ? String(err.message) : String(err);
     const hint = msg.includes('Not Found')
       ? ' Backend is likely running old code. Restart ./start-dev.sh and hard refresh.'
@@ -2953,19 +3003,24 @@ function renderBatchDeconvolution(data) {
 
   let html = `<div class="data-table-wrapper"><table class="data-table">
     <thead><tr>
-      <th>Sample</th><th>Status</th><th>Window (min)</th><th>Components</th><th>Top Masses (Da)</th><th>Error</th>
+      <th>Sample</th><th>Status</th><th>Window (min)</th><th>Components</th><th>Top Masses (Da)</th><th>Rel. Intensity (%)</th>
     </tr></thead><tbody>`;
 
   samples.forEach((sample) => {
     const windowStr = `${Number.isFinite(sample.start) ? sample.start.toFixed(2) : '-'} - ${Number.isFinite(sample.end) ? sample.end.toFixed(2) : '-'}`;
-    const topMasses = (sample.components || []).slice(0, topN).map(c => c.mass.toFixed(1)).join(', ') || '-';
+    const comps = sample.components || [];
+    const topMasses = comps.slice(0, topN).map(c => c.mass.toFixed(1)).join(', ') || '-';
+    const maxIntensity = Math.max(0, ...comps.map((c) => Number(c.intensity || 0)));
+    const relInts = comps.slice(0, topN)
+      .map((c) => (maxIntensity > 0 ? ((Number(c.intensity || 0) / maxIntensity) * 100).toFixed(1) : '-'))
+      .join(', ') || '-';
     html += `<tr>
       <td>${escapeHtml(sample.name)}</td>
-      <td>${sample.status}</td>
+      <td title="${escapeHtml(sample.error || '')}">${sample.status}</td>
       <td>${windowStr}</td>
-      <td>${(sample.components || []).length}</td>
+      <td>${comps.length}</td>
       <td>${topMasses}</td>
-      <td>${escapeHtml(sample.error || '')}</td>
+      <td>${relInts}</td>
     </tr>`;
   });
   html += '</tbody></table></div>';
