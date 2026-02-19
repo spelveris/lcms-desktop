@@ -1,6 +1,6 @@
 {
   "name": "lcms-desktop",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "LC-MS Analysis Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
@@ -18,7 +18,8 @@
   "dependencies": {
     "jsme-editor": "^2024.4.29",
     "jspdf": "^4.1.0",
-    "openchemlib": "^9.20.0"
+    "openchemlib": "^9.20.0",
+    "plotly.js-dist-min": "^2.27.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
