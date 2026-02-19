@@ -230,6 +230,14 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          body: |
+            LCMS Desktop release `${{ github.ref_name }}`.
+
+            This release is built in CI on both macOS and Windows and includes smoke tests for the packaged backend (`/api/health`) before publishing assets.
+
+            Notes for users:
+            - macOS builds are ad-hoc signed in CI (no notarization).
+            - If Gatekeeper warns on first open, use macOS override flow (Open Anyway / right-click Open).
           generate_release_notes: true
           files: |
             release-assets/*.dmg

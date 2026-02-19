@@ -37,6 +37,7 @@ const state = {
   singleSketcherType: '',
   singleSketcherWheelGuardBound: false,
   singleSketcherWheelHandler: null,
+  emptyQuoteIndexes: {},
 };
 
 const DECONV_DISPLAY_TOP_N = 5;
@@ -63,6 +64,12 @@ const ADDUCT_SPECS = {
   '[M-2H]2-': { delta: -2 * PROTON_MASS, charge: -2 },
 };
 
+const FALLBACK_EMPTY_QUOTES = [
+  { text: 'Data reveals patterns only after you ask a sharp question.', author: 'LCMS Desktop' },
+  { text: 'Good analysis starts with a clean baseline and a clear hypothesis.', author: 'LCMS Desktop' },
+  { text: 'Measure twice, deconvolute once.', author: 'LCMS Desktop' },
+];
+
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', () => {
   initSidebar();
@@ -78,6 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initMassCalc();
   initReportExport();
   restoreState();
+  renderDefaultTabEmptyStates();
   window.addEventListener('resize', () => schedulePlotlyResize(), { passive: true });
   window.addEventListener('focus', () => schedulePlotlyResize(), { passive: true });
   document.addEventListener('visibilitychange', () => {
@@ -108,6 +116,104 @@ function showLoading(text) {
 
 function hideLoading() {
   document.getElementById('loading-overlay').classList.add('hidden');
+}
+
+function getQuotePool() {
+  const pool = Array.isArray(window.LCMS_QUOTES) ? window.LCMS_QUOTES : [];
+  if (pool.length > 0) return pool;
+  return FALLBACK_EMPTY_QUOTES;
+}
+
+function pickQuoteIndex(slotKey, poolLength, disallow = -1) {
+  if (!Number.isFinite(poolLength) || poolLength <= 0) return 0;
+  const existing = state.emptyQuoteIndexes[slotKey];
+  if (Number.isInteger(existing) && existing >= 0 && existing < poolLength && existing !== disallow) {
+    return existing;
+  }
+
+  let index = Math.floor(Math.random() * poolLength);
+  if (poolLength > 1 && index === disallow) index = (index + 1) % poolLength;
+  state.emptyQuoteIndexes[slotKey] = index;
+  return index;
+}
+
+function renderQuoteEmptyState(containerId, keyPrefix) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const pool = getQuotePool();
+  if (pool.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const mainIdx = pickQuoteIndex(`${keyPrefix}-main`, pool.length);
+  const thinIdx = pickQuoteIndex(`${keyPrefix}-thin`, pool.length, mainIdx);
+  const main = pool[mainIdx] || pool[0];
+  const thin = pool[thinIdx] || pool[(mainIdx + 1) % pool.length] || main;
+
+  container.innerHTML = `
+    <div class="quote-empty-card quote-empty-card-main">
+      <div class="quote-empty-content">
+        <div class="quote-empty-text">"${escapeHtml(main.text || '')}"</div>
+        <div class="quote-empty-author">- ${escapeHtml(main.author || 'Unknown')}</div>
+      </div>
+    </div>
+    <div class="quote-empty-card quote-empty-card-thin">
+      <div class="quote-empty-content">
+        <div class="quote-empty-text">"${escapeHtml(thin.text || '')}"</div>
+        <div class="quote-empty-author">- ${escapeHtml(thin.author || 'Unknown')}</div>
+      </div>
+    </div>
+  `;
+}
+
+function setSingleEmptyState(isEmpty) {
+  const empty = document.getElementById('single-empty-state');
+  const results = document.getElementById('single-results');
+  const metrics = document.getElementById('single-metrics');
+  if (empty) {
+    empty.classList.toggle('hidden', !isEmpty);
+    if (isEmpty) renderQuoteEmptyState('single-empty-state', 'single');
+  }
+  if (results) results.classList.toggle('hidden', isEmpty);
+  if (metrics) metrics.classList.toggle('hidden', isEmpty);
+}
+
+function setEICBatchEmptyState(isEmpty) {
+  const empty = document.getElementById('eic-empty-state');
+  const content = document.getElementById('eic-batch-content');
+  if (empty) {
+    empty.classList.toggle('hidden', !isEmpty);
+    if (isEmpty) renderQuoteEmptyState('eic-empty-state', 'eic-batch');
+  }
+  if (content) content.classList.toggle('hidden', isEmpty);
+}
+
+function resetSingleSampleView() {
+  const metrics = document.getElementById('single-metrics');
+  const uv = document.getElementById('single-uv-plots');
+  const tic = document.getElementById('single-tic-plot');
+  const eic = document.getElementById('single-eic-plots');
+  if (metrics) metrics.innerHTML = '';
+  if (uv) uv.innerHTML = '';
+  if (tic) tic.innerHTML = '';
+  if (eic) eic.innerHTML = '';
+  setSingleEmptyState(true);
+}
+
+function resetEICBatchView() {
+  const plot = document.getElementById('eic-combined-plot');
+  const sections = document.getElementById('eic-peak-sections');
+  const table = document.getElementById('eic-results-table-container');
+  if (plot) plot.innerHTML = '';
+  if (sections) sections.innerHTML = '';
+  if (table) table.innerHTML = '';
+  setEICBatchEmptyState(true);
+}
+
+function renderDefaultTabEmptyStates() {
+  if (!state.singleSampleData) resetSingleSampleView();
+  if (!state.eicBatchData) resetEICBatchView();
 }
 
 function resizePlotlyById(plotId) {
@@ -382,14 +488,25 @@ function initFileBrowser() {
 
   document.getElementById('btn-clear-all').addEventListener('click', () => {
     state.selectedFiles = [];
+    state.loadedSamples = {};
+    state.singleSampleData = null;
+    state.eicBatchData = null;
+    state.eicBatchOriginalData = null;
+    state.progressionData = null;
     state.deconvResults = null;
     state.deconvDisplayComponents = [];
     state.batchDeconvData = null;
+    state.timeChangeMSData = null;
+    state.masscalcData = null;
     state.deconvAutoRunSignature = '';
     state.batchDeconvAutoRunSignature = '';
     syncProgressionAssignmentsToSelectedFiles();
     saveSelectedFiles();
+    updateWavelengthCheckboxes();
+    resetSingleSampleView();
+    resetEICBatchView();
     renderSelectedFiles();
+    renderFileList();
     updateSampleDropdowns();
     renderReportSummary();
   });
@@ -924,6 +1041,8 @@ async function loadSingleSample() {
 }
 
 function renderSingleSample(data) {
+  setSingleEmptyState(false);
+
   // Metrics
   const metricsBar = document.getElementById('single-metrics');
   metricsBar.innerHTML = '';
@@ -1543,6 +1662,8 @@ async function runEICBatch() {
 }
 
 function renderEICBatch(data) {
+  setEICBatchEmptyState(false);
+
   const overlay = document.getElementById('eic-overlay').checked;
   const normalize = document.getElementById('eic-normalize').checked;
 
