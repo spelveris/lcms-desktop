@@ -235,6 +235,18 @@ jobs:
 
             This release is built in CI on both macOS and Windows and includes smoke tests for the packaged backend (`/api/health`) before publishing assets.
 
+            Downloads
+
+            `<version>` means the numeric release version (for example `0.2.2` for tag `v0.2.2`).
+
+            | Platform | File | Description |
+            | --- | --- | --- |
+            | Windows | `LCMS.Desktop.Setup.<version>.exe` | Installer (recommended) |
+            | Windows | `LCMS.Desktop-<version>-win.zip` | Portable (no install) |
+            | Windows | `LCMS.Desktop.<version>.exe` | Portable executable |
+            | macOS (Apple Silicon) | `LCMS.Desktop-<version>-arm64.dmg` | Disk image (recommended) |
+            | macOS (Apple Silicon) | `LCMS.Desktop-<version>-arm64-mac.zip` | Zip archive |
+
             Notes for users:
             - macOS builds are ad-hoc signed in CI (no notarization).
             - If Gatekeeper warns on first open, use macOS override flow (Open Anyway / right-click Open).

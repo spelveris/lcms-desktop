@@ -710,10 +710,6 @@ window.LCMS_QUOTES = [
     "author": "Beavis and Butthead"
   },
   {
-    "text": "These Gromacs Guys Really Rock",
-    "author": "P.J. Meulenhoff"
-  },
-  {
     "text": "You Hear Footsteps Coming From Behind",
     "author": "Colossal Cave"
   },
@@ -2018,10 +2014,6 @@ window.LCMS_QUOTES = [
     "author": "The Smoke Fairies"
   },
   {
-    "text": "Please implement proper hep writing",
-    "author": "GROMACS"
-  },
-  {
     "text": "The three principal virtues of a programmer are Laziness, Impatience, and Hubris",
     "author": "Larry Wall"
   },
@@ -2416,10 +2408,6 @@ window.LCMS_QUOTES = [
   {
     "text": "Water is just water",
     "author": "Berk Hess"
-  },
-  {
-    "text": "GROMACS First : Making MD Great Again",
-    "author": "Vedran Miletic"
   },
   {
     "text": "You still have to climb to the shoulders of the giants",
@@ -3570,10 +3558,6 @@ window.LCMS_QUOTES = [
     "author": "ORDA, FORTRAN board game"
   },
   {
-    "text": "gmx fellowship-writing -g grant_name -s protein_structure_involved -o output -m method_used -p list_of_pi",
-    "author": "Tanadet Pipatpolkai, while discussing new features for GROMACS"
-  },
-  {
     "text": "I came up with the new convergence method, it's called a deadline driven convergence. My simulation is converged when it hits the deadline.",
     "author": "Tanadet Pipatpolkai"
   },
@@ -3622,16 +3606,8 @@ window.LCMS_QUOTES = [
     "author": "Bad Religion"
   },
   {
-    "text": "I can switch from GROMACS version 5.1 to 2016 in the middle of the paper, of course, Newton's equations of motion did not change between them.",
-    "author": "Davide Mercadante"
-  },
-  {
     "text": "First rule of atomics: Thou shalt not make generalized statements about atomics!",
     "author": "Noah Wolfe, on discussing GPU atomic operations"
-  },
-  {
-    "text": "We should change the code to FORTRAN, so it would be all caps, same as the name.",
-    "author": "Paul Bauer, while discussing the spelling of GROMACS"
   },
   {
     "text": "It may be worthwhile to reflect on whether the predictive power of the force fields used is sufficient to justify the enormous usage of computer power and energy.",
