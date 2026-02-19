@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LC-MS Analysis</title>
-  <link rel="stylesheet" href="css/style.css?v=20260219b">
+  <link rel="stylesheet" href="css/style.css?v=20260219c">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -240,7 +240,8 @@
         </div>
       </div>
       <div id="progression-assignments" class="assignment-grid"></div>
-      <div id="progression-plots" class="plot-stack"></div>
+      <div id="progression-empty-state" class="quote-empty-stack"></div>
+      <div id="progression-plots" class="plot-stack hidden"></div>
     </div>
 
     <!-- Tab: EIC Batch Analysis -->
@@ -301,7 +302,8 @@
           </div>
         </div>
       </div>
-      <div id="deconv-window-context" class="two-col">
+      <div id="deconv-empty-state" class="quote-empty-stack"></div>
+      <div id="deconv-window-context" class="two-col hidden">
         <div class="col">
           <div id="deconv-uv-plot" class="plot-container"></div>
         </div>
@@ -356,9 +358,12 @@
           <button class="btn btn-sm btn-export-batch-deconv" data-format="pdf">PDF</button>
         </div>
       </div>
-      <div id="batch-deconv-summary" class="metrics-bar"></div>
-      <div id="batch-deconv-samples" class="plot-stack"></div>
-      <div id="batch-deconv-table-container"></div>
+      <div id="batch-deconv-empty-state" class="quote-empty-stack"></div>
+      <div id="batch-deconv-content" class="hidden">
+        <div id="batch-deconv-summary" class="metrics-bar"></div>
+        <div id="batch-deconv-samples" class="plot-stack"></div>
+        <div id="batch-deconv-table-container"></div>
+      </div>
     </div>
 
     <!-- Tab: Time Change MS -->
@@ -373,9 +378,12 @@
           <button class="btn btn-sm btn-export-timechange" data-format="pdf">PDF</button>
         </div>
       </div>
-      <div id="timechange-ms-plot" class="plot-container"></div>
-      <div id="timechange-ms-offset-plot" class="plot-container"></div>
-      <div id="timechange-ms-table-container"></div>
+      <div id="timechange-empty-state" class="quote-empty-stack"></div>
+      <div id="timechange-content" class="hidden">
+        <div id="timechange-ms-plot" class="plot-container"></div>
+        <div id="timechange-ms-offset-plot" class="plot-container"></div>
+        <div id="timechange-ms-table-container"></div>
+      </div>
     </div>
 
     <!-- Tab: Mass Calculator -->
@@ -395,7 +403,8 @@
         </label>
         <button id="btn-run-masscalc" class="btn btn-primary">Run Mass Calculator</button>
       </div>
-      <div id="masscalc-results">
+      <div id="masscalc-empty-state" class="quote-empty-stack"></div>
+      <div id="masscalc-results" class="hidden">
         <div id="masscalc-summary" class="metrics-bar"></div>
         <div id="masscalc-mod-table-container"></div>
         <div id="masscalc-compare-table-container"></div>
@@ -442,7 +451,8 @@
         <button id="btn-export-session-json" class="btn btn-primary">Export Session JSON</button>
         <button id="btn-export-report-summary-csv" class="btn btn-sm">Export Summary CSV</button>
       </div>
-      <div id="report-summary" class="plot-container">
+      <div id="report-empty-state" class="quote-empty-stack"></div>
+      <div id="report-summary" class="plot-container hidden">
         <p class="placeholder-msg">Generate analyses in other tabs, then export a session report here.</p>
       </div>
     </div>
@@ -451,7 +461,7 @@
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=20260218ak"></script>
   <script src="js/charts.js?v=20260218ak"></script>
-  <script src="js/quotes.js?v=20260219b"></script>
-  <script src="js/app.js?v=20260219b"></script>
+  <script src="js/quotes.js?v=20260219c"></script>
+  <script src="js/app.js?v=20260219c"></script>
 </body>
 </html>

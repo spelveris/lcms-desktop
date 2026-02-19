@@ -1186,9 +1186,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 
 /* Empty-state quote cards */
 .quote-empty-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: block;
   margin-bottom: 16px;
 }
 .quote-empty-card {
@@ -1204,11 +1202,6 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   align-items: center;
   justify-content: center;
 }
-.quote-empty-card-thin {
-  min-height: 92px;
-  display: flex;
-  align-items: center;
-}
 .quote-empty-content {
   width: 100%;
   text-align: center;
@@ -1218,11 +1211,6 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   font-size: 20px;
   line-height: 1.35;
   font-weight: 500;
-}
-.quote-empty-card-thin .quote-empty-text {
-  font-size: 16px;
-  line-height: 1.3;
-  color: var(--text-secondary);
 }
 .quote-empty-author {
   margin-top: 10px;
