@@ -10,6 +10,16 @@ Get installers from GitHub Releases:
 - Windows installer: `LCMS.Desktop.Setup.*.exe`
 - Windows portable: `LCMS.Desktop.*.exe`
 
+### macOS First-Run (if Gatekeeper blocks launch)
+
+If macOS shows "app is damaged" or blocks launch after download, run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/LCMS Desktop.app"
+codesign --force --deep --sign - "/Applications/LCMS Desktop.app"
+open "/Applications/LCMS Desktop.app"
+```
+
 ## Run In Dev Mode
 
 ```bash
