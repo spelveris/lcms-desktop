@@ -1,6 +1,6 @@
 {
   "name": "lcms-desktop",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "LC-MS Analysis Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
@@ -29,6 +29,7 @@
     "appId": "com.lcms.desktop",
     "productName": "LCMS Desktop",
     "asar": false,
+    "afterPack": "scripts/after-pack.js",
     "icon": "build/icons/icon.png",
     "files": [
       "electron/**/*",
