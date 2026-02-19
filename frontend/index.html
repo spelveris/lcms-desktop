@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LC-MS Analysis</title>
-  <link rel="stylesheet" href="css/style.css?v=20260218ak">
+  <link rel="stylesheet" href="css/style.css?v=20260219b">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -216,7 +216,8 @@
         </div>
       </div>
       <div id="single-metrics" class="metrics-bar"></div>
-      <div class="two-col">
+      <div id="single-empty-state" class="quote-empty-stack"></div>
+      <div id="single-results" class="two-col hidden">
         <div class="col" id="single-left">
           <div id="single-uv-plots" class="plot-stack"></div>
           <div id="single-tic-plot" class="plot-container"></div>
@@ -259,7 +260,8 @@
         <button id="btn-eic-clear-mz" class="btn btn-sm btn-danger">Clear All</button>
         <div id="eic-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
       </div>
-      <div id="eic-batch-content">
+      <div id="eic-empty-state" class="quote-empty-stack"></div>
+      <div id="eic-batch-content" class="hidden">
         <div id="eic-combined-plot" class="plot-container"></div>
         <div id="eic-peak-sections"></div>
         <div id="eic-results-table-container"></div>
@@ -449,6 +451,7 @@
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=20260218ak"></script>
   <script src="js/charts.js?v=20260218ak"></script>
-  <script src="js/app.js?v=20260218ak"></script>
+  <script src="js/quotes.js?v=20260219b"></script>
+  <script src="js/app.js?v=20260219b"></script>
 </body>
 </html>
