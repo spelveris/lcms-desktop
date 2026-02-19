@@ -124,10 +124,10 @@ function getQuotePool() {
   return FALLBACK_EMPTY_QUOTES;
 }
 
-function pickQuoteIndex(slotKey, poolLength, disallow = -1) {
+function pickQuoteIndex(slotKey, poolLength, disallow = -1, forceNew = false) {
   if (!Number.isFinite(poolLength) || poolLength <= 0) return 0;
   const existing = state.emptyQuoteIndexes[slotKey];
-  if (Number.isInteger(existing) && existing >= 0 && existing < poolLength && existing !== disallow) {
+  if (!forceNew && Number.isInteger(existing) && existing >= 0 && existing < poolLength && existing !== disallow) {
     return existing;
   }
 
@@ -137,7 +137,7 @@ function pickQuoteIndex(slotKey, poolLength, disallow = -1) {
   return index;
 }
 
-function renderQuoteEmptyState(containerId, keyPrefix) {
+function renderQuoteEmptyState(containerId, keyPrefix, forceNew = false) {
   const container = document.getElementById(containerId);
   if (!container) return;
   const pool = getQuotePool();
@@ -146,10 +146,8 @@ function renderQuoteEmptyState(containerId, keyPrefix) {
     return;
   }
 
-  const mainIdx = pickQuoteIndex(`${keyPrefix}-main`, pool.length);
-  const thinIdx = pickQuoteIndex(`${keyPrefix}-thin`, pool.length, mainIdx);
+  const mainIdx = pickQuoteIndex(`${keyPrefix}-main`, pool.length, -1, forceNew);
   const main = pool[mainIdx] || pool[0];
-  const thin = pool[thinIdx] || pool[(mainIdx + 1) % pool.length] || main;
 
   container.innerHTML = `
     <div class="quote-empty-card quote-empty-card-main">
@@ -158,35 +156,109 @@ function renderQuoteEmptyState(containerId, keyPrefix) {
         <div class="quote-empty-author">- ${escapeHtml(main.author || 'Unknown')}</div>
       </div>
     </div>
-    <div class="quote-empty-card quote-empty-card-thin">
-      <div class="quote-empty-content">
-        <div class="quote-empty-text">"${escapeHtml(thin.text || '')}"</div>
-        <div class="quote-empty-author">- ${escapeHtml(thin.author || 'Unknown')}</div>
-      </div>
-    </div>
   `;
 }
 
-function setSingleEmptyState(isEmpty) {
+function setElementHidden(id, hidden) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden', hidden);
+}
+
+function setQuoteContainerState(emptyId, keyPrefix, isEmpty, forceNew = false) {
+  const empty = document.getElementById(emptyId);
+  if (!empty) return;
+  empty.classList.toggle('hidden', !isEmpty);
+  if (isEmpty) renderQuoteEmptyState(emptyId, keyPrefix, forceNew);
+}
+
+function setSingleEmptyState(isEmpty, forceNew = false) {
   const empty = document.getElementById('single-empty-state');
   const results = document.getElementById('single-results');
   const metrics = document.getElementById('single-metrics');
   if (empty) {
     empty.classList.toggle('hidden', !isEmpty);
-    if (isEmpty) renderQuoteEmptyState('single-empty-state', 'single');
+    if (isEmpty) renderQuoteEmptyState('single-empty-state', 'single', forceNew);
   }
   if (results) results.classList.toggle('hidden', isEmpty);
   if (metrics) metrics.classList.toggle('hidden', isEmpty);
 }
 
-function setEICBatchEmptyState(isEmpty) {
-  const empty = document.getElementById('eic-empty-state');
-  const content = document.getElementById('eic-batch-content');
-  if (empty) {
-    empty.classList.toggle('hidden', !isEmpty);
-    if (isEmpty) renderQuoteEmptyState('eic-empty-state', 'eic-batch');
+function setEICBatchEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('eic-empty-state', 'eic-batch', isEmpty, forceNew);
+  setElementHidden('eic-batch-content', isEmpty);
+}
+
+function setDeconvEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('deconv-empty-state', 'deconv', isEmpty, forceNew);
+  setElementHidden('deconv-window-context', isEmpty);
+  if (isEmpty) setElementHidden('deconv-results', true);
+}
+
+function setProgressionEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('progression-empty-state', 'progression', isEmpty, forceNew);
+  setElementHidden('progression-plots', isEmpty);
+}
+
+function setBatchDeconvEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('batch-deconv-empty-state', 'batch-deconv', isEmpty, forceNew);
+  setElementHidden('batch-deconv-content', isEmpty);
+}
+
+function setTimeChangeEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('timechange-empty-state', 'timechange', isEmpty, forceNew);
+  setElementHidden('timechange-content', isEmpty);
+}
+
+function setMasscalcEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('masscalc-empty-state', 'masscalc', isEmpty, forceNew);
+  setElementHidden('masscalc-results', isEmpty);
+}
+
+function setReportEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('report-empty-state', 'report', isEmpty, forceNew);
+  setElementHidden('report-summary', isEmpty);
+}
+
+function refreshVisibleTabQuote(tabId) {
+  if (tabId === 'tab-single') {
+    const visible = !document.getElementById('single-empty-state')?.classList.contains('hidden');
+    if (visible) setSingleEmptyState(true, true);
+    return;
   }
-  if (content) content.classList.toggle('hidden', isEmpty);
+  if (tabId === 'tab-eic-batch') {
+    const visible = !document.getElementById('eic-empty-state')?.classList.contains('hidden');
+    if (visible) setEICBatchEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-deconv') {
+    const visible = !document.getElementById('deconv-empty-state')?.classList.contains('hidden');
+    if (visible) setDeconvEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-progression') {
+    const visible = !document.getElementById('progression-empty-state')?.classList.contains('hidden');
+    if (visible) setProgressionEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-batch-deconv') {
+    const visible = !document.getElementById('batch-deconv-empty-state')?.classList.contains('hidden');
+    if (visible) setBatchDeconvEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-time-change-ms') {
+    const visible = !document.getElementById('timechange-empty-state')?.classList.contains('hidden');
+    if (visible) setTimeChangeEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-masscalc') {
+    const visible = !document.getElementById('masscalc-empty-state')?.classList.contains('hidden');
+    if (visible) setMasscalcEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-report') {
+    const visible = !document.getElementById('report-empty-state')?.classList.contains('hidden');
+    if (visible) setReportEmptyState(true, true);
+  }
 }
 
 function resetSingleSampleView() {
@@ -211,9 +283,88 @@ function resetEICBatchView() {
   setEICBatchEmptyState(true);
 }
 
+function resetDeconvolutionView() {
+  const uv = document.getElementById('deconv-uv-plot');
+  const tic = document.getElementById('deconv-tic-plot');
+  const table = document.getElementById('deconv-results-table-container');
+  const ion = document.getElementById('deconv-ion-selection-plot');
+  const detail = document.getElementById('deconv-ion-detail');
+  const mass = document.getElementById('deconv-mass-plot');
+  const spectrum = document.getElementById('deconv-spectrum-plot');
+  if (uv) uv.innerHTML = '';
+  if (tic) tic.innerHTML = '';
+  if (table) table.innerHTML = '';
+  if (ion) ion.innerHTML = '';
+  if (detail) detail.innerHTML = '';
+  if (mass) mass.innerHTML = '';
+  if (spectrum) spectrum.innerHTML = '';
+  setDeconvEmptyState(true);
+}
+
+function resetProgressionView() {
+  const plots = document.getElementById('progression-plots');
+  if (plots) plots.innerHTML = '';
+  setProgressionEmptyState(true);
+}
+
+function resetBatchDeconvView() {
+  const summary = document.getElementById('batch-deconv-summary');
+  const samples = document.getElementById('batch-deconv-samples');
+  const table = document.getElementById('batch-deconv-table-container');
+  if (summary) summary.innerHTML = '';
+  if (samples) samples.innerHTML = '';
+  if (table) table.innerHTML = '';
+  setBatchDeconvEmptyState(true);
+}
+
+function resetTimeChangeView() {
+  const plot = document.getElementById('timechange-ms-plot');
+  const offset = document.getElementById('timechange-ms-offset-plot');
+  const table = document.getElementById('timechange-ms-table-container');
+  if (plot) plot.innerHTML = '';
+  if (offset) offset.innerHTML = '';
+  if (table) table.innerHTML = '';
+  setTimeChangeEmptyState(true);
+}
+
+function resetMasscalcView() {
+  const summary = document.getElementById('masscalc-summary');
+  const mod = document.getElementById('masscalc-mod-table-container');
+  const cmp = document.getElementById('masscalc-compare-table-container');
+  const main = document.getElementById('masscalc-figure-main');
+  const clean = document.getElementById('masscalc-figure-clean');
+  if (summary) summary.innerHTML = '';
+  if (mod) mod.innerHTML = '';
+  if (cmp) cmp.innerHTML = '';
+  if (main) main.innerHTML = '';
+  if (clean) clean.innerHTML = '';
+  setMasscalcEmptyState(true);
+}
+
 function renderDefaultTabEmptyStates() {
-  if (!state.singleSampleData) resetSingleSampleView();
-  if (!state.eicBatchData) resetEICBatchView();
+  if (state.singleSampleData) setSingleEmptyState(false);
+  else resetSingleSampleView();
+
+  if (state.eicBatchData) setEICBatchEmptyState(false);
+  else resetEICBatchView();
+
+  const hasDeconvContext = Boolean(state.deconvResults || document.getElementById('deconv-sample-select')?.value);
+  if (hasDeconvContext) setDeconvEmptyState(false);
+  else resetDeconvolutionView();
+
+  if (state.progressionData) setProgressionEmptyState(false);
+  else resetProgressionView();
+
+  if (state.batchDeconvData) setBatchDeconvEmptyState(false);
+  else resetBatchDeconvView();
+
+  if (state.timeChangeMSData) setTimeChangeEmptyState(false);
+  else resetTimeChangeView();
+
+  if (state.masscalcData) setMasscalcEmptyState(false);
+  else resetMasscalcView();
+
+  renderReportSummary();
 }
 
 function resizePlotlyById(plotId) {
@@ -330,6 +481,7 @@ function initTabs() {
       btn.classList.add('active');
       const panel = document.getElementById(btn.dataset.tab);
       if (panel) panel.classList.remove('hidden');
+      refreshVisibleTabQuote(btn.dataset.tab);
       schedulePlotlyResize();
     });
   });
@@ -505,10 +657,15 @@ function initFileBrowser() {
     updateWavelengthCheckboxes();
     resetSingleSampleView();
     resetEICBatchView();
+    resetDeconvolutionView();
+    resetProgressionView();
+    resetBatchDeconvView();
+    resetTimeChangeView();
+    resetMasscalcView();
     renderSelectedFiles();
     renderFileList();
     updateSampleDropdowns();
-    renderReportSummary();
+    renderDefaultTabEmptyStates();
   });
 }
 
@@ -1400,9 +1557,11 @@ function renderProgressionAssignments() {
 
   if (state.selectedFiles.length < 2) {
     state.progressionAssignments = {};
-    container.innerHTML = '<p class="placeholder-msg">Select at least 2 samples to use Time Progression</p>';
+    setProgressionEmptyState(true);
     return;
   }
+
+  if (!state.progressionData) setProgressionEmptyState(true);
 
   syncProgressionAssignmentsToSelectedFiles();
 
@@ -1597,8 +1756,10 @@ function renderProgression(data, samples) {
   }
 
   if (!data.uv_progression && !data.tic_progression && (!data.eic_progressions || data.eic_progressions.length === 0)) {
-    container.innerHTML = '<p class="placeholder-msg">No progression data returned</p>';
+    setProgressionEmptyState(true);
+    return;
   }
+  setProgressionEmptyState(false);
 }
 
 async function exportProgression(format) {
@@ -2315,6 +2476,8 @@ function initDeconvolution() {
     select.addEventListener('change', async () => {
       if (select.value) {
         await autoRunDeconvolutionOnTabOpen();
+      } else {
+        setDeconvEmptyState(true);
       }
     });
   }
@@ -2326,10 +2489,10 @@ async function refreshDeconvWindowContext(samplePath = null) {
   const ticDiv = document.getElementById('deconv-tic-plot');
 
   if (!path) {
-    uvDiv.innerHTML = '<p class="placeholder-msg">Select a sample to preview UV window</p>';
-    ticDiv.innerHTML = '<p class="placeholder-msg">Select a sample to preview TIC window</p>';
+    setDeconvEmptyState(true);
     return;
   }
+  setDeconvEmptyState(false);
 
   const start = parseFloat(document.getElementById('deconv-start').value);
   const end = parseFloat(document.getElementById('deconv-end').value);
@@ -2537,6 +2700,7 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
 }
 
 function renderDeconvResults(data) {
+  setDeconvEmptyState(false);
   const resultsDiv = document.getElementById('deconv-results');
   resultsDiv.classList.remove('hidden');
   syncDeconvBottomLayout();
@@ -3057,6 +3221,12 @@ function renderBatchDeconvolution(data) {
   tableContainer.innerHTML = '';
 
   const samples = data.samples || [];
+  if (samples.length === 0) {
+    setBatchDeconvEmptyState(true);
+    return;
+  }
+  setBatchDeconvEmptyState(false);
+
   const okCount = samples.filter(s => s.status === 'ok').length;
   const totalComponents = samples.reduce((acc, s) => acc + ((s.components || []).length), 0);
   summary.innerHTML = `
@@ -3297,6 +3467,12 @@ function renderTimeChangeMS(data) {
   const offsetPlotContainer = document.getElementById('timechange-ms-offset-plot');
   const tableContainer = document.getElementById('timechange-ms-table-container');
 
+  if (spectra.length === 0) {
+    setTimeChangeEmptyState(true);
+    return;
+  }
+  setTimeChangeEmptyState(false);
+
   const plotSpectra = spectra
     .filter(s => Array.isArray(s.mz) && Array.isArray(s.intensities) && s.mz.length > 0 && s.intensities.length > 0)
     .map((s) => ({
@@ -3375,6 +3551,23 @@ function initReportExport() {
 function renderReportSummary() {
   const container = document.getElementById('report-summary');
   if (!container) return;
+
+  const hasAnyAnalysis = Boolean(
+    state.singleSampleData ||
+    state.eicBatchData ||
+    state.deconvResults ||
+    state.batchDeconvData ||
+    state.progressionData ||
+    state.timeChangeMSData ||
+    state.masscalcData
+  );
+
+  if (!hasAnyAnalysis) {
+    container.innerHTML = '';
+    setReportEmptyState(true);
+    return;
+  }
+  setReportEmptyState(false);
 
   const reportSamplePath = getCurrentReportSamplePath();
   const reportSample = state.selectedFiles.find((f) => f.path === reportSamplePath);
@@ -3904,6 +4097,7 @@ async function runMassCalculator() {
       matches,
     };
 
+    setMasscalcEmptyState(false);
     renderMasscalcTables(state.masscalcData);
     await renderMasscalcFigures();
     toast('Mass calculator updated', 'success');
