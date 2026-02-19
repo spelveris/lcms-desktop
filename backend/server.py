@@ -316,32 +316,74 @@ def _detect_deconvolution_window_for_sample(sample: SampleData) -> tuple[float, 
 
 
 def _run_default_report_deconvolution(mz_arr: np.ndarray, intensity_arr: np.ndarray) -> list[dict]:
-    """Run default local-machine deconvolution settings used in webapp report export."""
+    """Run default deconvolution matching the Deconvolution tab defaults exactly."""
     if mz_arr is None or intensity_arr is None or len(mz_arr) == 0:
         return []
 
+    noise_cutoff = 1000.0
+    low_mw = 500.0
+    high_mw = 50000.0
+    pwhh = 0.6
+
+    # Multi-charge deconvolution (min_charge=2 internally, same as tab endpoint)
     components = analysis.deconvolute_protein_local_lcms_machine_like(
         mz_arr,
         intensity_arr,
         min_charge=2,
         max_charge=50,
         min_peaks=3,
-        noise_cutoff=1000.0,
+        noise_cutoff=noise_cutoff,
         abundance_cutoff=0.05,
         mw_agreement=0.0002,
         mw_assign_cutoff=0.40,
         envelope_cutoff=0.50,
-        pwhh=0.6,
-        low_mw=500.0,
-        high_mw=50000.0,
+        max_overlap=0.0,
+        pwhh=pwhh,
+        low_mw=low_mw,
+        high_mw=high_mw,
         contig_min=3,
         use_mz_agreement=False,
         use_monoisotopic_proton=False,
     )
 
-    # Keep display filtering aligned with webapp report: mass range + sorted by abundance.
-    filtered = [c for c in components if 500.0 <= float(c.get("mass", 0.0)) <= 50000.0]
-    filtered.sort(key=lambda c: float(c.get("intensity", 0.0)), reverse=True)
+    # Singly-charged detection (matches tab default: include_singly_charged=True, min_charge=1)
+    exclude_ranges = []
+    for comp in components:
+        mzs = comp.get("ion_mzs", [])
+        if mzs:
+            exclude_ranges.append((min(mzs) - 2.0, max(mzs) + 2.0))
+
+    singly = analysis.detect_singly_charged(
+        mz_arr,
+        intensity_arr,
+        noise_cutoff=noise_cutoff,
+        low_mw=low_mw,
+        high_mw=min(high_mw, 2000.0),
+        pwhh=pwhh,
+        exclude_mz_ranges=exclude_ranges,
+        use_monoisotopic_proton=False,
+    )
+    components.extend(singly)
+
+    # Serialize to match the /api/deconvolute response format
+    results = []
+    for comp in components:
+        results.append({
+            "mass": float(comp.get("mass", 0)),
+            "mass_std": float(comp.get("mass_std", 0)),
+            "intensity": float(comp.get("intensity", 0)),
+            "num_charges": int(comp.get("num_charges", 0)),
+            "charge_states": comp.get("charge_states", []),
+            "peaks_found": int(comp.get("peaks_found", 0)),
+            "r2": float(comp.get("r2", 0)),
+            "ion_mzs": comp.get("ion_mzs", []),
+            "ion_charges": comp.get("ion_charges", []),
+            "ion_intensities": comp.get("ion_intensities", []),
+        })
+
+    # Filter and sort by abundance
+    filtered = [r for r in results if low_mw <= r["mass"] <= high_mw]
+    filtered.sort(key=lambda c: c["intensity"], reverse=True)
     return filtered
 
 

@@ -11,18 +11,26 @@ const COLOR_CYCLE = [
 ];
 
 const WEBAPP_LAYOUT = {
+  autosize: true,
   paper_bgcolor: '#ffffff',
   plot_bgcolor: '#ffffff',
   font: { color: '#000000', family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif', size: 9 },
   margin: { l: 60, r: 20, t: 40, b: 50 },
-  xaxis: { gridcolor: 'rgba(0,0,0,0.3)', zeroline: false, color: '#000000', linecolor: '#000000', mirror: false, showline: true },
-  yaxis: { gridcolor: 'rgba(0,0,0,0.3)', zeroline: false, color: '#000000', linecolor: '#000000', mirror: false, showline: true, exponentformat: 'e', showexponent: 'all' },
+  xaxis: { gridcolor: 'rgba(0,0,0,0.3)', zeroline: false, color: '#000000', linecolor: '#000000', mirror: false, showline: true, automargin: true },
+  yaxis: { gridcolor: 'rgba(0,0,0,0.3)', zeroline: false, color: '#000000', linecolor: '#000000', mirror: false, showline: true, exponentformat: 'e', showexponent: 'all', automargin: true },
   legend: { bgcolor: 'rgba(0,0,0,0)', borderwidth: 0, font: { color: '#000000', size: 8 } },
   hoverlabel: { bgcolor: '#ffffff', bordercolor: '#999999', font: { color: '#000000', size: 9 } },
   modebar: { bgcolor: 'rgba(255,255,255,0.9)', color: '#444444', activecolor: '#1f77b4' },
 };
 
 const PLOT_CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
+
+/** Read container height or use fallback. Plotly autosize can't read height before browser reflow. */
+function getContainerHeight(divId, fallback) {
+  const el = document.getElementById(divId);
+  if (el && el.clientHeight > 50) return el.clientHeight;
+  return fallback;
+}
 
 function getColor(index) { return COLOR_CYCLE[index % COLOR_CYCLE.length]; }
 
@@ -178,7 +186,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: title || 'UV Chromatogram', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Absorbance (mAU)' },
-      showlegend: traces.length > 1, height: 300,
+      showlegend: traces.length > 1, height: getContainerHeight(divId, 300),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -192,7 +200,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: title || 'Total Ion Chromatogram', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
-      showlegend: false, height: 300,
+      showlegend: false, height: getContainerHeight(divId, 300),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -239,7 +247,8 @@ const charts = {
       xaxis: { title: options.xLabel || getXAxisLabel() },
       yaxis: { title: options.yLabel || 'Intensity' },
       showlegend: false,
-      height: options.height || 300,
+      height: getContainerHeight(divId, 320),
+      margin: { l: 60, r: 24, t: 40, b: 72 },
       shapes,
       annotations,
     });
@@ -262,7 +271,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: title || 'Extracted Ion Chromatogram', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
-      showlegend: true, height: 300,
+      showlegend: true, height: getContainerHeight(divId, 300),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -300,7 +309,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: options.title || `EIC m/z ${mzLabel}`, font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
-      showlegend: true, height: 300,
+      showlegend: true, height: getContainerHeight(divId, 300),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -323,7 +332,7 @@ const charts = {
       title: { text: options.title || 'EIC Overlay', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() },
       yaxis: { title: options.normalize ? 'Relative Intensity' : 'Intensity' },
-      showlegend: true, height: 400,
+      showlegend: true, height: getContainerHeight(divId, 350),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -343,7 +352,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: options.title || 'Time Progression', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: options.yLabel || 'Intensity' },
-      showlegend: true, height: 350,
+      showlegend: true, height: getContainerHeight(divId, 350),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -375,10 +384,19 @@ const charts = {
       },
     }));
 
+    const explicitHeight = Number(options.heightPx);
+    const plotHeight = Number.isFinite(explicitHeight) && explicitHeight > 0
+      ? explicitHeight
+      : getContainerHeight(divId, 380);
+
     const layout = mergeLayout({
       title: { text: 'Mass Spectrum', font: { size: 14 } },
-      xaxis: { title: 'm/z' }, yaxis: { title: 'Intensity' },
-      showlegend: false, height: 400, annotations: plotAnnotations, shapes,
+      xaxis: { title: 'm/z', automargin: true }, yaxis: { title: 'Intensity', automargin: true },
+      showlegend: false,
+      height: plotHeight,
+      margin: { l: 64, r: 44, t: 40, b: 96 },
+      annotations,
+      shapes,
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -397,8 +415,7 @@ const charts = {
       title: { text: options.title || 'Summed Mass Spectra', font: { size: 14 } },
       xaxis: { title: 'm/z' },
       yaxis: { title: options.normalize ? 'Relative Intensity' : 'Intensity' },
-      showlegend: true,
-      height: 420,
+      showlegend: true, height: getContainerHeight(divId, 350),
     });
 
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
@@ -464,6 +481,7 @@ const charts = {
         linecolor: axisLineColor,
         color: axisTickColor,
         mirror: false,
+        automargin: true,
       },
       yaxis: {
         title: 'Relative Intensity (%)',
@@ -472,9 +490,11 @@ const charts = {
         linecolor: axisLineColor,
         color: axisTickColor,
         mirror: false,
+        automargin: true,
       },
       showlegend: false,
-      height: Number.isFinite(options.height) ? options.height : 400,
+      height: getContainerHeight(divId, 380),
+      margin: { l: 64, r: 44, t: 40, b: 66 },
       annotations,
     });
     if (hideGrid) {
@@ -520,7 +540,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: `Ion Detail: ${component.mass.toFixed(1)} Da`, font: { size: 14 } },
       xaxis: { title: 'Charge State (z)', dtick: 1 }, yaxis: { title: 'Intensity' },
-      showlegend: false, height: 300,
+      showlegend: false, height: getContainerHeight(divId, 300),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -545,6 +565,7 @@ const charts = {
     const n = Math.max(1, Math.min(10, comps.length));
     const columns = n > 1 ? 2 : 1;
     const rows = Math.ceil(n / columns);
+    const explicitHeight = Math.max(400, 350 * rows + 70);
     const hGap = columns > 1 ? 0.16 : 0;
     const vGap = rows > 1 ? 0.07 : 0;
     const colWidth = (1 - (columns - 1) * hGap) / columns;
@@ -648,10 +669,17 @@ const charts = {
         domain: [domainLeft, domainRight],
         anchor: yRef,
         range: [xMin, xMax],
-        showgrid: true,
-        showticklabels: row === rows - 1,
+        showgrid: false,
+        gridcolor: 'rgba(0,0,0,0)',
+        zeroline: false,
+        showticklabels: true,
         title: row === rows - 1 ? 'm/z' : '',
         automargin: true,
+        showline: true,
+        linecolor: '#000000',
+        color: '#000000',
+        mirror: false,
+        ticks: 'outside',
       };
       layoutOverrides[xAxisName] = xCfg;
       layoutOverrides[yAxisName] = {
@@ -662,9 +690,13 @@ const charts = {
         showticklabels: true,
         exponentformat: 'e',
         showexponent: 'all',
-        showgrid: true,
+        showgrid: false,
+        gridcolor: 'rgba(0,0,0,0)',
+        zeroline: false,
         showline: true,
         linecolor: '#000000',
+        color: '#000000',
+        mirror: false,
         ticks: 'outside',
         range: [0, yMax],
         automargin: true,
@@ -674,7 +706,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: options.title || 'Ion Selection per Component', font: { size: 14 } },
       showlegend: false,
-      height: Math.max(420, 250 * rows + 70),
+      height: explicitHeight,
       margin: { l: 62, r: 70, t: 40, b: 45 },
       annotations,
       ...layoutOverrides,

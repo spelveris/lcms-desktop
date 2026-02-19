@@ -18,6 +18,7 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
 let mainWindow = null;
 let backendProcess = null;
+let isQuitting = false;
 
 // ---------------------------------------------------------------------------
 // Backend lifecycle
@@ -148,6 +149,14 @@ function createWindow() {
     mainWindow.show();
   });
 
+  mainWindow.on("close", (event) => {
+    // On macOS, red close should hide the last window and keep the app running unless quitting explicitly.
+    if (process.platform === "darwin" && !isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -176,10 +185,25 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  stopBackend();
-  app.quit();
+  if (process.platform !== "darwin") {
+    stopBackend();
+    app.quit();
+  }
 });
 
 app.on("before-quit", () => {
+  isQuitting = true;
   stopBackend();
+});
+
+app.on("activate", () => {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
 });

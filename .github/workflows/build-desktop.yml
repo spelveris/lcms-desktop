@@ -201,7 +201,7 @@ jobs:
             release/*.dmg
             release/*-mac.zip
             release/*-win.zip
-            release/*.Setup.*.exe
+            release/LCMS*.exe
             release/latest*.yml
             release/app-update.yml
 
@@ -232,6 +232,6 @@ jobs:
             release-assets/*.dmg
             release-assets/*-mac.zip
             release-assets/*-win.zip
-            release-assets/*.Setup.*.exe
+            release-assets/LCMS*.exe
             release-assets/latest*.yml
             release-assets/app-update.yml

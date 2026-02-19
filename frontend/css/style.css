@@ -473,6 +473,7 @@ input[type="radio"] {
   padding: 0 8px;
   flex-shrink: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   white-space: nowrap;
 }
 .tab-btn {
@@ -533,6 +534,33 @@ input[type="radio"] {
   width: auto;
 }
 .tab-toolbar select { min-width: 200px; }
+
+.mz-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 8px 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.mz-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.mz-toolbar input[type="range"] {
+  width: 100px;
+}
+.mz-toolbar input[type="number"] {
+  width: 120px;
+}
 .masscalc-query-label {
   display: flex;
   flex-direction: column;
@@ -593,18 +621,7 @@ input[type="radio"] {
   overflow: hidden;
 }
 
-/* Fully isolate JSME from app-wide CSS reset.
-   JSME uses pixel-precise absolute positioning internally;
-   any inherited margin/padding/box-sizing breaks button alignment. */
-#single-sketcher-canvas {
-  position: relative;
-}
-#single-sketcher-canvas *,
-#single-sketcher-canvas *::before,
-#single-sketcher-canvas *::after {
-  all: revert !important;
-  box-sizing: content-box !important;
-}
+/* JSME runs in an iframe for complete CSS isolation. */
 
 .export-group {
   display: flex;
@@ -643,6 +660,7 @@ input[type="radio"] {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  align-items: start;
 }
 
 .col { min-width: 0; }
@@ -656,6 +674,7 @@ input[type="radio"] {
   margin-bottom: 16px;
   min-height: 300px;
   overflow: hidden;
+  box-sizing: border-box;
 }
 .plot-container.js-plotly-plot,
 .deconv-mass-plot-inner.js-plotly-plot,
@@ -708,16 +727,24 @@ input[type="radio"] {
 }
 
 .deconv-mass-card {
+  width: 100%;
   display: flex;
   flex-direction: column;
-  min-height: 420px;
-  border-color: transparent;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  margin-bottom: 0;
+  min-height: 440px;
+  height: 440px;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .deconv-mass-plot-inner {
-  min-height: 320px;
+  width: 100%;
+  min-height: 0;
   flex: 1 1 auto;
-  overflow: hidden;
 }
 
 .deconv-mass-download-row {
@@ -730,6 +757,31 @@ input[type="radio"] {
 
 #deconv-spectrum-plot {
   border-color: transparent;
+  min-height: 440px;
+  height: 440px;
+  margin-bottom: 0;
+  padding: 0;
+}
+
+#deconv-uv-plot,
+#deconv-tic-plot {
+  min-height: 360px;
+  height: 360px;
+  padding: 0;
+}
+
+.deconv-results-grid {
+  align-items: stretch;
+}
+
+.deconv-results-grid > .col {
+  display: flex;
+  min-width: 0;
+}
+
+.deconv-results-grid > .col > #deconv-spectrum-plot,
+.deconv-results-grid > .col > .deconv-mass-card {
+  width: 100%;
 }
 
 /* ===== Progression Assignments ===== */
@@ -1081,12 +1133,15 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 }
 
 #deconv-ion-selection-plot {
-  max-height: 820px;
-  overflow: auto;
+  overflow: hidden;
+  border: none !important;
+  padding: 0;
+  background: #ffffff;
 }
 #deconv-ion-selection-plot.interactive-ion-selection {
   background: #ffffff;
-  border-color: transparent;
+  border: none !important;
+  box-shadow: none;
 }
 #deconv-ion-selection-plot.has-image {
   background: #ffffff;
