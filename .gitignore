@@ -6,3 +6,4 @@ backend/__pycache__/
 dist/
 release/
 build/pyinstaller/
+.DS_Store

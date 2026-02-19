@@ -2,13 +2,19 @@
 
 Desktop LC-MS analysis app built with Electron (frontend shell) and a packaged FastAPI backend.
 
-## Download
+## Downloads
 
-Get installers from GitHub Releases:
+Get installers from GitHub Releases.
 
-- macOS (Apple Silicon): `LCMS.Desktop-*-arm64.dmg`
-- Windows installer: `LCMS.Desktop.Setup.*.exe`
-- Windows portable: `LCMS.Desktop.*.exe`
+`<version>` means the numeric release version (for example `0.2.2` for tag `v0.2.2`).
+
+| Platform | File | Description |
+| --- | --- | --- |
+| Windows | `LCMS.Desktop.Setup.<version>.exe` | Installer (recommended) |
+| Windows | `LCMS.Desktop-<version>-win.zip` | Portable (no install) |
+| Windows | `LCMS.Desktop.<version>.exe` | Portable executable |
+| macOS (Apple Silicon) | `LCMS.Desktop-<version>-arm64.dmg` | Disk image (recommended) |
+| macOS (Apple Silicon) | `LCMS.Desktop-<version>-arm64-mac.zip` | Zip archive |
 
 ### macOS First-Run (if Gatekeeper blocks launch)
 
