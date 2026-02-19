@@ -593,31 +593,17 @@ input[type="radio"] {
   overflow: hidden;
 }
 
-/* Isolate JSME internals from app-wide reset rules (fixes icon/square misalignment). */
-#single-sketcher-canvas,
-#single-sketcher-canvas * {
+/* Fully isolate JSME from app-wide CSS reset.
+   JSME uses pixel-precise absolute positioning internally;
+   any inherited margin/padding/box-sizing breaks button alignment. */
+#single-sketcher-canvas {
+  position: relative;
+}
+#single-sketcher-canvas *,
+#single-sketcher-canvas *::before,
+#single-sketcher-canvas *::after {
+  all: revert !important;
   box-sizing: content-box !important;
-}
-#single-sketcher-canvas table,
-#single-sketcher-canvas tr,
-#single-sketcher-canvas td,
-#single-sketcher-canvas div,
-#single-sketcher-canvas img,
-#single-sketcher-canvas canvas {
-  margin: 0 !important;
-  padding: 0 !important;
-  line-height: normal !important;
-}
-#single-sketcher-canvas table {
-  border-collapse: separate !important;
-  border-spacing: 0 !important;
-}
-#single-sketcher-canvas td {
-  vertical-align: middle !important;
-  text-align: center !important;
-}
-#single-sketcher-canvas img {
-  display: block !important;
 }
 
 .export-group {

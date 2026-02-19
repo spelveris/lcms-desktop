@@ -139,12 +139,16 @@ def _resolve_node_command() -> Optional[str]:
         if not candidate_path:
             continue
         try:
+            _kw = {}
+            if sys.platform == "win32":
+                _kw["creationflags"] = subprocess.CREATE_NO_WINDOW
             check = subprocess.run(
                 [candidate_path, "--version"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=5,
+                **_kw,
             )
             if check.returncode == 0:
                 return candidate_path
@@ -223,6 +227,10 @@ process.stdin.on('end', async () => {
 """
 
     try:
+        # On Windows, hide the subprocess console window to avoid a white flash
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         result = subprocess.run(
             [node_cmd, "-e", node_script],
             input=json.dumps({"smiles": smiles}),
@@ -232,6 +240,7 @@ process.stdin.on('end', async () => {
             cwd=run_cwd,
             env=env,
             timeout=20,
+            **kwargs,
         )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="SMILES calculation timed out")

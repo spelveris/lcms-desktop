@@ -133,6 +133,7 @@ function createWindow() {
     width: 1400,
     height: 900,
     title: "LC-MS Analysis",
+    show: false, // Hide until ready to prevent white flash
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -141,6 +142,11 @@ function createWindow() {
 
   // Load the frontend HTML
   mainWindow.loadFile(path.join(__dirname, "..", "frontend", "index.html"));
+
+  // Show window only after content is rendered
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
