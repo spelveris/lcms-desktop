@@ -1491,14 +1491,57 @@ function getDefaultProgressionRole(index, total) {
   return 'mid';
 }
 
+function getProgressionRoleBaseLabel(role) {
+  if (role === 'initial') return 'Initial';
+  if (role === 'final') return 'Final';
+  return 'Mid';
+}
+
+function buildAutoProgressionLabel(role, ordinal, totalForRole) {
+  const base = getProgressionRoleBaseLabel(role);
+  if (totalForRole <= 1) return base;
+  return `${base} ${ordinal}`;
+}
+
+function computeAutoProgressionLabelMap() {
+  const total = state.selectedFiles.length;
+  const roleCounts = { initial: 0, mid: 0, final: 0 };
+  const rolesByPath = {};
+
+  state.selectedFiles.forEach((file, i) => {
+    const assignment = state.progressionAssignments[file.path] || {};
+    const role = assignment.role || getDefaultProgressionRole(i, total);
+    rolesByPath[file.path] = role;
+    if (roleCounts[role] == null) roleCounts[role] = 0;
+    roleCounts[role] += 1;
+  });
+
+  const roleOrdinals = { initial: 0, mid: 0, final: 0 };
+  const labelsByPath = {};
+  state.selectedFiles.forEach((file) => {
+    const role = rolesByPath[file.path] || 'mid';
+    if (roleOrdinals[role] == null) roleOrdinals[role] = 0;
+    roleOrdinals[role] += 1;
+    labelsByPath[file.path] = buildAutoProgressionLabel(role, roleOrdinals[role], roleCounts[role] || 1);
+  });
+
+  return labelsByPath;
+}
+
 function syncProgressionAssignmentsToSelectedFiles() {
+  const total = state.selectedFiles.length;
   const next = {};
   state.selectedFiles.forEach((file, i) => {
     const existing = state.progressionAssignments[file.path] || {};
+    const defaultRole = getDefaultProgressionRole(i, total);
+    const hasUserRole = existing.userRole === true;
+    const hasUserLabel = existing.userLabel === true;
     next[file.path] = {
-      role: existing.role || getDefaultProgressionRole(i, state.selectedFiles.length),
-      label: existing.label || file.name,
+      role: hasUserRole ? (existing.role || defaultRole) : defaultRole,
+      label: hasUserLabel ? (existing.label || '') : '',
       color: existing.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length],
+      userRole: hasUserRole,
+      userLabel: hasUserLabel,
     };
   });
   state.progressionAssignments = next;
@@ -1510,14 +1553,19 @@ function readProgressionAssignmentsFromDOM() {
     if (!path) return;
     const item = state.progressionAssignments[path] || {};
     item.role = el.value || item.role || 'mid';
+    item.userRole = true;
     state.progressionAssignments[path] = item;
   });
 
+  const autoLabels = computeAutoProgressionLabelMap();
   document.querySelectorAll('.prog-label').forEach((el) => {
     const path = el.dataset.path;
     if (!path) return;
     const item = state.progressionAssignments[path] || {};
-    item.label = (el.value || '').trim() || path.split('/').pop() || 'Sample';
+    const value = (el.value || '').trim();
+    const autoLabel = String(autoLabels[path] || '').trim();
+    item.label = value;
+    item.userLabel = value.length > 0 && value !== autoLabel;
     state.progressionAssignments[path] = item;
   });
 
@@ -1531,15 +1579,52 @@ function readProgressionAssignmentsFromDOM() {
 }
 
 function getProgressionSamples() {
+  const total = state.selectedFiles.length;
+  const autoLabels = computeAutoProgressionLabelMap();
   return state.selectedFiles.map((file, i) => {
     const assignment = state.progressionAssignments[file.path] || {};
+    const role = assignment.role || getDefaultProgressionRole(i, total);
+    const autoLabel = String(autoLabels[file.path] || getProgressionRoleBaseLabel(role));
+    const manualLabel = (assignment.userLabel === true ? String(assignment.label || '').trim() : '');
     return {
       path: file.path,
-      role: assignment.role || getDefaultProgressionRole(i, state.selectedFiles.length),
-      label: (assignment.label || '').trim() || file.name,
+      role,
+      label: manualLabel || autoLabel,
       color: assignment.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length],
     };
   });
+}
+
+function updateRangeWithTimes(range, times) {
+  if (!Array.isArray(times)) return range;
+  let [minX, maxX] = range;
+  times.forEach((t) => {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return;
+    if (n < minX) minX = n;
+    if (n > maxX) maxX = n;
+  });
+  return [minX, maxX];
+}
+
+function computeProgressionXRange(data) {
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+
+  (data.uv_progression || []).forEach((s) => {
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s.times);
+  });
+  (data.tic_progression || []).forEach((s) => {
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s.times);
+  });
+  (data.eic_progressions || []).forEach((group) => {
+    (group.samples || []).forEach((s) => {
+      [minX, maxX] = updateRangeWithTimes([minX, maxX], s.times);
+    });
+  });
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || maxX <= minX) return null;
+  return [minX, maxX];
 }
 
 // ===== Time Progression Tab =====
@@ -1565,12 +1650,13 @@ function renderProgressionAssignments() {
 
   syncProgressionAssignmentsToSelectedFiles();
 
+  const sampleDefs = getProgressionSamples();
   state.selectedFiles.forEach((file, i) => {
     const card = document.createElement('div');
     card.className = 'assignment-card';
     const assignment = state.progressionAssignments[file.path] || {};
-    const defaultRole = assignment.role || getDefaultProgressionRole(i, state.selectedFiles.length);
-    const defaultLabel = (assignment.label || file.name || '').trim() || file.name;
+    const defaultRole = sampleDefs[i]?.role || assignment.role || getDefaultProgressionRole(i, state.selectedFiles.length);
+    const defaultLabel = sampleDefs[i]?.label || buildAutoProgressionLabel(defaultRole, 1, 1);
     const defaultColor = assignment.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length];
 
     card.innerHTML = `
@@ -1590,7 +1676,13 @@ function renderProgressionAssignments() {
     container.appendChild(card);
   });
 
-  container.querySelectorAll('.prog-role, .prog-label, .prog-color').forEach((el) => {
+  container.querySelectorAll('.prog-role').forEach((el) => {
+    el.addEventListener('change', () => {
+      readProgressionAssignmentsFromDOM();
+      renderProgressionAssignments();
+    });
+  });
+  container.querySelectorAll('.prog-label, .prog-color').forEach((el) => {
     el.addEventListener('change', readProgressionAssignmentsFromDOM);
     if (el.classList.contains('prog-label')) {
       el.addEventListener('input', readProgressionAssignmentsFromDOM);
@@ -1692,6 +1784,7 @@ function renderProgression(data, samples) {
 
   const progTitle = document.getElementById('label-prog-title');
   const baseTitle = (progTitle && progTitle.value) || 'Time Progression';
+  const xRange = computeProgressionXRange(data);
 
   // UV progression
   if (data.uv_progression) {
@@ -1710,6 +1803,7 @@ function renderProgression(data, samples) {
     charts.plotProgression('prog-uv-plot', uvSamples, colors, {
       title: `${baseTitle} - UV`,
       yLabel: 'Absorbance (mAU)',
+      xRange,
     });
   }
 
@@ -1730,6 +1824,7 @@ function renderProgression(data, samples) {
     charts.plotProgression('prog-tic-plot', ticSamples, colors, {
       title: `${baseTitle} - TIC`,
       yLabel: 'Intensity',
+      xRange,
     });
   }
 
@@ -1751,6 +1846,7 @@ function renderProgression(data, samples) {
       charts.plotProgression(`prog-eic-plot-${gi}`, eicSamples, colors, {
         title: `${baseTitle} - EIC m/z ${eicGroup.mz.toFixed(2)}`,
         yLabel: 'Intensity',
+        xRange,
       });
     });
   }

@@ -349,9 +349,19 @@ const charts = {
       name: s.label,
       line: { color: s.color || roleColorMap[s.role] || '#999', width: getLineWidth() },
     }));
+
+    const xaxis = { title: getXAxisLabel() };
+    if (Array.isArray(options.xRange) && options.xRange.length === 2) {
+      const x0 = Number(options.xRange[0]);
+      const x1 = Number(options.xRange[1]);
+      if (Number.isFinite(x0) && Number.isFinite(x1) && x1 > x0) {
+        xaxis.range = [x0, x1];
+      }
+    }
+
     const layout = mergeLayout({
       title: { text: options.title || 'Time Progression', font: { size: 14 } },
-      xaxis: { title: getXAxisLabel() }, yaxis: { title: options.yLabel || 'Intensity' },
+      xaxis, yaxis: { title: options.yLabel || 'Intensity' },
       showlegend: true, height: getContainerHeight(divId, 350),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
