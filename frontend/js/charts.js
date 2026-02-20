@@ -256,7 +256,7 @@ const charts = {
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
 
-  plotEIC(divId, eicTraces, title) {
+  plotEIC(divId, eicTraces, title, options = {}) {
     const targets = normalizeEicInput(eicTraces);
     const traces = targets.map((t, i) => {
       const mzValue = Number(t.target_mz ?? t.mz);
@@ -268,10 +268,29 @@ const charts = {
       line: { color: getColor(i), width: getLineWidth() },
       };
     });
+
+    const xaxis = { title: getXAxisLabel() };
+    if (Array.isArray(options.xRange) && options.xRange.length === 2) {
+      const x0 = Number(options.xRange[0]);
+      const x1 = Number(options.xRange[1]);
+      if (Number.isFinite(x0) && Number.isFinite(x1) && x1 > x0) {
+        xaxis.range = [x0, x1];
+      }
+    } else if (options.startAtZero === true) {
+      let xMax = Number.NEGATIVE_INFINITY;
+      targets.forEach((t) => {
+        (t.times || []).forEach((tv) => {
+          const v = Number(tv);
+          if (Number.isFinite(v) && v > xMax) xMax = v;
+        });
+      });
+      if (Number.isFinite(xMax) && xMax > 0) xaxis.range = [0, xMax];
+    }
+
     const showLegend = traces.length > 1;
     const layout = mergeLayout({
       title: { text: title || 'Extracted Ion Chromatogram', font: { size: 14 } },
-      xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
+      xaxis, yaxis: { title: 'Intensity' },
       showlegend: showLegend,
       legend: showLegend ? {
         x: 0.995,

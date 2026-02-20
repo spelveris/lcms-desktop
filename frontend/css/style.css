@@ -174,13 +174,24 @@ input[type="radio"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 16px;
   border-bottom: 1px solid var(--border);
+}
+.sidebar-title-wrap {
+  min-width: 0;
 }
 .sidebar-header h2 {
   font-size: 16px;
   font-weight: 600;
   color: var(--accent);
+}
+.sidebar-version-badge {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  opacity: 0.85;
 }
 
 .sidebar-expand-btn {

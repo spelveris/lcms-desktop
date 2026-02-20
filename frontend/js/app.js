@@ -72,6 +72,7 @@ const FALLBACK_EMPTY_QUOTES = [
 
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', () => {
+  initAppVersionBadge();
   initSidebar();
   initTabs();
   initSettings();
@@ -92,6 +93,24 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!document.hidden) schedulePlotlyResize();
   });
 });
+
+function getAppVersionLabel() {
+  const fallback = 'vdev';
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const raw = String(params.get('appVersion') || window.LCMS_APP_VERSION || '').trim();
+    if (!raw) return fallback;
+    return raw.startsWith('v') ? raw : `v${raw}`;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function initAppVersionBadge() {
+  const el = document.getElementById('app-version-badge');
+  if (!el) return;
+  el.textContent = getAppVersionLabel();
+}
 
 // ===== Toast Notifications =====
 function toast(message, type = 'info') {
@@ -1309,12 +1328,25 @@ function renderSingleSample(data) {
   const eicContainer = document.getElementById('single-eic-plots');
   eicContainer.innerHTML = '';
   if (data.eic && data.eic.targets && data.eic.targets.length > 0) {
+    const eicXRange = (() => {
+      let maxTime = Number.NEGATIVE_INFINITY;
+      (data.eic.targets || []).forEach((target) => {
+        (target.times || []).forEach((tv) => {
+          const t = Number(tv);
+          if (Number.isFinite(t) && t > maxTime) maxTime = t;
+        });
+      });
+      return Number.isFinite(maxTime) && maxTime > 0 ? [0, maxTime] : null;
+    })();
+
     // Combined EIC
     const combinedDiv = document.createElement('div');
     combinedDiv.className = 'plot-container';
     combinedDiv.id = 'eic-combined-single';
     eicContainer.appendChild(combinedDiv);
-    charts.plotEIC('eic-combined-single', data.eic.targets, 'Extracted Ion Chromatograms');
+    charts.plotEIC('eic-combined-single', data.eic.targets, 'Extracted Ion Chromatograms', {
+      xRange: eicXRange,
+    });
 
     // Individual EICs
     data.eic.targets.forEach((t, i) => {
@@ -1322,7 +1354,9 @@ function renderSingleSample(data) {
       div.className = 'plot-container';
       div.id = `eic-single-${i}`;
       eicContainer.appendChild(div);
-      charts.plotEIC(`eic-single-${i}`, [t], `EIC m/z ${t.mz.toFixed(2)}`);
+      charts.plotEIC(`eic-single-${i}`, [t], `EIC m/z ${t.mz.toFixed(2)}`, {
+        xRange: eicXRange,
+      });
     });
   } else if (state.mzTargets.length === 0) {
     eicContainer.innerHTML = '<p class="placeholder-msg">Add target m/z values in Settings to view EIC plots</p>';
@@ -1819,6 +1853,19 @@ async function loadProgression() {
 }
 
 function renderProgression(data, samples) {
+  const hasAnyProgression =
+    Boolean(data.uv_progression) ||
+    Boolean(data.tic_progression) ||
+    (Array.isArray(data.eic_progressions) && data.eic_progressions.length > 0);
+
+  if (!hasAnyProgression) {
+    setProgressionEmptyState(true);
+    return;
+  }
+
+  // Make plot container visible before Plotly renders to avoid first-render
+  // width underestimation (half-width charts until second click).
+  setProgressionEmptyState(false);
   const container = document.getElementById('progression-plots');
   container.innerHTML = '';
 
@@ -1831,6 +1878,7 @@ function renderProgression(data, samples) {
   const progTitle = document.getElementById('label-prog-title');
   const baseTitle = (progTitle && progTitle.value) || 'Time Progression';
   const xRange = computeProgressionXRange(data);
+  const progressionPlotIds = [];
 
   // UV progression
   if (data.uv_progression) {
@@ -1838,6 +1886,7 @@ function renderProgression(data, samples) {
     div.className = 'plot-container';
     div.id = 'prog-uv-plot';
     container.appendChild(div);
+    progressionPlotIds.push(div.id);
 
     const uvSamples = data.uv_progression.map((s, i) => ({
       times: s.times,
@@ -1859,6 +1908,7 @@ function renderProgression(data, samples) {
     div.className = 'plot-container';
     div.id = 'prog-tic-plot';
     container.appendChild(div);
+    progressionPlotIds.push(div.id);
 
     const ticSamples = data.tic_progression.map((s, i) => ({
       times: s.times,
@@ -1881,6 +1931,7 @@ function renderProgression(data, samples) {
       div.className = 'plot-container';
       div.id = `prog-eic-plot-${gi}`;
       container.appendChild(div);
+      progressionPlotIds.push(div.id);
 
       const eicSamples = eicGroup.samples.map((s, i) => ({
         times: s.times,
@@ -1896,12 +1947,7 @@ function renderProgression(data, samples) {
       });
     });
   }
-
-  if (!data.uv_progression && !data.tic_progression && (!data.eic_progressions || data.eic_progressions.length === 0)) {
-    setProgressionEmptyState(true);
-    return;
-  }
-  setProgressionEmptyState(false);
+  schedulePlotlyResize(progressionPlotIds);
 }
 
 async function exportProgression(format) {
@@ -2815,29 +2861,26 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
   if (!Array.isArray(mzValues) || mzValues.length === 0 || !Array.isArray(components) || components.length === 0) {
     return [];
   }
-  const snapTolerance = 1.5;
-  const maxGuidesPerComponent = 12;
-  const maxTotalGuides = 60;
-  const minIonRelIntensity = 0.06;
+
+  let mzMin = Number.POSITIVE_INFINITY;
+  let mzMax = Number.NEGATIVE_INFINITY;
+  mzValues.forEach((v) => {
+    const mz = Number(v);
+    if (!Number.isFinite(mz)) return;
+    if (mz < mzMin) mzMin = mz;
+    if (mz > mzMax) mzMax = mz;
+  });
+  if (!Number.isFinite(mzMin) || !Number.isFinite(mzMax) || mzMax <= mzMin) return [];
+
   const guides = [];
-  const used = new Set();
-  const snapToSpectrum = (targetMz) => {
-    if (guides.length >= maxTotalGuides) return false;
-    let bestIdx = 0;
-    let bestDiff = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < mzValues.length; i++) {
-      const diff = Math.abs(Number(mzValues[i]) - targetMz);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestIdx = i;
-      }
-    }
-    if (bestDiff <= snapTolerance && !used.has(bestIdx)) {
-      guides.push(Number(mzValues[bestIdx]));
-      used.add(bestIdx);
-      return true;
-    }
-    return false;
+  const seen = new Set();
+  const addGuide = (targetMz) => {
+    const mz = Number(targetMz);
+    if (!Number.isFinite(mz) || mz <= 0 || mz < mzMin || mz > mzMax) return;
+    const key = mz.toFixed(6);
+    if (seen.has(key)) return;
+    seen.add(key);
+    guides.push(mz);
   };
 
   const proton = 1.00784;
@@ -2845,32 +2888,9 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
   // Include ion guides from all provided components (not only top component),
   // so secondary component charge states (e.g. z=4) are also highlighted.
   components.forEach((comp) => {
-    if (guides.length >= maxTotalGuides) return;
     const observedIons = Array.isArray(comp.ion_mzs) ? comp.ion_mzs.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0) : [];
     if (observedIons.length > 0) {
-      const ionIntensities = Array.isArray(comp.ion_intensities)
-        ? comp.ion_intensities.map((v) => Number(v))
-        : [];
-
-      let candidateIons = observedIons;
-      if (ionIntensities.length === observedIons.length) {
-        const pairs = observedIons.map((mz, i) => ({ mz, intensity: ionIntensities[i] }))
-          .filter((p) => Number.isFinite(p.intensity) && p.intensity > 0);
-        if (pairs.length > 0) {
-          const maxIonIntensity = Math.max(...pairs.map((p) => p.intensity));
-          const strongPairs = pairs.filter((p) => p.intensity >= (maxIonIntensity * minIonRelIntensity));
-          const ranked = (strongPairs.length > 0 ? strongPairs : pairs)
-            .sort((a, b) => b.intensity - a.intensity)
-            .slice(0, maxGuidesPerComponent);
-          candidateIons = ranked.map((p) => p.mz);
-        } else {
-          candidateIons = observedIons.slice(0, maxGuidesPerComponent);
-        }
-      } else if (observedIons.length > maxGuidesPerComponent) {
-        candidateIons = observedIons.slice(0, maxGuidesPerComponent);
-      }
-
-      candidateIons.forEach((mz) => { snapToSpectrum(mz); });
+      observedIons.forEach((mz) => { addGuide(mz); });
       return;
     }
 
@@ -2882,7 +2902,7 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
       const z = Number(zRaw);
       if (!(z > 0)) return;
       const theoMz = (mass + (z * proton)) / z;
-      snapToSpectrum(theoMz);
+      addGuide(theoMz);
     });
   });
 
@@ -2895,13 +2915,12 @@ function renderDeconvResults(data) {
   resultsDiv.classList.remove('hidden');
   syncDeconvBottomLayout();
 
-  const allComponents = Array.isArray(data?.components) ? data.components : [];
   const components = getDeconvDisplayComponents();
 
   // Mass spectrum plot with annotations from detected components
   if (data.spectrum) {
-    const guideSource = allComponents.length > 0 ? allComponents : components;
-    const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, guideSource);
+    // Keep mass-spectrum guide lines consistent with Ion Selection per Component.
+    const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, components);
     const spectrumPlotEl = document.getElementById('deconv-spectrum-plot');
     const spectrumHeight = Number(spectrumPlotEl?.dataset?.plotHeight || 0);
     charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {

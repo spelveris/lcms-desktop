@@ -141,8 +141,10 @@ function createWindow() {
     },
   });
 
-  // Load the frontend HTML
-  mainWindow.loadFile(path.join(__dirname, "..", "frontend", "index.html"));
+  // Load the frontend HTML and pass app version into renderer.
+  mainWindow.loadFile(path.join(__dirname, "..", "frontend", "index.html"), {
+    query: { appVersion: app.getVersion() },
+  });
 
   // Show window only after content is rendered
   mainWindow.once("ready-to-show", () => {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LC-MS Analysis</title>
-  <link rel="stylesheet" href="css/style.css?v=20260219c">
+  <link rel="stylesheet" href="css/style.css?v=0.2.8">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -22,7 +22,10 @@
   <!-- Sidebar -->
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
-      <h2>LC-MS Analysis</h2>
+      <div class="sidebar-title-wrap">
+        <h2>LC-MS Analysis</h2>
+        <div id="app-version-badge" class="sidebar-version-badge">v--</div>
+      </div>
       <button id="sidebar-toggle-collapse" class="icon-btn" title="Collapse sidebar">&laquo;</button>
     </div>
 
@@ -459,9 +462,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=20260218ak"></script>
-  <script src="js/charts.js?v=20260218ak"></script>
-  <script src="js/quotes.js?v=20260219c"></script>
-  <script src="js/app.js?v=20260219c"></script>
+  <script src="js/api.js?v=0.2.8"></script>
+  <script src="js/charts.js?v=0.2.8"></script>
+  <script src="js/quotes.js?v=0.2.8"></script>
+  <script src="js/app.js?v=0.2.8"></script>
 </body>
 </html>
