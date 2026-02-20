@@ -690,12 +690,19 @@ def deconvolute(
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
 
+    # Agilent's "start charge maximum" can still yield envelopes above that
+    # charge in high-mass windows; expand internal search for high mass limits.
+    effective_max_charge = int(max_charge)
+    if high_mw > 50000.0:
+        effective_max_charge = max(effective_max_charge, int(np.ceil(high_mw / 1000.0)))
+    effective_max_charge = max(2, min(100, effective_max_charge))
+
     # Run multi-charge deconvolution
     components = analysis.deconvolute_protein_local_lcms_machine_like(
         mz_arr,
         intensity_arr,
         min_charge=max(min_charge, 2),  # Multi-charge needs z>=2
-        max_charge=max_charge,
+        max_charge=effective_max_charge,
         mw_agreement=mw_agreement,
         contig_min=contig_min,
         abundance_cutoff=abundance_cutoff,
@@ -754,6 +761,7 @@ def deconvolute(
             "intensities": _ndarray_to_list(intensity_arr),
         },
         "time_range": [start, end],
+        "effective_max_charge": effective_max_charge,
     }
 
 

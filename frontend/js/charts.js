@@ -362,7 +362,16 @@ const charts = {
     const layout = mergeLayout({
       title: { text: options.title || 'Time Progression', font: { size: 14 } },
       xaxis, yaxis: { title: options.yLabel || 'Intensity' },
-      showlegend: true, height: getContainerHeight(divId, 350),
+      legend: {
+        x: 0.995,
+        xanchor: 'right',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.8)',
+      },
+      showlegend: true,
+      margin: { r: 28 },
+      height: getContainerHeight(divId, 350),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },

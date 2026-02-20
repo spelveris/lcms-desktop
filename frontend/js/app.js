@@ -653,6 +653,7 @@ function initFileBrowser() {
     state.deconvAutoRunSignature = '';
     state.batchDeconvAutoRunSignature = '';
     syncProgressionAssignmentsToSelectedFiles();
+    refreshProgressionAssignmentsIfNeeded();
     saveSelectedFiles();
     updateWavelengthCheckboxes();
     resetSingleSampleView();
@@ -825,6 +826,7 @@ function selectFile(file) {
     state.deconvAutoRunSignature = '';
     state.batchDeconvAutoRunSignature = '';
     syncProgressionAssignmentsToSelectedFiles();
+    refreshProgressionAssignmentsIfNeeded();
     saveSelectedFiles();
     renderSelectedFiles();
     updateSampleDropdowns();
@@ -839,6 +841,7 @@ function deselectFile(path) {
   state.deconvAutoRunSignature = '';
   state.batchDeconvAutoRunSignature = '';
   syncProgressionAssignmentsToSelectedFiles();
+  refreshProgressionAssignmentsIfNeeded();
   saveSelectedFiles();
   renderSelectedFiles();
   renderFileList(); // update checkboxes
@@ -874,6 +877,16 @@ function renderSelectedFiles() {
     el.querySelector('.remove-btn').addEventListener('click', () => deselectFile(file.path));
     container.appendChild(el);
   });
+}
+
+function refreshProgressionAssignmentsIfNeeded() {
+  const tab = document.getElementById('tab-progression');
+  const container = document.getElementById('progression-assignments');
+  if (!tab || !container) return;
+  const tabIsVisible = !tab.classList.contains('hidden');
+  if (tabIsVisible || container.children.length > 0) {
+    renderProgressionAssignments();
+  }
 }
 
 async function loadSampleMeta(path) {
@@ -2503,6 +2516,17 @@ async function exportEICCSV() {
 }
 
 // ===== Deconvolution Tab =====
+function getGlobalDeconvMassRangeParams() {
+  const massLowRaw = document.getElementById('mass-axis-min')?.value ?? '';
+  const massHighRaw = document.getElementById('mass-axis-max')?.value ?? '';
+  const massLow = parseFloat(massLowRaw);
+  const massHigh = parseFloat(massHighRaw);
+  const params = {};
+  if (massLowRaw !== '' && Number.isFinite(massLow)) params.mass_range_low = massLow;
+  if (massHighRaw !== '' && Number.isFinite(massHigh)) params.mass_range_high = massHigh;
+  return params;
+}
+
 function getDeconvolutionRunSignature() {
   const samplePath = document.getElementById('deconv-sample-select')?.value || '';
   const start = parseFloat(document.getElementById('deconv-start')?.value);
@@ -2510,6 +2534,7 @@ function getDeconvolutionRunSignature() {
   const expert = document.getElementById('expert-mode-toggle')?.checked === true;
   const minCharge = parseInt(document.getElementById('dp-min-charge')?.value, 10) || 1;
   const maxCharge = parseInt(document.getElementById('dp-max-charge')?.value, 10) || 50;
+  const massRange = getGlobalDeconvMassRangeParams();
   if (!samplePath || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '';
   return [
     samplePath,
@@ -2518,6 +2543,8 @@ function getDeconvolutionRunSignature() {
     expert ? 'expert' : 'basic',
     String(minCharge),
     String(maxCharge),
+    Number.isFinite(massRange.mass_range_low) ? massRange.mass_range_low.toFixed(1) : '',
+    Number.isFinite(massRange.mass_range_high) ? massRange.mass_range_high.toFixed(1) : '',
   ].join('|');
 }
 
@@ -2667,6 +2694,7 @@ async function runDeconvolution() {
     end_time: parseFloat(document.getElementById('deconv-end').value),
     ion_mode: document.querySelector('input[name="ion-mode"]:checked').value,
   };
+  Object.assign(params, getGlobalDeconvMassRangeParams());
 
   // Expert parameters
   if (document.getElementById('expert-mode-toggle').checked) {
@@ -3250,11 +3278,14 @@ async function runBatchDeconvolution() {
       }
 
       try {
-        const data = await api.runDeconvolution({
+        const massRange = getGlobalDeconvMassRangeParams();
+        const req = {
           path: file.path,
           start_time: start,
           end_time: end,
-        });
+          ...massRange,
+        };
+        const data = await api.runDeconvolution(req);
         const components = (data.components || []).slice().sort((a, b) => (b.intensity || 0) - (a.intensity || 0));
         results.push({
           name: file.name,
@@ -3930,11 +3961,14 @@ async function getDeconvForMasscalc(samplePath) {
   }
 
   const auto = await api.autoDetectWindow(samplePath);
-  const deconvData = await api.runDeconvolution({
+  const massRange = getGlobalDeconvMassRangeParams();
+  const req = {
     path: samplePath,
     start_time: auto.start,
     end_time: auto.end,
-  });
+    ...massRange,
+  };
+  const deconvData = await api.runDeconvolution(req);
 
   return { data: deconvData, timeRange: [auto.start, auto.end] };
 }
