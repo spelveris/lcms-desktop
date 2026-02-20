@@ -2815,9 +2815,6 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
   if (!Array.isArray(mzValues) || mzValues.length === 0 || !Array.isArray(components) || components.length === 0) {
     return [];
   }
-  const top = components[0];
-  const observedIons = Array.isArray(top.ion_mzs) ? top.ion_mzs.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0) : [];
-
   const snapTolerance = 1.5;
   const guides = [];
   const used = new Set();
@@ -2839,21 +2836,27 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
     return false;
   };
 
-  if (observedIons.length > 0) {
-    observedIons.forEach((mz) => { snapToSpectrum(mz); });
-    return guides;
-  }
-
-  const charges = Array.isArray(top.charge_states) ? top.charge_states : [];
-  const mass = Number(top.mass || 0);
-  if (!(mass > 0) || charges.length === 0) return [];
-
   const proton = 1.00784;
-  charges.forEach((zRaw) => {
-    const z = Number(zRaw);
-    if (!(z > 0)) return;
-    const theoMz = (mass + (z * proton)) / z;
-    snapToSpectrum(theoMz);
+
+  // Include ion guides from all provided components (not only top component),
+  // so secondary component charge states (e.g. z=4) are also highlighted.
+  components.forEach((comp) => {
+    const observedIons = Array.isArray(comp.ion_mzs) ? comp.ion_mzs.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0) : [];
+    if (observedIons.length > 0) {
+      observedIons.forEach((mz) => { snapToSpectrum(mz); });
+      return;
+    }
+
+    const charges = Array.isArray(comp.charge_states) ? comp.charge_states : [];
+    const mass = Number(comp.mass || 0);
+    if (!(mass > 0) || charges.length === 0) return;
+
+    charges.forEach((zRaw) => {
+      const z = Number(zRaw);
+      if (!(z > 0)) return;
+      const theoMz = (mass + (z * proton)) / z;
+      snapToSpectrum(theoMz);
+    });
   });
 
   return guides;
@@ -2865,11 +2868,13 @@ function renderDeconvResults(data) {
   resultsDiv.classList.remove('hidden');
   syncDeconvBottomLayout();
 
+  const allComponents = Array.isArray(data?.components) ? data.components : [];
   const components = getDeconvDisplayComponents();
 
   // Mass spectrum plot with annotations from detected components
   if (data.spectrum) {
-    const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, components);
+    const guideSource = allComponents.length > 0 ? allComponents : components;
+    const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, guideSource);
     const spectrumPlotEl = document.getElementById('deconv-spectrum-plot');
     const spectrumHeight = Number(spectrumPlotEl?.dataset?.plotHeight || 0);
     charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {

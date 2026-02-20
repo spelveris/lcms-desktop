@@ -1,6 +1,6 @@
 {
   "name": "lcms-desktop",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "LC-MS Analysis Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
