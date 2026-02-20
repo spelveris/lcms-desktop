@@ -527,6 +527,39 @@ function initSettings() {
     document.getElementById('expert-params').classList.toggle('hidden', !e.target.checked);
   });
 
+  function syncMassRangeInputs(source) {
+    const axisMin = document.getElementById('mass-axis-min');
+    const axisMax = document.getElementById('mass-axis-max');
+    const expertMin = document.getElementById('dp-mass-low');
+    const expertMax = document.getElementById('dp-mass-high');
+    if (!axisMin || !axisMax || !expertMin || !expertMax) return;
+
+    if (source === 'axis') {
+      expertMin.value = axisMin.value;
+      expertMax.value = axisMax.value;
+      return;
+    }
+    if (source === 'expert') {
+      axisMin.value = expertMin.value;
+      axisMax.value = expertMax.value;
+    }
+  }
+
+  // Keep Graph & Export mass axis limits and Expert mass range inputs visually synced.
+  ['mass-axis-min', 'mass-axis-max'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => syncMassRangeInputs('axis'));
+    el.addEventListener('change', () => syncMassRangeInputs('axis'));
+  });
+  ['dp-mass-low', 'dp-mass-high'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => syncMassRangeInputs('expert'));
+    el.addEventListener('change', () => syncMassRangeInputs('expert'));
+  });
+  syncMassRangeInputs('axis');
+
   ['deconv-show-title', 'deconv-show-subtitle'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
