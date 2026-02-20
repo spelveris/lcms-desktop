@@ -2733,10 +2733,13 @@ async function runDeconvolution() {
   if (document.getElementById('expert-mode-toggle').checked) {
     params.min_charge = parseInt(document.getElementById('dp-min-charge').value);
     params.max_charge = parseInt(document.getElementById('dp-max-charge').value);
-    params.mw_agreement = parseFloat(document.getElementById('dp-mw-agree').value);
+    const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree').value);
+    const abundancePct = parseFloat(document.getElementById('dp-abundance').value);
+    const envelopePct = parseFloat(document.getElementById('dp-r2').value);
+    params.mw_agreement = Number.isFinite(mwAgreePct) ? (mwAgreePct / 100.0) : undefined;
     params.contig_min = parseInt(document.getElementById('dp-contig-min').value);
-    params.abundance_cutoff = parseFloat(document.getElementById('dp-abundance').value);
-    params.r2_cutoff = parseFloat(document.getElementById('dp-r2').value);
+    params.abundance_cutoff = Number.isFinite(abundancePct) ? (abundancePct / 100.0) : undefined;
+    params.r2_cutoff = Number.isFinite(envelopePct) ? (envelopePct / 100.0) : undefined;
     params.fwhm = parseFloat(document.getElementById('dp-fwhm').value);
     params.monoisotopic = document.getElementById('dp-monoisotopic').checked;
 
