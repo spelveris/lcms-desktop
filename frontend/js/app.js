@@ -2816,9 +2816,13 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
     return [];
   }
   const snapTolerance = 1.5;
+  const maxGuidesPerComponent = 12;
+  const maxTotalGuides = 60;
+  const minIonRelIntensity = 0.06;
   const guides = [];
   const used = new Set();
   const snapToSpectrum = (targetMz) => {
+    if (guides.length >= maxTotalGuides) return false;
     let bestIdx = 0;
     let bestDiff = Number.POSITIVE_INFINITY;
     for (let i = 0; i < mzValues.length; i++) {
@@ -2841,9 +2845,32 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
   // Include ion guides from all provided components (not only top component),
   // so secondary component charge states (e.g. z=4) are also highlighted.
   components.forEach((comp) => {
+    if (guides.length >= maxTotalGuides) return;
     const observedIons = Array.isArray(comp.ion_mzs) ? comp.ion_mzs.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0) : [];
     if (observedIons.length > 0) {
-      observedIons.forEach((mz) => { snapToSpectrum(mz); });
+      const ionIntensities = Array.isArray(comp.ion_intensities)
+        ? comp.ion_intensities.map((v) => Number(v))
+        : [];
+
+      let candidateIons = observedIons;
+      if (ionIntensities.length === observedIons.length) {
+        const pairs = observedIons.map((mz, i) => ({ mz, intensity: ionIntensities[i] }))
+          .filter((p) => Number.isFinite(p.intensity) && p.intensity > 0);
+        if (pairs.length > 0) {
+          const maxIonIntensity = Math.max(...pairs.map((p) => p.intensity));
+          const strongPairs = pairs.filter((p) => p.intensity >= (maxIonIntensity * minIonRelIntensity));
+          const ranked = (strongPairs.length > 0 ? strongPairs : pairs)
+            .sort((a, b) => b.intensity - a.intensity)
+            .slice(0, maxGuidesPerComponent);
+          candidateIons = ranked.map((p) => p.mz);
+        } else {
+          candidateIons = observedIons.slice(0, maxGuidesPerComponent);
+        }
+      } else if (observedIons.length > maxGuidesPerComponent) {
+        candidateIons = observedIons.slice(0, maxGuidesPerComponent);
+      }
+
+      candidateIons.forEach((mz) => { snapToSpectrum(mz); });
       return;
     }
 

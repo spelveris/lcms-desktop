@@ -268,10 +268,20 @@ const charts = {
       line: { color: getColor(i), width: getLineWidth() },
       };
     });
+    const showLegend = traces.length > 1;
     const layout = mergeLayout({
       title: { text: title || 'Extracted Ion Chromatogram', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
-      showlegend: true, height: getContainerHeight(divId, 300),
+      showlegend: showLegend,
+      legend: showLegend ? {
+        x: 0.995,
+        xanchor: 'right',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.8)',
+      } : undefined,
+      height: getContainerHeight(divId, 300),
+      margin: { r: showLegend ? 34 : 24 },
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -306,10 +316,20 @@ const charts = {
         }
       });
     }
+    const showLegend = traces.length > 1;
     const layout = mergeLayout({
       title: { text: options.title || `EIC m/z ${mzLabel}`, font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
-      showlegend: true, height: getContainerHeight(divId, 300),
+      showlegend: showLegend,
+      legend: showLegend ? {
+        x: 0.995,
+        xanchor: 'right',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.8)',
+      } : undefined,
+      height: getContainerHeight(divId, 300),
+      margin: { r: showLegend ? 34 : 24 },
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -328,11 +348,21 @@ const charts = {
         line: { color: getColor(i), width: getLineWidth() },
       });
     });
+    const showLegend = traces.length > 1;
     const layout = mergeLayout({
       title: { text: options.title || 'EIC Overlay', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() },
       yaxis: { title: options.normalize ? 'Relative Intensity' : 'Intensity' },
-      showlegend: true, height: getContainerHeight(divId, 350),
+      showlegend: showLegend,
+      legend: showLegend ? {
+        x: 0.995,
+        xanchor: 'right',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.8)',
+      } : undefined,
+      height: getContainerHeight(divId, 350),
+      margin: { r: showLegend ? 34 : 24 },
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
