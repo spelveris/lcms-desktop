@@ -258,14 +258,17 @@ const charts = {
 
   plotEIC(divId, eicTraces, title, options = {}) {
     const targets = normalizeEicInput(eicTraces);
+    const colorIndexStartRaw = Number(options.colorIndexStart);
+    const colorIndexStart = Number.isFinite(colorIndexStartRaw) ? colorIndexStartRaw : 0;
     const traces = targets.map((t, i) => {
       const mzValue = Number(t.target_mz ?? t.mz);
       const mzLabel = Number.isFinite(mzValue) ? mzValue.toFixed(2) : '?';
+      const traceColor = t.color || options.traceColor || getColor(colorIndexStart + i);
       return {
       x: t.times || [], y: t.intensities || [],
       type: 'scatter', mode: 'lines',
       name: `m/z ${mzLabel}`,
-      line: { color: getColor(i), width: getLineWidth() },
+      line: { color: traceColor, width: getLineWidth() },
       };
     });
 
@@ -287,9 +290,17 @@ const charts = {
       if (Number.isFinite(xMax) && xMax > 0) xaxis.range = [0, xMax];
     }
 
-    const showLegend = traces.length > 1;
+    const showLegend = typeof options.showLegend === 'boolean'
+      ? options.showLegend
+      : traces.length > 1;
     const layout = mergeLayout({
-      title: { text: title || 'Extracted Ion Chromatogram', font: { size: 14 } },
+      title: {
+        text: title || 'Extracted Ion Chromatogram',
+        font: {
+          size: 14,
+          color: options.titleColor || '#000000',
+        },
+      },
       xaxis, yaxis: { title: 'Intensity' },
       showlegend: showLegend,
       legend: showLegend ? {

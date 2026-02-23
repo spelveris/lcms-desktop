@@ -46,8 +46,3 @@ npm start
 npm run dist:mac
 npm run dist:win
 ```
-
-## Notes
-
-- The backend health endpoint is `http://127.0.0.1:8741/api/health`.
-- Release assets are produced by `.github/workflows/build-desktop.yml`.

@@ -603,6 +603,7 @@ function addMzTargetFromInput(inputRef) {
     return false;
   }
   state.mzTargets.push(val);
+  normalizeMzTargets();
   input.value = '';
   saveMzTargets();
   renderMzTargets();
@@ -610,7 +611,8 @@ function addMzTargetFromInput(inputRef) {
 }
 
 function removeMzTarget(val) {
-  state.mzTargets = state.mzTargets.filter(v => v !== val);
+  state.mzTargets = state.mzTargets.filter((v) => Math.abs(Number(v) - Number(val)) > 1e-9);
+  normalizeMzTargets();
   saveMzTargets();
   renderMzTargets();
 }
@@ -623,11 +625,25 @@ function clearAllMzTargets() {
   toast('All m/z targets cleared', 'info');
 }
 
+function normalizeMzTargets() {
+  const cleaned = [];
+  (Array.isArray(state.mzTargets) ? state.mzTargets : []).forEach((raw) => {
+    const mz = Number(raw);
+    if (!Number.isFinite(mz) || mz <= 0) return;
+    if (cleaned.some((existing) => Math.abs(existing - mz) <= 1e-9)) return;
+    cleaned.push(mz);
+  });
+  cleaned.sort((a, b) => a - b);
+  state.mzTargets = cleaned;
+}
+
 function saveMzTargets() {
+  normalizeMzTargets();
   localStorage.setItem('lcms-mz-targets', JSON.stringify(state.mzTargets));
 }
 
 function renderMzTargets() {
+  normalizeMzTargets();
   const containerIds = ['single-mz-targets-inline', 'eic-mz-targets-inline'];
   containerIds.forEach((id) => {
     const container = document.getElementById(id);
@@ -854,12 +870,16 @@ function renderFileList() {
 
 function sortItems(items, mode) {
   const sorted = [...items];
+  const naturalNameCompare = (a, b) => String(a || '').localeCompare(String(b || ''), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
   switch (mode) {
     case 'name-asc':
-      sorted.sort((a, b) => a.name.localeCompare(b.name));
+      sorted.sort((a, b) => naturalNameCompare(a.name, b.name));
       break;
     case 'name-desc':
-      sorted.sort((a, b) => b.name.localeCompare(a.name));
+      sorted.sort((a, b) => naturalNameCompare(b.name, a.name));
       break;
     case 'date-asc':
       sorted.sort((a, b) => (a.modified || 0) - (b.modified || 0));
@@ -1354,8 +1374,12 @@ function renderSingleSample(data) {
       div.className = 'plot-container';
       div.id = `eic-single-${i}`;
       eicContainer.appendChild(div);
+      const traceColor = charts.getColor(i);
       charts.plotEIC(`eic-single-${i}`, [t], `EIC m/z ${t.mz.toFixed(2)}`, {
         xRange: eicXRange,
+        colorIndexStart: i,
+        traceColor,
+        titleColor: traceColor,
       });
     });
   } else if (state.mzTargets.length === 0) {
@@ -1370,11 +1394,21 @@ async function exportSingle(format) {
     toast('Load a sample first', 'warning');
     return;
   }
-  await exportAllPlots('tab-single', 'single_sample', format);
+  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const selected = state.selectedFiles.find((f) => f.path === samplePath);
+  let sampleName = selected?.name || (samplePath ? samplePath.split(/[\\/]/).pop() : '') || 'single_sample';
+  if (sampleName.toLowerCase().endsWith('.d')) sampleName = sampleName.slice(0, -2);
+  const fileBase = sanitizeFilename(sampleName || 'single_sample');
+  await exportAllPlots('tab-single', fileBase, format, {
+    singleSample: true,
+    pdfPerPage: 4,
+    pdfOrientation: 'portrait',
+    pdfPreset: 'deconv-like',
+  });
 }
 
 /** Export all Plotly plots in a tab container as images. */
-async function exportAllPlots(containerId, filenameBase, format) {
+async function exportAllPlots(containerId, filenameBase, format, options = {}) {
   const container = document.getElementById(containerId);
   const plotDivs = container.querySelectorAll('.js-plotly-plot');
   if (plotDivs.length === 0) {
@@ -1388,7 +1422,7 @@ async function exportAllPlots(containerId, filenameBase, format) {
   showLoading(`Exporting ${format.toUpperCase()}...`);
   try {
     if (format === 'pdf') {
-      await exportPlotsAsPDF(plotDivs, filenameBase, scale);
+      await exportPlotsAsPDF(plotDivs, filenameBase, scale, options);
       toast(`Exported ${plotDivs.length} plot(s) as PDF`, 'success');
       return;
     }
@@ -1414,14 +1448,17 @@ async function exportAllPlots(containerId, filenameBase, format) {
   }
 }
 
-async function exportPlotsAsPDF(plotDivs, filenameBase, scale) {
+async function exportPlotsAsPDF(plotDivs, filenameBase, scale, options = {}) {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     throw new Error('PDF library not loaded');
   }
 
   const { jsPDF } = window.jspdf;
+  const isSingleSamplePdf = options.singleSample === true;
+  const orientation = String(options.pdfOrientation || (isSingleSamplePdf ? 'portrait' : 'landscape'));
+  const plotsPerPage = Math.max(1, parseInt(options.pdfPerPage, 10) || (isSingleSamplePdf ? 4 : 1));
   const pdf = new jsPDF({
-    orientation: 'landscape',
+    orientation,
     unit: 'pt',
     format: 'a4',
     compress: true,
@@ -1432,22 +1469,82 @@ async function exportPlotsAsPDF(plotDivs, filenameBase, scale) {
   const margin = 24;
   const contentWidth = pageWidth - margin * 2;
   const contentHeight = pageHeight - margin * 2;
+  const verticalGap = isSingleSamplePdf ? 10 : 0;
+  const slotHeight = isSingleSamplePdf
+    ? ((contentHeight - (verticalGap * (plotsPerPage - 1))) / plotsPerPage)
+    : contentHeight;
+  const singlePdfScale = isSingleSamplePdf
+    ? Math.max(1.75, Math.min(3.0, Number(scale) || 1))
+    : scale;
+  const singleSampleEicYMax = isSingleSamplePdf
+    ? computeSingleSampleEicGlobalYMax(plotDivs)
+    : null;
 
   for (let i = 0; i < plotDivs.length; i++) {
     const div = plotDivs[i];
+    const singleSampleEic = isSingleSamplePdf && isSingleSampleEicPlot(div);
+    const traceCount = Array.isArray(div?.data) ? div.data.length : 0;
+    const firstTraceColor = getFirstTraceColor(div);
     const dims = getExportDimensions(div, scale);
+    if (isSingleSamplePdf) {
+      // Keep the same aspect ratio as the destination A4 slot to avoid squashing.
+      dims.width = Math.max(900, Math.round(contentWidth * singlePdfScale));
+      dims.height = Math.max(260, Math.round(slotHeight * singlePdfScale));
+    }
     const dataUrl = await buildExportImage(
       div,
       'png',
       dims.width,
-      dims.height
+      dims.height,
+      {
+        singleSampleEic,
+        traceCount,
+        firstTraceColor,
+        singleSampleEicYMax,
+        pdfPreset: options.pdfPreset,
+        pdfScale: singlePdfScale,
+      }
     );
 
-    if (i > 0) pdf.addPage();
-    pdf.addImage(dataUrl, 'PNG', margin, margin, contentWidth, contentHeight, undefined, 'FAST');
+    if (i > 0 && (i % plotsPerPage) === 0) {
+      pdf.addPage();
+    }
+
+    if (isSingleSamplePdf) {
+      const slotIndex = i % plotsPerPage;
+      const drawX = margin;
+      const drawY = margin + (slotIndex * (slotHeight + verticalGap));
+      pdf.addImage(dataUrl, 'PNG', drawX, drawY, contentWidth, slotHeight, undefined, 'FAST');
+    } else {
+      const sourceW = Math.max(1, Number(dims.width) || 1);
+      const sourceH = Math.max(1, Number(dims.height) || 1);
+      let drawW = contentWidth;
+      let drawH = drawW * (sourceH / sourceW);
+      if (drawH > contentHeight) {
+        drawH = contentHeight;
+        drawW = drawH * (sourceW / sourceH);
+      }
+      const drawX = margin + ((contentWidth - drawW) / 2);
+      const drawY = margin + ((contentHeight - drawH) / 2);
+      pdf.addImage(dataUrl, 'PNG', drawX, drawY, drawW, drawH, undefined, 'FAST');
+    }
   }
 
   pdf.save(`${filenameBase}.pdf`);
+}
+
+function getPlotTitleText(plotDiv) {
+  const title = plotDiv?.layout?.title;
+  if (typeof title === 'string') return title;
+  if (title && typeof title.text === 'string') return title.text;
+  return '';
+}
+
+function isSingleSampleEicPlot(plotDiv) {
+  const id = String(plotDiv?.id || '');
+  if (id === 'eic-combined-single' || id.startsWith('eic-single-')) return true;
+  const title = getPlotTitleText(plotDiv).toLowerCase();
+  return title.includes('eic') || title.includes('extracted ion chromatograms');
 }
 
 function getExportDimensions(plotDiv, scale) {
@@ -1462,6 +1559,10 @@ function getExportDimensions(plotDiv, scale) {
 }
 
 function applyWebappExportStyle(layout) {
+  return applyWebappExportStyleWithOptions(layout, {});
+}
+
+function applyWebappExportStyleWithOptions(layout, options = {}) {
   const styled = JSON.parse(JSON.stringify(layout || {}));
   const showGrid = document.getElementById('show-grid')?.checked ?? false;
 
@@ -1499,6 +1600,129 @@ function applyWebappExportStyle(layout) {
     };
   }
 
+  if (options.pdfPreset === 'deconv-like') {
+    styled.paper_bgcolor = '#ffffff';
+    styled.plot_bgcolor = '#ffffff';
+    styled.showlegend = false;
+    styled.font = {
+      ...(styled.font || {}),
+      size: 25,
+      color: '#000000',
+      family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+    };
+    if (styled.title) {
+      const titleFont = (typeof styled.title === 'object' ? styled.title.font : null) || {};
+      styled.title = {
+        ...(typeof styled.title === 'object' ? styled.title : { text: String(styled.title || '') }),
+        font: {
+          ...titleFont,
+          size: 30,
+          color: '#000000',
+          family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+        },
+      };
+    }
+    const m = styled.margin || {};
+    styled.margin = {
+      l: Math.max(120, Number(m.l) || 0),
+      r: Math.max(40, Number(m.r) || 0),
+      t: Math.max(90, Number(m.t) || 0),
+      b: Math.max(100, Number(m.b) || 0),
+      pad: Number(m.pad) || 0,
+    };
+    for (const key of Object.keys(styled)) {
+      if (key.startsWith('xaxis') || key.startsWith('yaxis')) {
+        const axis = styled[key] || {};
+        const existingTitle = axis.title;
+        const normalizedTitle = typeof existingTitle === 'string'
+          ? { text: existingTitle }
+          : (existingTitle || {});
+        styled[key] = {
+          ...axis,
+          color: '#000000',
+          linecolor: '#000000',
+          linewidth: 1.4,
+          showline: true,
+          mirror: true,
+          automargin: true,
+          ticks: axis.ticks || 'outside',
+          tickfont: {
+            ...(axis.tickfont || {}),
+            size: 23,
+            color: '#000000',
+            family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+          },
+          title: {
+            ...normalizedTitle,
+            font: {
+              ...((normalizedTitle && normalizedTitle.font) || {}),
+              size: 25,
+              color: '#000000',
+              family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+            },
+          },
+          zeroline: false,
+        };
+      }
+    }
+  }
+
+  if (options.singleSampleEic === true) {
+    const traceCount = Number(options.traceCount) || 0;
+    const showLegend = traceCount > 1;
+    styled.showlegend = showLegend;
+    const m = styled.margin || {};
+    styled.margin = {
+      l: Math.max(60, Number(m.l) || 0),
+      r: Math.max(showLegend ? 200 : 40, Number(m.r) || 0),
+      t: Math.max(traceCount > 6 ? 64 : 72, Number(m.t) || 0),
+      b: Math.max(56, Number(m.b) || 0),
+      pad: Number(m.pad) || 0,
+    };
+    if (showLegend) {
+      styled.legend = {
+        ...(styled.legend || {}),
+        x: 1.01,
+        xanchor: 'left',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.9)',
+        bordercolor: '#000000',
+        borderwidth: 0.6,
+        font: {
+          ...((styled.legend && styled.legend.font) || {}),
+          color: '#000000',
+          size: 11,
+          family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+        },
+      };
+    }
+    if (!showLegend && options.firstTraceColor && styled.title) {
+      const color = String(options.firstTraceColor);
+      const titleObj = typeof styled.title === 'object'
+        ? styled.title
+        : { text: String(styled.title || '') };
+      styled.title = {
+        ...titleObj,
+        font: {
+          ...(titleObj.font || {}),
+          color,
+        },
+      };
+    }
+
+    const yMax = Number(options.singleSampleEicYMax);
+    if (Number.isFinite(yMax) && yMax > 0) {
+      const yPad = yMax * 0.03;
+      const yTop = yMax + yPad;
+      styled.yaxis = {
+        ...(styled.yaxis || {}),
+        range: [0, yTop],
+        autorange: false,
+      };
+    }
+  }
+
   if (Array.isArray(styled.annotations)) {
     styled.annotations = styled.annotations.map((ann) => ({
       ...ann,
@@ -1510,7 +1734,72 @@ function applyWebappExportStyle(layout) {
   return styled;
 }
 
-async function buildExportImage(plotDiv, format, width, height) {
+function applyExportTraceStyleWithOptions(data, options = {}) {
+  const traces = Array.isArray(data) ? data : [];
+  if (options.pdfPreset !== 'deconv-like') return traces;
+
+  return traces.map((trace) => {
+    if (!trace || typeof trace !== 'object') return trace;
+    const next = { ...trace };
+    const traceType = String(next.type || 'scatter');
+    const mode = String(next.mode || '');
+    const isLineLike = traceType === 'scatter' || traceType === 'scattergl';
+    const drawsLines = mode.includes('lines') || mode === '' || mode === 'none';
+
+    if (isLineLike && drawsLines) {
+      const currentWidth = Number(next?.line?.width);
+      const baseWidth = Number.isFinite(currentWidth) && currentWidth > 0 ? currentWidth : 1.8;
+      next.line = {
+        ...(next.line || {}),
+        width: baseWidth * 1.8,
+      };
+    }
+
+    if (next.error_y && typeof next.error_y === 'object') {
+      const ew = Number(next.error_y.width);
+      if (Number.isFinite(ew) && ew > 0) {
+        next.error_y = { ...next.error_y, width: ew * 1.5 };
+      }
+    }
+
+    if (next.error_x && typeof next.error_x === 'object') {
+      const ew = Number(next.error_x.width);
+      if (Number.isFinite(ew) && ew > 0) {
+        next.error_x = { ...next.error_x, width: ew * 1.5 };
+      }
+    }
+
+    return next;
+  });
+}
+
+function getFirstTraceColor(plotDiv) {
+  const traces = Array.isArray(plotDiv?.data) ? plotDiv.data : [];
+  if (traces.length === 0) return null;
+  const t0 = traces[0] || {};
+  if (typeof t0?.line?.color === 'string' && t0.line.color) return t0.line.color;
+  if (typeof t0?.marker?.color === 'string' && t0.marker.color) return t0.marker.color;
+  return null;
+}
+
+function computeSingleSampleEicGlobalYMax(plotDivs) {
+  const divList = Array.from(plotDivs || []);
+  let maxY = 0;
+  divList.forEach((div) => {
+    if (!isSingleSampleEicPlot(div)) return;
+    const traces = Array.isArray(div?.data) ? div.data : [];
+    traces.forEach((trace) => {
+      const ys = Array.isArray(trace?.y) ? trace.y : [];
+      ys.forEach((v) => {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > maxY) maxY = n;
+      });
+    });
+  });
+  return maxY > 0 ? maxY : null;
+}
+
+async function buildExportImage(plotDiv, format, width, height, options = {}) {
   const temp = document.createElement('div');
   temp.style.position = 'fixed';
   temp.style.left = '-10000px';
@@ -1520,10 +1809,14 @@ async function buildExportImage(plotDiv, format, width, height) {
   document.body.appendChild(temp);
 
   try {
+    const exportData = applyExportTraceStyleWithOptions(
+      JSON.parse(JSON.stringify(plotDiv.data || [])),
+      options
+    );
     await Plotly.newPlot(
       temp,
-      JSON.parse(JSON.stringify(plotDiv.data || [])),
-      applyWebappExportStyle(plotDiv.layout || {}),
+      exportData,
+      applyWebappExportStyleWithOptions(plotDiv.layout || {}, options),
       { responsive: false, displaylogo: false }
     );
 
@@ -4327,6 +4620,7 @@ async function runMassCalculator() {
 
 // ===== Restore State =====
 function restoreState() {
+  normalizeMzTargets();
   syncProgressionAssignmentsToSelectedFiles();
   renderSelectedFiles();
   updateSampleDropdowns();

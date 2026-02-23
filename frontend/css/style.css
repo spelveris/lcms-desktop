@@ -295,7 +295,7 @@ input[type="radio"] {
 
 /* File list */
 .file-list {
-  max-height: 300px;
+  max-height: 450px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
