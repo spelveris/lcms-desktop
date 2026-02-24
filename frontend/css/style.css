@@ -885,14 +885,14 @@ input[type="radio"] {
 /* ===== Batch Deconvolution ===== */
 .batch-deconv-sample-layout {
   display: grid;
-  grid-template-columns: minmax(0, 75fr) minmax(0, 25fr);
+  grid-template-columns: minmax(0, 60fr) minmax(0, 20fr) minmax(0, 20fr);
   gap: 12px;
   align-items: stretch;
 }
 .batch-deconv-interactive {
   min-width: 0;
   background: #ffffff;
-  border: none;
+  border: none !important;
   border-radius: var(--radius);
   padding: 8px;
   min-height: 340px;
@@ -907,6 +907,31 @@ input[type="radio"] {
   height: 100%;
 }
 .batch-deconv-interactive-plot .js-plotly-plot {
+  height: 100% !important;
+}
+.batch-deconv-tic-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+.batch-deconv-tic {
+  background: #ffffff;
+  border: none !important;
+  border-radius: var(--radius);
+  padding: 4px;
+  width: 100%;
+  min-height: 340px;
+  height: 340px;
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+}
+.batch-deconv-tic-plot {
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+}
+.batch-deconv-tic-plot .js-plotly-plot {
   height: 100% !important;
 }
 .batch-deconv-preview-wrap {

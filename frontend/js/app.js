@@ -28,6 +28,7 @@ const state = {
   masscalcFigureUrls: { main: null, clean: null },
   batchDeconvData: null,
   batchDeconvPreviewUrls: {},
+  batchDeconvTicCache: {},
   batchDeconvAutoRunSignature: '',
   batchDeconvAutoRunInFlight: false,
   eicCollapsedSections: {},
@@ -3581,6 +3582,40 @@ async function renderBatchDeconvExportPreview(sample, displayComponents, preview
   }
 }
 
+async function getBatchDeconvTic(path) {
+  if (!path) return null;
+  if (state.batchDeconvTicCache[path]) return state.batchDeconvTicCache[path];
+  const tic = await api.getTIC(path);
+  if (tic && Array.isArray(tic.times) && Array.isArray(tic.intensities) && tic.times.length > 0 && tic.intensities.length > 0) {
+    state.batchDeconvTicCache[path] = tic;
+    return tic;
+  }
+  return null;
+}
+
+async function renderBatchDeconvTicWindow(sample, ticPlotId) {
+  const ticPlotEl = document.getElementById(ticPlotId);
+  if (!ticPlotEl) return;
+
+  ticPlotEl.innerHTML = '<p class="muted" style="padding:8px 4px;">Loading TIC...</p>';
+  try {
+    const tic = await getBatchDeconvTic(sample.path);
+    if (!tic) throw new Error('No TIC data');
+    charts.plotChromatogramWithWindow(ticPlotId, tic.times, tic.intensities, {
+      title: 'TIC',
+      color: '#ff7f0e',
+      start: Number(sample.start),
+      end: Number(sample.end),
+      windowColor: 'rgba(255, 215, 0, 0.28)',
+      showWindowAnnotation: false,
+      compact: true,
+      margin: { l: 8, r: 8, t: 28, b: 8 },
+    });
+  } catch (_) {
+    ticPlotEl.innerHTML = '<p class="placeholder-msg" style="padding:8px 4px;">No TIC</p>';
+  }
+}
+
 async function exportBatchDeconvWebappStyle(sample, displayComponents, format, plotId) {
   const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
   const style = buildBatchDeconvExportStyle();
@@ -3767,11 +3802,19 @@ function renderBatchDeconvolution(data) {
     }
 
     const plotId = `batch-deconv-sample-plot-${idx}`;
+    const ticPlotId = `batch-deconv-tic-plot-${idx}`;
     const previewId = `batch-deconv-export-preview-${idx}`;
     section.insertAdjacentHTML('beforeend', `
       <div class="batch-deconv-sample-layout">
         <div class="batch-deconv-interactive">
           <div id="${plotId}" class="batch-deconv-interactive-plot"></div>
+        </div>
+        <div class="batch-deconv-tic-wrap">
+          <div class="batch-deconv-tic">
+            <div id="${ticPlotId}" class="batch-deconv-tic-plot">
+              <p class="muted" style="padding:8px 4px;">Loading TIC...</p>
+            </div>
+          </div>
         </div>
         <div class="batch-deconv-preview-wrap">
           <div id="${previewId}" class="batch-deconv-preview">
@@ -3790,6 +3833,7 @@ function renderBatchDeconvolution(data) {
 
     samplesContainer.appendChild(section);
     charts.plotDeconvMasses(plotId, components, { height: 320, hideGrid: true });
+    renderBatchDeconvTicWindow(sample, ticPlotId);
     renderBatchDeconvExportPreview(sample, components, previewId);
 
     section.querySelectorAll('button[data-format]').forEach((btn) => {

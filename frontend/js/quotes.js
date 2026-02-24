@@ -630,10 +630,6 @@ window.LCMS_QUOTES = [
     "author": "Star Trek"
   },
   {
-    "text": "If You Don't Like Cool Quotes Check Your GMXRC File",
-    "author": "Your Sysadmin"
-  },
-  {
     "text": "When It Starts to Start It'll Never Stop",
     "author": "Magnapop"
   },
@@ -2422,10 +2418,6 @@ window.LCMS_QUOTES = [
     "author": "Erik Lindahl"
   },
   {
-    "text": "Here are all the 'gmx' tools... but no gmx writethesis",
-    "author": "Christian Blau"
-  },
-  {
     "text": "The best part of winter in Stockholm is going to Australia",
     "author": "Mark Abraham"
   },
@@ -2950,10 +2942,6 @@ window.LCMS_QUOTES = [
     "author": "Claude Levi-Strauss"
   },
   {
-    "text": "Rockets are cool. There's no getting around that.",
-    "author": "Elon Musk"
-  },
-  {
     "text": "Life would be tragic if it weren't funny.",
     "author": "Stephen Hawking"
   },
@@ -3154,10 +3142,6 @@ window.LCMS_QUOTES = [
     "author": "Pierre Curie"
   },
   {
-    "text": "I don't want to achieve immortality through my work... I want to achieve it through not dying!",
-    "author": "Woody Allen"
-  },
-  {
     "text": "Well, I am a dilettante. It's only in England that dilettantism is considered a bad thing. In other countries it's called interdisciplinary research.",
     "author": "Brian Eno"
   },
@@ -3232,10 +3216,6 @@ window.LCMS_QUOTES = [
   {
     "text": "\"A slow sort of country!\" said the Queen. \"Now, HERE, you see, it takes all the running YOU can do, to keep in the same place. If you want to get somewhere else, you must run at least twice as fast as that!\"",
     "author": "Lewis Carroll"
-  },
-  {
-    "text": "More than 10000000 total errors detected.  I'm not reporting any more. Final error counts will be inaccurate.  Go fix your program!",
-    "author": "Valgrind while memory debugging mdrun"
   },
   {
     "text": "If we are going to have SYCL, can we have a hammer as well?",
@@ -3616,5 +3596,61 @@ window.LCMS_QUOTES = [
   {
     "text": "Software was a mistake.",
     "author": "Paul Bauer"
+  },
+  {
+    "text": "Sometimes I’ll start a sentence and I don’t even know where it’s going. I just hope I find it along the way.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "I’m not superstitious, but I am a little stitious.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "And I knew exactly what to do. But in a much more real sense, I had no idea what to do.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "Would I rather be feared or loved? Easy. Both. I want people to be afraid of how much they love me.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "I am Beyoncé, always.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "I am running away from my responsibilities. And it feels good.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "The eyes are the groin of the face.",
+    "author": "Dwight Schrute"
+  },
+  {
+    "text": "I’m an early bird and I’m a night owl, so I’m wise and have worms.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "I feel like all my kids grew up, and then they married each other. It’s every parent’s dream.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "Whenever I’m about to do something, I think, ‘Would an idiot do that?’ And if they would, I do not do that thing.",
+    "author": "Michael Scott"
+  },
+  {
+    "text": "Check out this sunshine, man. Global warming, right? Today was supposed to be really cold, I bet.",
+    "author": "Andy Bernard"
+  },
+  {
+    "text": "What do we say to the Lord of Death? Not today.",
+    "author": "Syrio Forel"
+  },
+  {
+    "text": "Kids, just because I don’t care doesn’t mean I’m not listening.",
+    "author": "Homer Simpson"
+  },
+  {
+    "text": "That’s what she said!",
+    "author": "Michael Scott"
   }
 ];

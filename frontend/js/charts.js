@@ -231,24 +231,38 @@ const charts = {
         line: { width: 0 },
         layer: 'below',
       });
-      annotations.push({
-        x: (options.start + options.end) / 2,
-        y: 1.02,
-        xref: 'x',
-        yref: 'paper',
-        text: `Window: ${options.start.toFixed(2)}-${options.end.toFixed(2)} min`,
-        showarrow: false,
-        font: { size: 10, color: '#000000' },
-      });
+      if (options.showWindowAnnotation !== false) {
+        annotations.push({
+          x: (options.start + options.end) / 2,
+          y: 1.02,
+          xref: 'x',
+          yref: 'paper',
+          text: `Window: ${options.start.toFixed(2)}-${options.end.toFixed(2)} min`,
+          showarrow: false,
+          font: { size: 10, color: '#000000' },
+        });
+      }
     }
+
+    const compact = options.compact === true;
+    const xaxis = {
+      title: compact ? '' : (options.xLabel || getXAxisLabel()),
+      showticklabels: !compact,
+      fixedrange: compact,
+    };
+    const yaxis = {
+      title: compact ? '' : (options.yLabel || 'Intensity'),
+      showticklabels: !compact,
+      fixedrange: compact,
+    };
 
     const layout = mergeLayout({
       title: { text: options.title || 'Chromatogram', font: { size: 14 } },
-      xaxis: { title: options.xLabel || getXAxisLabel() },
-      yaxis: { title: options.yLabel || 'Intensity' },
+      xaxis,
+      yaxis,
       showlegend: false,
       height: getContainerHeight(divId, 320),
-      margin: { l: 60, r: 24, t: 40, b: 72 },
+      margin: options.margin || (compact ? { l: 8, r: 8, t: 28, b: 8 } : { l: 60, r: 24, t: 40, b: 72 }),
       shapes,
       annotations,
     });
