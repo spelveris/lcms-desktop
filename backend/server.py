@@ -945,6 +945,12 @@ def export_report_pdf(payload: dict = Body(...)):
 
     include_uv = _coerce_bool(payload.get("include_uv"), sample.uv_data is not None)
     include_deconv = _coerce_bool(payload.get("include_deconv"), True)
+    env_app_version = os.environ.get("LCMS_APP_VERSION")
+    app_version = str(
+        payload.get("app_version")
+        or env_app_version
+        or lcms_config.APP_VERSION
+    ).strip() or str(lcms_config.APP_VERSION)
 
     line_width = _coerce_float(settings.get("line_width"), 0.8)
     show_grid = _coerce_bool(settings.get("show_grid"), False)
@@ -1019,7 +1025,7 @@ def export_report_pdf(payload: dict = Body(...)):
         fig_info = plotting.create_report_info_page(
             sample_name=sample.name,
             acq_method=sample.acq_method,
-            app_version=lcms_config.APP_VERSION,
+            app_version=app_version,
             time_range=deconv_time_range,
             parameters=params if deconv_results else {},
             results=deconv_results if deconv_results else None,

@@ -704,6 +704,15 @@ input[type="radio"] {
   gap: 12px;
 }
 
+.single-eic-download-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: -4px;
+  margin-bottom: 8px;
+}
+
 /* ===== Deconvolution ===== */
 .deconv-controls {
   background: var(--bg-card);
@@ -810,6 +819,36 @@ input[type="radio"] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px;
+}
+.assignment-card.is-inactive {
+  opacity: 0.72;
+  border-style: dashed;
+}
+.assignment-card-head {
+  margin-bottom: 8px;
+}
+.prog-active-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 0;
+}
+.prog-active-toggle input {
+  margin: 0;
+}
+.prog-active-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assignment-card.is-inactive .prog-active-name {
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 .assignment-card h4 {
   font-size: 13px;
@@ -1058,6 +1097,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes watch-pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
 
 .loading-text {
   color: var(--text-primary);

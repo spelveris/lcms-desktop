@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LC-MS Analysis</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.10">
+  <title>CATrupole</title>
+  <link rel="stylesheet" href="css/style.css?v=0.2.11">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -23,7 +23,7 @@
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-title-wrap">
-        <h2>LC-MS Analysis</h2>
+        <h2>CATrupole</h2>
         <div id="app-version-badge" class="sidebar-version-badge">v--</div>
       </div>
       <button id="sidebar-toggle-collapse" class="icon-btn" title="Collapse sidebar">&laquo;</button>
@@ -56,6 +56,25 @@
           </select>
         </div>
         <div id="file-list" class="file-list"></div>
+      </div>
+    </div>
+
+    <!-- Watch Folder -->
+    <div class="sidebar-section">
+      <div class="section-header" data-toggle="watch-content">
+        <span>Watch Folder</span>
+        <span class="chevron">&#9660;</span>
+      </div>
+      <div id="watch-content" class="section-content">
+        <div class="path-bar">
+          <input type="text" id="watch-path-input" placeholder="/path/to/watch" spellcheck="false">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+          <button id="btn-watch-toggle" class="btn btn-sm btn-primary">Start Watching</button>
+          <span id="watch-status-dot" style="display:none;width:8px;height:8px;border-radius:50%;background:#2ecc71;flex-shrink:0;animation:watch-pulse 2s infinite;"></span>
+          <span id="watch-status-text" class="muted">Off</span>
+        </div>
+        <div id="watch-log" style="margin-top:6px;font-size:11px;color:var(--text-muted);max-height:60px;overflow-y:auto;"></div>
       </div>
     </div>
 
@@ -462,9 +481,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.10"></script>
-  <script src="js/charts.js?v=0.2.10"></script>
-  <script src="js/quotes.js?v=0.2.10"></script>
-  <script src="js/app.js?v=0.2.10"></script>
+  <script src="js/api.js?v=0.2.11"></script>
+  <script src="js/charts.js?v=0.2.11"></script>
+  <script src="js/quotes.js?v=0.2.11"></script>
+  <script src="js/app.js?v=0.2.11"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 {
-  "name": "lcms-desktop",
-  "version": "0.2.10",
-  "description": "LC-MS Analysis Desktop App (Electron + FastAPI)",
+  "name": "catrupole",
+  "version": "0.2.11",
+  "description": "CATrupole Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -27,8 +27,8 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.lcms.desktop",
-    "productName": "LCMS Desktop",
+    "appId": "com.catrupole.desktop",
+    "productName": "CATrupole",
     "asar": false,
     "afterPack": "scripts/after-pack.js",
     "icon": "build/icons/icon.png",
