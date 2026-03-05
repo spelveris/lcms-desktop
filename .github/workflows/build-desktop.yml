@@ -22,10 +22,10 @@ jobs:
         include:
           - os: macos-latest
             npm_script: dist:mac
-            artifact_name: lcms-desktop-macos
+            artifact_name: catrupole-macos
           - os: windows-latest
             npm_script: dist:win
-            artifact_name: lcms-desktop-windows
+            artifact_name: catrupole-windows
 
     steps:
       - name: Checkout
@@ -201,7 +201,7 @@ jobs:
             release/*.dmg
             release/*-mac.zip
             release/*-win.zip
-            release/LCMS*.exe
+            release/CATrupole*.exe
             release/latest*.yml
             release/app-update.yml
 
@@ -220,7 +220,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: lcms-desktop-*
+          pattern: catrupole-*
           merge-multiple: true
           path: release-assets
 
@@ -237,7 +237,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body: |
-            LCMS Desktop release `${{ steps.meta.outputs.tag }}`.
+            CATrupole release `${{ steps.meta.outputs.tag }}`.
 
             This release is built in CI on both macOS and Windows and includes smoke tests for the packaged backend (`/api/health`) before publishing assets.
 
@@ -245,11 +245,11 @@ jobs:
 
             | Platform | File | Description |
             | --- | --- | --- |
-            | Windows | `LCMS.Desktop.Setup.${{ steps.meta.outputs.version }}.exe` | Installer (recommended) |
-            | Windows | `LCMS.Desktop-${{ steps.meta.outputs.version }}-win.zip` | Portable (no install) |
-            | Windows | `LCMS.Desktop.${{ steps.meta.outputs.version }}.exe` | Portable executable |
-            | macOS (Apple Silicon) | `LCMS.Desktop-${{ steps.meta.outputs.version }}-arm64.dmg` | Disk image (recommended) |
-            | macOS (Apple Silicon) | `LCMS.Desktop-${{ steps.meta.outputs.version }}-arm64-mac.zip` | Zip archive |
+            | Windows | `CATrupole.Setup.${{ steps.meta.outputs.version }}.exe` | Installer (recommended) |
+            | Windows | `CATrupole-${{ steps.meta.outputs.version }}-win.zip` | Portable (no install) |
+            | Windows | `CATrupole.${{ steps.meta.outputs.version }}.exe` | Portable executable |
+            | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg` | Disk image (recommended) |
+            | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64-mac.zip` | Zip archive |
 
             Notes for users:
             - macOS builds are ad-hoc signed in CI (no notarization).
@@ -259,7 +259,7 @@ jobs:
             release-assets/*.dmg
             release-assets/*-mac.zip
             release-assets/*-win.zip
-            release-assets/LCMS*.exe
+            release-assets/CATrupole*.exe
             release-assets/latest*.yml
             release-assets/app-update.yml
             README.md

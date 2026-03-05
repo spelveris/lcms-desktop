@@ -13,7 +13,9 @@ const state = {
   mzTargets: JSON.parse(localStorage.getItem('lcms-mz-targets') || '[]'),
   sortMode: 'date-desc',
   singleSampleData: null,
+  singleLoadInFlight: false,
   progressionData: null,
+  progressionLoadInFlight: false,
   eicBatchData: null,
   eicBatchOriginalData: null,
   deconvResults: null,
@@ -34,6 +36,8 @@ const state = {
   eicCollapsedSections: {},
   timeChangeMSData: null,
   browseItems: [],
+  watchInterval: null,
+  watchKnownPaths: new Set(),
   singleSketcher: null,
   singleSketcherType: '',
   singleSketcherWheelGuardBound: false,
@@ -78,6 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   initSettings();
   initFileBrowser();
+  initWatchFolder();
   initSingleSample();
   initProgression();
   initEICBatch();
@@ -1030,6 +1035,13 @@ function updateSampleDropdowns() {
 // ===== Single Sample Tab =====
 function initSingleSample() {
   document.getElementById('btn-load-single').addEventListener('click', loadSingleSample);
+  const singleSelect = document.getElementById('single-sample-select');
+  if (singleSelect) {
+    singleSelect.addEventListener('change', () => {
+      if (!singleSelect.value) return;
+      loadSingleSample({ silentNoSelection: true });
+    });
+  }
   const singleAddBtn = document.getElementById('btn-single-add-mz');
   const singleAddInput = document.getElementById('single-mz-add-input');
   if (singleAddBtn && singleAddInput) {
@@ -1247,10 +1259,11 @@ async function useDrawnStructureAsSmiles() {
   }
 }
 
-async function loadSingleSample() {
+async function loadSingleSample(options = {}) {
+  if (state.singleLoadInFlight) return;
   const samplePath = document.getElementById('single-sample-select').value;
   if (!samplePath) {
-    toast('Select a sample first', 'warning');
+    if (!options.silentNoSelection) toast('Select a sample first', 'warning');
     return;
   }
 
@@ -1260,6 +1273,7 @@ async function loadSingleSample() {
   const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value);
   const mzWindow = parseFloat(document.getElementById('mz-window').value);
 
+  state.singleLoadInFlight = true;
   showLoading('Analyzing sample...');
   try {
     const data = await api.getSingleSampleData({
@@ -1279,6 +1293,7 @@ async function loadSingleSample() {
   } catch (err) {
     toast(`Analysis failed: ${err.message}`, 'error');
   } finally {
+    state.singleLoadInFlight = false;
     hideLoading();
   }
 }
@@ -1368,6 +1383,17 @@ function renderSingleSample(data) {
     charts.plotEIC('eic-combined-single', data.eic.targets, 'Extracted Ion Chromatograms', {
       xRange: eicXRange,
     });
+    const combinedDownloadRow = document.createElement('div');
+    combinedDownloadRow.className = 'single-eic-download-row';
+    combinedDownloadRow.innerHTML = `
+      <button class="btn btn-sm" data-format="png">Download PNG</button>
+      <button class="btn btn-sm" data-format="svg">Download SVG</button>
+      <button class="btn btn-sm" data-format="pdf">Download PDF</button>
+    `;
+    eicContainer.appendChild(combinedDownloadRow);
+    combinedDownloadRow.querySelectorAll('button[data-format]').forEach((btn) => {
+      btn.addEventListener('click', () => exportSingleCombinedEic(btn.dataset.format));
+    });
 
     // Individual EICs
     data.eic.targets.forEach((t, i) => {
@@ -1395,16 +1421,59 @@ async function exportSingle(format) {
     toast('Load a sample first', 'warning');
     return;
   }
-  const samplePath = document.getElementById('single-sample-select')?.value || '';
-  const selected = state.selectedFiles.find((f) => f.path === samplePath);
-  let sampleName = selected?.name || (samplePath ? samplePath.split(/[\\/]/).pop() : '') || 'single_sample';
-  if (sampleName.toLowerCase().endsWith('.d')) sampleName = sampleName.slice(0, -2);
-  const fileBase = sanitizeFilename(sampleName || 'single_sample');
+  const fileBase = getSingleSampleFilenameBase('single_sample');
   await exportAllPlots('tab-single', fileBase, format, {
     singleSample: true,
     pdfPerPage: 4,
     pdfOrientation: 'portrait',
     pdfPreset: 'deconv-like',
+  });
+}
+
+function getSingleSampleFilenameBase(fallback = 'single_sample') {
+  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const selected = state.selectedFiles.find((f) => f.path === samplePath);
+  let sampleName = selected?.name || (samplePath ? samplePath.split(/[\\/]/).pop() : '') || fallback;
+  if (sampleName.toLowerCase().endsWith('.d')) sampleName = sampleName.slice(0, -2);
+  return sanitizeFilename(sampleName || fallback);
+}
+
+async function exportSingleCombinedEic(format) {
+  if (!state.singleSampleData) {
+    toast('Load a sample first', 'warning');
+    return;
+  }
+  const fileBase = `${getSingleSampleFilenameBase('single_sample')}_extracted_ion_chromatograms`;
+  const plotDiv = document.getElementById('eic-combined-single');
+  const traceCount = Array.isArray(plotDiv?.data) ? plotDiv.data.length : 0;
+  const firstTraceColor = getFirstTraceColor(plotDiv);
+  const legendEntries = (Array.isArray(plotDiv?.data) ? plotDiv.data : []).map((trace, i) => {
+    const traceName = String(trace?.name || `m/z ${i + 1}`);
+    const color = (typeof trace?.line?.color === 'string' && trace.line.color)
+      || (typeof trace?.marker?.color === 'string' && trace.marker.color)
+      || charts.getColor(i);
+    return { name: traceName, color };
+  });
+  const singleSampleEicYMax = computeSingleSampleEicGlobalYMax([plotDiv]);
+  await exportPlotById('eic-combined-single', fileBase, format, {
+    // Reuse the same high-quality export style used for polished single-sample outputs.
+    pdfPreset: 'deconv-like',
+    singleSample: format === 'pdf',
+    pdfPerPage: 1,
+    pdfOrientation: 'landscape',
+    pdfCropToPlot: format === 'pdf',
+    pdfCropMarginPt: 8,
+    singleSampleEic: true,
+    singleSampleEicFitLegend: true,
+    singleSampleEicMultiColLegend: true,
+    singleSampleEicLegendEntries: legendEntries,
+    traceCount,
+    firstTraceColor,
+    singleSampleEicYMax,
+    exportHeightScale: 2 / 3,
+    traceLineWidthMultiplier: 1.5,
+    exportTransparentBackground: format === 'pdf',
+    exportFilenameLabel: `${fileBase}.${format}`,
   });
 }
 
@@ -1432,12 +1501,18 @@ async function exportAllPlots(containerId, filenameBase, format, options = {}) {
       const div = plotDivs[i];
       const suffix = plotDivs.length > 1 ? `_${i + 1}` : '';
       const filename = `${filenameBase}${suffix}.${format}`;
-      const dims = getExportDimensions(div, scale);
+      const dims = getExportDimensions(div, scale, options);
+      const exportOptions = {
+        ...options,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+      };
       const imageDataUrl = await buildExportImage(
         div,
         format,
         dims.width,
-        dims.height
+        dims.height,
+        exportOptions
       );
       downloadBlob(dataUrlToBlob(imageDataUrl), filename);
     }
@@ -1458,6 +1533,63 @@ async function exportPlotsAsPDF(plotDivs, filenameBase, scale, options = {}) {
   const isSingleSamplePdf = options.singleSample === true;
   const orientation = String(options.pdfOrientation || (isSingleSamplePdf ? 'portrait' : 'landscape'));
   const plotsPerPage = Math.max(1, parseInt(options.pdfPerPage, 10) || (isSingleSamplePdf ? 4 : 1));
+  const singlePdfScale = isSingleSamplePdf
+    ? Math.max(1.75, Math.min(3.0, Number(scale) || 1))
+    : scale;
+  const singleSampleEicYMax = Number.isFinite(Number(options.singleSampleEicYMax)) && Number(options.singleSampleEicYMax) > 0
+    ? Number(options.singleSampleEicYMax)
+    : (isSingleSamplePdf ? computeSingleSampleEicGlobalYMax(plotDivs) : null);
+
+  if (options.pdfCropToPlot === true && plotDivs.length === 1) {
+    const div = plotDivs[0];
+    const singleSampleEic = (options.singleSampleEic === true && isSingleSampleEicPlot(div))
+      || (isSingleSamplePdf && isSingleSampleEicPlot(div));
+    const traceCount = Number(options.traceCount) || (Array.isArray(div?.data) ? div.data.length : 0);
+    const firstTraceColor = options.firstTraceColor || getFirstTraceColor(div);
+    const dims = getExportDimensions(div, scale, options);
+    const dataUrl = await buildExportImage(
+      div,
+      'png',
+      dims.width,
+      dims.height,
+      {
+        singleSampleEic,
+        singleSampleEicFitLegend: options.singleSampleEicFitLegend,
+        singleSampleEicMultiColLegend: options.singleSampleEicMultiColLegend,
+        singleSampleEicLegendEntries: options.singleSampleEicLegendEntries,
+        traceCount,
+        firstTraceColor,
+        singleSampleEicYMax,
+        pdfPreset: options.pdfPreset,
+        pdfScale: singlePdfScale,
+        exportFilenameLabel: options.exportFilenameLabel,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+        traceLineWidthMultiplier: options.traceLineWidthMultiplier,
+        exportTransparentBackground: options.exportTransparentBackground,
+      }
+    );
+    const drawW = Math.max(120, Number(dims.width) || 120);
+    const drawH = Math.max(120, Number(dims.height) || 120);
+    const margin = Math.max(
+      0,
+      Number.isFinite(Number(options.pdfCropMarginPx))
+        ? Number(options.pdfCropMarginPx)
+        : (Number(options.pdfCropMarginPt) || 8)
+    );
+    const pageW = drawW + (margin * 2);
+    const pageH = drawH + (margin * 2);
+    const pdf = new jsPDF({
+      orientation: pageW >= pageH ? 'landscape' : 'portrait',
+      unit: 'px',
+      format: [pageW, pageH],
+      compress: true,
+    });
+    pdf.addImage(dataUrl, 'PNG', margin, margin, drawW, drawH, undefined, 'FAST');
+    pdf.save(`${filenameBase}.pdf`);
+    return;
+  }
+
   const pdf = new jsPDF({
     orientation,
     unit: 'pt',
@@ -1474,19 +1606,14 @@ async function exportPlotsAsPDF(plotDivs, filenameBase, scale, options = {}) {
   const slotHeight = isSingleSamplePdf
     ? ((contentHeight - (verticalGap * (plotsPerPage - 1))) / plotsPerPage)
     : contentHeight;
-  const singlePdfScale = isSingleSamplePdf
-    ? Math.max(1.75, Math.min(3.0, Number(scale) || 1))
-    : scale;
-  const singleSampleEicYMax = isSingleSamplePdf
-    ? computeSingleSampleEicGlobalYMax(plotDivs)
-    : null;
 
   for (let i = 0; i < plotDivs.length; i++) {
     const div = plotDivs[i];
-    const singleSampleEic = isSingleSamplePdf && isSingleSampleEicPlot(div);
-    const traceCount = Array.isArray(div?.data) ? div.data.length : 0;
-    const firstTraceColor = getFirstTraceColor(div);
-    const dims = getExportDimensions(div, scale);
+    const singleSampleEic = (options.singleSampleEic === true && isSingleSampleEicPlot(div))
+      || (isSingleSamplePdf && isSingleSampleEicPlot(div));
+    const traceCount = Number(options.traceCount) || (Array.isArray(div?.data) ? div.data.length : 0);
+    const firstTraceColor = options.firstTraceColor || getFirstTraceColor(div);
+    const dims = getExportDimensions(div, scale, options);
     if (isSingleSamplePdf) {
       // Keep the same aspect ratio as the destination A4 slot to avoid squashing.
       dims.width = Math.max(900, Math.round(contentWidth * singlePdfScale));
@@ -1499,11 +1626,19 @@ async function exportPlotsAsPDF(plotDivs, filenameBase, scale, options = {}) {
       dims.height,
       {
         singleSampleEic,
+        singleSampleEicFitLegend: options.singleSampleEicFitLegend,
+        singleSampleEicMultiColLegend: options.singleSampleEicMultiColLegend,
+        singleSampleEicLegendEntries: options.singleSampleEicLegendEntries,
         traceCount,
         firstTraceColor,
         singleSampleEicYMax,
         pdfPreset: options.pdfPreset,
         pdfScale: singlePdfScale,
+        exportFilenameLabel: options.exportFilenameLabel,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+        traceLineWidthMultiplier: options.traceLineWidthMultiplier,
+        exportTransparentBackground: options.exportTransparentBackground,
       }
     );
 
@@ -1548,14 +1683,15 @@ function isSingleSampleEicPlot(plotDiv) {
   return title.includes('eic') || title.includes('extracted ion chromatograms');
 }
 
-function getExportDimensions(plotDiv, scale) {
+function getExportDimensions(plotDiv, scale, options = {}) {
   const figWidthIn = parseFloat(document.getElementById('fig-width')?.value) || 6;
   const width = Math.max(600, Math.round(figWidthIn * 96 * scale));
   const layoutHeight = Number(plotDiv?.layout?.height);
   const baseHeight = Number.isFinite(layoutHeight) && layoutHeight > 0
     ? layoutHeight
     : (plotDiv?.offsetHeight || 320);
-  const height = Math.max(320, Math.round(baseHeight * scale));
+  const heightScale = Math.max(0.1, Number(options.exportHeightScale) || 1);
+  const height = Math.max(120, Math.round(baseHeight * scale * heightScale));
   return { width, height };
 }
 
@@ -1668,19 +1804,38 @@ function applyWebappExportStyleWithOptions(layout, options = {}) {
     }
   }
 
+  if (options.exportTransparentBackground === true) {
+    styled.paper_bgcolor = 'rgba(0,0,0,0)';
+    styled.plot_bgcolor = 'rgba(0,0,0,0)';
+    if (styled.legend) {
+      styled.legend = {
+        ...styled.legend,
+        bgcolor: 'rgba(0,0,0,0)',
+      };
+    }
+  }
+
   if (options.singleSampleEic === true) {
     const traceCount = Number(options.traceCount) || 0;
     const showLegend = traceCount > 1;
+    const fitLegend = options.singleSampleEicFitLegend === true;
+    const useMultiColumnLegend = fitLegend && options.singleSampleEicMultiColLegend === true;
+    const axisTickSize = Number(styled?.xaxis?.tickfont?.size)
+      || Number(styled?.yaxis?.tickfont?.size)
+      || Number(styled?.font?.size)
+      || 11;
+    const exportPixelWidth = Math.max(600, Number(options.exportPixelWidth) || 1200);
+    const exportPixelHeight = Math.max(240, Number(options.exportPixelHeight) || 520);
     styled.showlegend = showLegend;
     const m = styled.margin || {};
     styled.margin = {
       l: Math.max(60, Number(m.l) || 0),
-      r: Math.max(showLegend ? 200 : 40, Number(m.r) || 0),
+      r: Math.max(showLegend ? (fitLegend ? 280 : 200) : 40, Number(m.r) || 0),
       t: Math.max(traceCount > 6 ? 64 : 72, Number(m.t) || 0),
       b: Math.max(56, Number(m.b) || 0),
       pad: Number(m.pad) || 0,
     };
-    if (showLegend) {
+    if (showLegend && !useMultiColumnLegend) {
       styled.legend = {
         ...(styled.legend || {}),
         x: 1.01,
@@ -1690,13 +1845,95 @@ function applyWebappExportStyleWithOptions(layout, options = {}) {
         bgcolor: 'rgba(255,255,255,0.9)',
         bordercolor: '#000000',
         borderwidth: 0.6,
+        itemsizing: 'constant',
         font: {
           ...((styled.legend && styled.legend.font) || {}),
           color: '#000000',
-          size: 11,
+          // Keep legend font synced with axis tick labels.
+          size: axisTickSize,
           family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
         },
       };
+    }
+    if (showLegend && useMultiColumnLegend) {
+      const entries = Array.isArray(options.singleSampleEicLegendEntries)
+        ? options.singleSampleEicLegendEntries.filter((e) => e && e.name)
+        : [];
+      if (entries.length > 0) {
+        const rowHeightPx = Math.max(16, Math.round(axisTickSize * 1.30));
+        const marginLeft = Number(styled.margin?.l) || 60;
+        const marginTop = Number(styled.margin?.t) || 72;
+        const marginBottom = Number(styled.margin?.b) || 56;
+        const plotHeightPx = Math.max(100, exportPixelHeight - marginTop - marginBottom);
+        const maxRows = Math.max(1, Math.floor(plotHeightPx / rowHeightPx));
+        const columnCount = Math.max(1, Math.ceil(entries.length / maxRows));
+        const rowsPerColumn = Math.ceil(entries.length / columnCount);
+
+        const swatchWidth = Math.max(14, Math.round(axisTickSize * 1.25));
+        const swatchGap = Math.max(6, Math.round(axisTickSize * 0.35));
+        const textPadding = Math.max(10, Math.round(axisTickSize * 0.55));
+        const maxNameLen = entries.reduce((acc, e) => Math.max(acc, String(e.name).length), 8);
+        const columnWidth = Math.max(120, Math.round(swatchWidth + swatchGap + textPadding + (maxNameLen * axisTickSize * 0.56)));
+        const requiredRightMargin = Math.round(columnCount * columnWidth + 18);
+
+        styled.margin = {
+          ...styled.margin,
+          r: Math.max(Number(styled.margin?.r) || 0, requiredRightMargin),
+        };
+        styled.showlegend = false;
+
+        const plotWidthPx = Math.max(140, exportPixelWidth - marginLeft - (Number(styled.margin?.r) || requiredRightMargin));
+        const plotHeightPxAdjusted = Math.max(100, exportPixelHeight - marginTop - marginBottom);
+        const legendLeftPad = 6;
+        const firstColX = 1 + (legendLeftPad / plotWidthPx);
+        const xStep = columnWidth / plotWidthPx;
+        const yTop = 1 - ((axisTickSize * 0.15) / plotHeightPxAdjusted);
+        const yStep = rowHeightPx / plotHeightPxAdjusted;
+
+        const legendAnnotations = [];
+        const legendShapes = [];
+        entries.forEach((entry, idx) => {
+          const col = Math.floor(idx / rowsPerColumn);
+          const row = idx % rowsPerColumn;
+          const y = yTop - (row * yStep);
+          const xSwatch0 = firstColX + (col * xStep);
+          const xSwatch1 = xSwatch0 + (swatchWidth / plotWidthPx);
+          const xText = xSwatch1 + (swatchGap / plotWidthPx);
+          legendShapes.push({
+            type: 'line',
+            xref: 'paper',
+            yref: 'paper',
+            x0: xSwatch0,
+            x1: xSwatch1,
+            y0: y,
+            y1: y,
+            line: {
+              color: String(entry.color || '#000000'),
+              width: Math.max(2, axisTickSize * 0.12),
+            },
+          });
+          legendAnnotations.push({
+            xref: 'paper',
+            yref: 'paper',
+            x: xText,
+            y,
+            xanchor: 'left',
+            yanchor: 'middle',
+            text: String(entry.name),
+            showarrow: false,
+            align: 'left',
+            font: {
+              family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+              size: axisTickSize,
+              color: '#000000',
+            },
+          });
+        });
+        styled.shapes = Array.isArray(styled.shapes) ? [...styled.shapes, ...legendShapes] : legendShapes;
+        styled.annotations = Array.isArray(styled.annotations)
+          ? [...styled.annotations, ...legendAnnotations]
+          : legendAnnotations;
+      }
     }
     if (!showLegend && options.firstTraceColor && styled.title) {
       const color = String(options.firstTraceColor);
@@ -1724,10 +1961,38 @@ function applyWebappExportStyleWithOptions(layout, options = {}) {
     }
   }
 
+  if (options.exportFilenameLabel) {
+    const label = String(options.exportFilenameLabel);
+    const marginLeft = Number(styled?.margin?.l) || 0;
+    const marginBottom = Number(styled?.margin?.b) || 0;
+    // Place filename under the x-axis title and aligned toward left tick labels.
+    const labelXShift = -(Math.max(42, Math.min(110, marginLeft - 10)));
+    const labelYShift = -(Math.max(58, Math.min(95, marginBottom - 8)));
+    styled.annotations = Array.isArray(styled.annotations) ? [...styled.annotations] : [];
+    styled.annotations.push({
+      xref: 'paper',
+      yref: 'paper',
+      x: 0,
+      y: 0,
+      xanchor: 'left',
+      yanchor: 'bottom',
+      xshift: labelXShift,
+      yshift: labelYShift,
+      text: `<i>${label}</i>`,
+      showarrow: false,
+      align: 'left',
+      font: {
+        family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+        size: 12,
+        color: '#777777',
+      },
+    });
+  }
+
   if (Array.isArray(styled.annotations)) {
     styled.annotations = styled.annotations.map((ann) => ({
       ...ann,
-      font: { ...(ann.font || {}), color: '#000000' },
+      font: { ...(ann.font || {}), color: ann?.font?.color || '#000000' },
       arrowcolor: ann.arrowcolor || '#000000',
     }));
   }
@@ -1737,7 +2002,10 @@ function applyWebappExportStyleWithOptions(layout, options = {}) {
 
 function applyExportTraceStyleWithOptions(data, options = {}) {
   const traces = Array.isArray(data) ? data : [];
-  if (options.pdfPreset !== 'deconv-like') return traces;
+  const customMultiplier = Number(options.traceLineWidthMultiplier);
+  const hasCustomMultiplier = Number.isFinite(customMultiplier) && customMultiplier > 0;
+  if (options.pdfPreset !== 'deconv-like' && !hasCustomMultiplier) return traces;
+  const widthMultiplier = hasCustomMultiplier ? customMultiplier : 1.8;
 
   return traces.map((trace) => {
     if (!trace || typeof trace !== 'object') return trace;
@@ -1752,7 +2020,7 @@ function applyExportTraceStyleWithOptions(data, options = {}) {
       const baseWidth = Number.isFinite(currentWidth) && currentWidth > 0 ? currentWidth : 1.8;
       next.line = {
         ...(next.line || {}),
-        width: baseWidth * 1.8,
+        width: baseWidth * widthMultiplier,
       };
     }
 
@@ -1834,15 +2102,44 @@ async function buildExportImage(plotDiv, format, width, height, options = {}) {
 }
 
 function dataUrlToBlob(dataUrl) {
-  const [header, data] = dataUrl.split(',');
-  const mimeMatch = header.match(/data:(.*?);base64/);
-  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+  if (typeof dataUrl !== 'string') {
+    throw new Error('Invalid image data');
   }
-  return new Blob([bytes], { type: mime });
+
+  // Plotly can return:
+  // 1) data URLs with base64 payload (png),
+  // 2) data URLs with URL-encoded text payload (svg),
+  // 3) raw SVG text in some environments.
+  if (dataUrl.startsWith('<svg') || dataUrl.startsWith('<?xml')) {
+    return new Blob([dataUrl], { type: 'image/svg+xml;charset=utf-8' });
+  }
+
+  if (!dataUrl.startsWith('data:')) {
+    throw new Error('Unsupported export payload format');
+  }
+
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx < 0) {
+    throw new Error('Malformed data URL');
+  }
+
+  const header = dataUrl.slice(0, commaIdx);
+  const data = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = header.match(/^data:([^;,]+)/i);
+  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+  const isBase64 = /;base64(?:;|$)/i.test(header);
+
+  if (isBase64) {
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  }
+
+  const text = decodeURIComponent(data);
+  return new Blob([text], { type: mime });
 }
 
 function deepClone(obj) {
@@ -1914,6 +2211,7 @@ function syncProgressionAssignmentsToSelectedFiles() {
       role: hasUserRole ? (existing.role || defaultRole) : defaultRole,
       label: hasUserLabel ? (existing.label || '') : '',
       color: existing.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length],
+      active: existing.active !== false,
       userRole: hasUserRole,
       userLabel: hasUserLabel,
     };
@@ -1922,6 +2220,14 @@ function syncProgressionAssignmentsToSelectedFiles() {
 }
 
 function readProgressionAssignmentsFromDOM() {
+  document.querySelectorAll('.prog-active').forEach((el) => {
+    const path = el.dataset.path;
+    if (!path) return;
+    const item = state.progressionAssignments[path] || {};
+    item.active = Boolean(el.checked);
+    state.progressionAssignments[path] = item;
+  });
+
   document.querySelectorAll('.prog-role').forEach((el) => {
     const path = el.dataset.path;
     if (!path) return;
@@ -1952,21 +2258,25 @@ function readProgressionAssignmentsFromDOM() {
   });
 }
 
-function getProgressionSamples() {
+function getProgressionSamples(options = {}) {
+  const activeOnly = options.activeOnly !== false;
   const total = state.selectedFiles.length;
   const autoLabels = computeAutoProgressionLabelMap();
-  return state.selectedFiles.map((file, i) => {
+  const samples = state.selectedFiles.map((file, i) => {
     const assignment = state.progressionAssignments[file.path] || {};
     const role = assignment.role || getDefaultProgressionRole(i, total);
     const autoLabel = String(autoLabels[file.path] || getProgressionRoleBaseLabel(role));
     const manualLabel = (assignment.userLabel === true ? String(assignment.label || '').trim() : '');
+    const active = assignment.active !== false;
     return {
       path: file.path,
       role,
       label: manualLabel || autoLabel,
       color: assignment.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length],
+      active,
     };
   });
+  return activeOnly ? samples.filter((s) => s.active) : samples;
 }
 
 function updateRangeWithTimes(range, times) {
@@ -2024,30 +2334,44 @@ function renderProgressionAssignments() {
 
   syncProgressionAssignmentsToSelectedFiles();
 
-  const sampleDefs = getProgressionSamples();
+  const sampleDefs = getProgressionSamples({ activeOnly: false });
   state.selectedFiles.forEach((file, i) => {
     const card = document.createElement('div');
-    card.className = 'assignment-card';
     const assignment = state.progressionAssignments[file.path] || {};
+    const isActive = assignment.active !== false;
+    card.className = `assignment-card${isActive ? '' : ' is-inactive'}`;
     const defaultRole = sampleDefs[i]?.role || assignment.role || getDefaultProgressionRole(i, state.selectedFiles.length);
     const defaultLabel = sampleDefs[i]?.label || buildAutoProgressionLabel(defaultRole, 1, 1);
     const defaultColor = assignment.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length];
 
     card.innerHTML = `
-      <h4 title="${escapeAttr(file.path)}">${escapeHtml(file.name)}</h4>
+      <div class="assignment-card-head">
+        <label class="prog-active-toggle" title="Include this sample in Time Progression (tab only)">
+          <input type="checkbox" class="prog-active" data-path="${escapeAttr(file.path)}" ${isActive ? 'checked' : ''}>
+          <span class="prog-active-name" title="${escapeAttr(file.path)}">${escapeHtml(file.name)}</span>
+        </label>
+      </div>
       <label>Role</label>
-      <select class="prog-role" data-path="${escapeAttr(file.path)}">
+      <select class="prog-role" data-path="${escapeAttr(file.path)}" ${isActive ? '' : 'disabled'}>
         <option value="initial" ${defaultRole === 'initial' ? 'selected' : ''}>Initial (t=0)</option>
         <option value="mid" ${defaultRole === 'mid' ? 'selected' : ''}>Mid Timepoint</option>
         <option value="final" ${defaultRole === 'final' ? 'selected' : ''}>Overnight / Final</option>
       </select>
       <label>Custom Label</label>
       <div class="prog-label-row">
-        <input type="text" class="prog-label" data-path="${escapeAttr(file.path)}" placeholder="${escapeAttr(file.name)}" value="${escapeAttr(defaultLabel)}">
-        <input type="color" class="prog-color" data-path="${escapeAttr(file.path)}" value="${escapeAttr(defaultColor)}" title="Sample color">
+        <input type="text" class="prog-label" data-path="${escapeAttr(file.path)}" placeholder="${escapeAttr(file.name)}" value="${escapeAttr(defaultLabel)}" ${isActive ? '' : 'disabled'}>
+        <input type="color" class="prog-color" data-path="${escapeAttr(file.path)}" value="${escapeAttr(defaultColor)}" title="Sample color" ${isActive ? '' : 'disabled'}>
       </div>
     `;
     container.appendChild(card);
+  });
+
+  container.querySelectorAll('.prog-active').forEach((el) => {
+    el.addEventListener('change', () => {
+      readProgressionAssignmentsFromDOM();
+      renderProgressionAssignments();
+      if (state.progressionData) loadProgression();
+    });
   });
 
   container.querySelectorAll('.prog-role').forEach((el) => {
@@ -2065,6 +2389,7 @@ function renderProgressionAssignments() {
 }
 
 async function loadProgression() {
+  if (state.progressionLoadInFlight) return;
   if (state.selectedFiles.length < 2) {
     toast('Select at least 2 samples', 'warning');
     return;
@@ -2074,13 +2399,18 @@ async function loadProgression() {
     renderProgressionAssignments();
   }
   readProgressionAssignmentsFromDOM();
-  const samples = getProgressionSamples();
+  const samples = getProgressionSamples({ activeOnly: true });
+  if (samples.length < 2) {
+    toast('Enable at least 2 samples in Time Progression', 'warning');
+    return;
+  }
 
   const wavelengths = getSelectedWavelengths();
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value);
   const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value);
   const mzWindow = parseFloat(document.getElementById('mz-window').value);
 
+  state.progressionLoadInFlight = true;
   showLoading('Generating progression...');
   try {
     // Fetch data for each sample in parallel
@@ -2142,6 +2472,7 @@ async function loadProgression() {
     const msg = typeof err === 'object' ? (err.message || JSON.stringify(err)) : String(err);
     toast(`Progression failed: ${msg}`, 'error');
   } finally {
+    state.progressionLoadInFlight = false;
     hideLoading();
   }
 }
@@ -3507,7 +3838,7 @@ function sanitizeFilename(name) {
     .slice(0, 100) || 'sample';
 }
 
-async function exportPlotById(plotId, filenameBase, format) {
+async function exportPlotById(plotId, filenameBase, format, options = {}) {
   const div = document.getElementById(plotId);
   if (!div || !div.classList.contains('js-plotly-plot')) {
     toast('Plot not available for export', 'warning');
@@ -3520,10 +3851,15 @@ async function exportPlotById(plotId, filenameBase, format) {
   showLoading(`Exporting ${format.toUpperCase()}...`);
   try {
     if (format === 'pdf') {
-      await exportPlotsAsPDF([div], filenameBase, scale);
+      await exportPlotsAsPDF([div], filenameBase, scale, options);
     } else {
-      const dims = getExportDimensions(div, scale);
-      const imageDataUrl = await buildExportImage(div, format, dims.width, dims.height);
+      const dims = getExportDimensions(div, scale, options);
+      const exportOptions = {
+        ...options,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+      };
+      const imageDataUrl = await buildExportImage(div, format, dims.width, dims.height, exportOptions);
       downloadBlob(dataUrlToBlob(imageDataUrl), `${filenameBase}.${format}`);
     }
     toast(`Exported ${format.toUpperCase()}`, 'success');
@@ -4243,6 +4579,7 @@ async function exportReportPDF() {
     path: samplePath,
     include_uv: includeUv,
     include_deconv: includeDeconv,
+    app_version: getAppVersionLabel(),
     settings: getReportSettingsPayload(),
   };
 
@@ -4707,6 +5044,78 @@ function restoreState() {
   }
 
   renderReportSummary();
+}
+
+// ===== Watch Folder =====
+function initWatchFolder() {
+  const toggleBtn = document.getElementById('btn-watch-toggle');
+  const pathInput = document.getElementById('watch-path-input');
+
+  toggleBtn.addEventListener('click', () => {
+    if (state.watchInterval) {
+      stopWatching();
+    } else {
+      const p = pathInput.value.trim() || state.currentPath;
+      pathInput.value = p;
+      startWatching(p);
+    }
+  });
+
+  // pre-fill with current browse path when input is focused empty
+  pathInput.addEventListener('focus', () => {
+    if (!pathInput.value) pathInput.value = state.currentPath;
+  });
+}
+
+async function startWatching(watchPath) {
+  const toggleBtn = document.getElementById('btn-watch-toggle');
+  const dot = document.getElementById('watch-status-dot');
+  const statusText = document.getElementById('watch-status-text');
+  const log = document.getElementById('watch-log');
+
+  // Seed known paths (don't auto-select existing .D folders)
+  try {
+    const items = await api.browse(watchPath);
+    state.watchKnownPaths = new Set(items.filter(i => i.is_d_folder).map(i => i.path));
+  } catch (e) {
+    toast(`Watch: cannot access ${watchPath}`, 'error');
+    return;
+  }
+
+  toggleBtn.textContent = 'Stop Watching';
+  dot.style.display = 'inline-block';
+  statusText.textContent = 'Watching…';
+  log.innerHTML = '';
+
+  state.watchInterval = setInterval(async () => {
+    try {
+      const items = await api.browse(watchPath);
+      const dFolders = items.filter(i => i.is_d_folder);
+      for (const item of dFolders) {
+        if (!state.watchKnownPaths.has(item.path)) {
+          state.watchKnownPaths.add(item.path);
+          selectFile(item);
+          toast(`New run: ${item.name}`, 'success');
+          const entry = document.createElement('div');
+          entry.textContent = `${new Date().toLocaleTimeString()} — ${item.name}`;
+          log.prepend(entry);
+        }
+      }
+    } catch (e) {
+      // silently skip if path momentarily unavailable
+    }
+  }, 5000);
+}
+
+function stopWatching() {
+  if (state.watchInterval) {
+    clearInterval(state.watchInterval);
+    state.watchInterval = null;
+  }
+  state.watchKnownPaths.clear();
+  document.getElementById('btn-watch-toggle').textContent = 'Start Watching';
+  document.getElementById('watch-status-dot').style.display = 'none';
+  document.getElementById('watch-status-text').textContent = 'Off';
 }
 
 // ===== Utility =====

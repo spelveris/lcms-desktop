@@ -64,7 +64,11 @@ function resolveBackendCommand() {
 
 function startBackend() {
   const backendCmd = resolveBackendCommand();
-  const backendEnv = { ...process.env, LCMS_PORT: String(BACKEND_PORT) };
+  const backendEnv = {
+    ...process.env,
+    LCMS_PORT: String(BACKEND_PORT),
+    LCMS_APP_VERSION: String(app.getVersion()),
+  };
 
   if (app.isPackaged) {
     const packagedNodeModules = path.join(process.resourcesPath, "app", "node_modules");
@@ -133,7 +137,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    title: "LC-MS Analysis",
+    title: "CATrupole",
     show: false, // Hide until ready to prevent white flash
     webPreferences: {
       nodeIntegration: false,

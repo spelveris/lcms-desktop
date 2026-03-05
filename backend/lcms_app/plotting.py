@@ -1474,7 +1474,10 @@ def create_report_info_page(
 
     # Footer
     now_str = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    fig.text(0.06, 0.02, f"LC-MS Webapp v{app_version}  {now_str}",
+    version_label = str(app_version or "").strip() or "dev"
+    if not version_label.lower().startswith("v"):
+        version_label = f"v{version_label}"
+    fig.text(0.06, 0.02, f"LCMS Desktop {version_label}  {now_str}",
              fontsize=8, family='monospace', color='#666666')
     fig.text(0.94, 0.02, "Page  1",
              fontsize=8, family='monospace', color='#666666', ha='right')
