@@ -6,8 +6,12 @@
 // api and charts are loaded as global objects from their script tags
 
 // ===== Application State =====
+const CUSTOM_MOUNTS_STORAGE_KEY = 'lcms-custom-mounts';
+
 const state = {
   currentPath: localStorage.getItem('lcms-browse-path') || '/',
+  systemVolumes: [],
+  customMountPaths: loadStoredCustomMounts(),
   selectedFiles: JSON.parse(localStorage.getItem('lcms-selected-files') || '[]'),
   loadedSamples: {},      // path -> sample metadata
   mzTargets: JSON.parse(localStorage.getItem('lcms-mz-targets') || '[]'),
@@ -76,6 +80,132 @@ const FALLBACK_EMPTY_QUOTES = [
   { text: 'Good analysis starts with a clean baseline and a clear hypothesis.', author: 'LCMS Desktop' },
   { text: 'Measure twice, deconvolute once.', author: 'LCMS Desktop' },
 ];
+
+function loadStoredCustomMounts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_MOUNTS_STORAGE_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set();
+    return raw
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          const path = normalizeEnteredPath(entry);
+          if (!path) return null;
+          return { path, label: getPathLeafName(path) || path, source: '' };
+        }
+        if (!entry || typeof entry !== 'object') return null;
+        const path = normalizeEnteredPath(entry.path);
+        if (!path) return null;
+        return {
+          path,
+          label: String(entry.label || getPathLeafName(path) || path).trim(),
+          source: normalizeEnteredPath(entry.source || ''),
+        };
+      })
+      .filter((entry) => {
+        if (!entry || seen.has(entry.path)) return false;
+        seen.add(entry.path);
+        return true;
+      });
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveCustomMounts() {
+  localStorage.setItem(CUSTOM_MOUNTS_STORAGE_KEY, JSON.stringify(state.customMountPaths || []));
+}
+
+function normalizeEnteredPath(rawPath) {
+  let path = String(rawPath || '').trim();
+  if (!path) return '';
+  if (
+    (path.startsWith('"') && path.endsWith('"')) ||
+    (path.startsWith("'") && path.endsWith("'"))
+  ) {
+    path = path.slice(1, -1).trim();
+  }
+  if (!path) return '';
+  if (/^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('//')) {
+    return path.replace(/\//g, '\\');
+  }
+  return path;
+}
+
+function getPathLeafName(path) {
+  const cleaned = String(path || '').replace(/[\\/]+$/, '');
+  if (!cleaned) return '';
+  const parts = cleaned.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || cleaned;
+}
+
+function rememberCustomMountPath(resolvedPath, sourcePath = '') {
+  const normalizedResolved = normalizeEnteredPath(resolvedPath);
+  if (!normalizedResolved || normalizedResolved === '/') return;
+  if (state.systemVolumes.some((vol) => vol.path === normalizedResolved)) return;
+
+  const normalizedSource = normalizeEnteredPath(sourcePath);
+  const entry = {
+    path: normalizedResolved,
+    label: getPathLeafName(normalizedResolved) || getPathLeafName(normalizedSource) || normalizedResolved,
+    source: normalizedSource && normalizedSource !== normalizedResolved ? normalizedSource : '',
+  };
+
+  state.customMountPaths = [
+    entry,
+    ...(state.customMountPaths || []).filter((mount) => mount.path !== entry.path),
+  ].slice(0, 8);
+  saveCustomMounts();
+  renderMountButtons();
+}
+
+function renderMountButtons() {
+  const container = document.getElementById('mount-buttons');
+  if (!container) return;
+
+  const entries = [];
+  const seen = new Set();
+
+  (state.systemVolumes || []).forEach((vol) => {
+    const path = normalizeEnteredPath(vol.path);
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    entries.push({
+      path,
+      label: String(vol.name || getPathLeafName(path) || path),
+      title: path,
+    });
+  });
+
+  (state.customMountPaths || []).forEach((mount) => {
+    const path = normalizeEnteredPath(mount.path);
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    const source = normalizeEnteredPath(mount.source || '');
+    entries.push({
+      path,
+      label: String(mount.label || getPathLeafName(path) || path),
+      title: source && source !== path ? `${source} -> ${path}` : path,
+    });
+  });
+
+  if (entries.length === 0) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'flex';
+  container.innerHTML = '';
+  entries.forEach((entry) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm mount-btn';
+    btn.textContent = entry.label;
+    btn.title = entry.title;
+    btn.addEventListener('click', () => browseTo(entry.path));
+    container.appendChild(btn);
+  });
+}
 
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', () => {
@@ -739,13 +869,13 @@ function renderMzTargets() {
 function initFileBrowser() {
   document.getElementById('btn-go').addEventListener('click', () => {
     const path = document.getElementById('path-input').value.trim();
-    if (path) browseTo(path);
+    if (path) browseTo(path, { rememberMountCandidate: true, sourcePath: path });
   });
 
   document.getElementById('path-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const path = e.target.value.trim();
-      if (path) browseTo(path);
+      if (path) browseTo(path, { rememberMountCandidate: true, sourcePath: path });
     }
   });
 
@@ -809,36 +939,31 @@ function initFileBrowser() {
 }
 
 async function loadVolumes() {
-  const container = document.getElementById('mount-buttons');
   try {
     const data = await api.getVolumes();
-    if (data.volumes && data.volumes.length > 0) {
-      container.style.display = 'flex';
-      container.innerHTML = '';
-      data.volumes.forEach(vol => {
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-sm mount-btn';
-        btn.textContent = vol.name;
-        btn.title = vol.path;
-        btn.addEventListener('click', () => browseTo(vol.path));
-        container.appendChild(btn);
-      });
-    }
+    state.systemVolumes = Array.isArray(data.volumes) ? data.volumes : [];
+    renderMountButtons();
   } catch (err) {
-    // Volumes not available, hide the section
-    container.style.display = 'none';
+    state.systemVolumes = [];
+    renderMountButtons();
   }
 }
 
 async function browseTo(path, options = {}) {
+  const targetPath = normalizeEnteredPath(path);
   const silent = !!options.silent;
   const throwOnError = !!options.throwOnError;
+  const rememberMountCandidate = !!options.rememberMountCandidate;
+  const sourcePath = options.sourcePath || targetPath;
   try {
-    const data = await api.browse(path);
+    const data = await api.browse(targetPath);
     state.currentPath = data.path;
     state.browseItems = data.items || [];
     document.getElementById('path-input').value = data.path;
     localStorage.setItem('lcms-browse-path', data.path);
+    if (rememberMountCandidate) {
+      rememberCustomMountPath(data.path, sourcePath);
+    }
     renderFileList();
     return data;
   } catch (err) {
@@ -1036,7 +1161,12 @@ async function loadSampleMeta(path) {
     const meta = await api.loadSample(path);
     state.loadedSamples[path] = meta;
     updateWavelengthCheckboxes();
-    toast(`Loaded: ${meta.name || path.split('/').pop()}`, 'success');
+    const sampleLabel = meta.name || path.split(/[\\/]/).pop();
+    if (meta.run_in_progress) {
+      toast(`Loaded partial run: ${sampleLabel} (still acquiring, not cached)`, 'warning');
+    } else {
+      toast(`Loaded: ${sampleLabel}`, 'success');
+    }
   } catch (err) {
     toast(`Failed to load sample: ${err.message}`, 'error');
   }
@@ -3709,6 +3839,39 @@ function getGlobalDeconvMassRangeParams() {
   return params;
 }
 
+function buildDeconvolutionRequest(path, startTime, endTime) {
+  const params = {
+    path,
+    start_time: startTime,
+    end_time: endTime,
+    ion_mode: document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive',
+  };
+  Object.assign(params, getGlobalDeconvMassRangeParams());
+
+  if (document.getElementById('expert-mode-toggle')?.checked) {
+    params.min_charge = parseInt(document.getElementById('dp-min-charge')?.value, 10);
+    params.max_charge = parseInt(document.getElementById('dp-max-charge')?.value, 10);
+    const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree')?.value);
+    const abundancePct = parseFloat(document.getElementById('dp-abundance')?.value);
+    const envelopePct = parseFloat(document.getElementById('dp-r2')?.value);
+    params.mw_agreement = Number.isFinite(mwAgreePct) ? (mwAgreePct / 100.0) : undefined;
+    params.contig_min = parseInt(document.getElementById('dp-contig-min')?.value, 10);
+    params.abundance_cutoff = Number.isFinite(abundancePct) ? (abundancePct / 100.0) : undefined;
+    params.r2_cutoff = Number.isFinite(envelopePct) ? (envelopePct / 100.0) : undefined;
+    params.fwhm = parseFloat(document.getElementById('dp-fwhm')?.value);
+    params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
+
+    const massLow = document.getElementById('dp-mass-low')?.value;
+    const massHigh = document.getElementById('dp-mass-high')?.value;
+    const noise = document.getElementById('dp-noise')?.value;
+    if (massLow) params.mass_range_low = parseFloat(massLow);
+    if (massHigh) params.mass_range_high = parseFloat(massHigh);
+    if (noise) params.noise_cutoff = parseFloat(noise);
+  }
+
+  return params;
+}
+
 function getDeconvolutionRunSignature() {
   const samplePath = document.getElementById('deconv-sample-select')?.value || '';
   const start = parseFloat(document.getElementById('deconv-start')?.value);
@@ -3820,6 +3983,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
       color: '#1f77b4',
       start,
       end,
+      startAtZero: true,
       windowColor: 'rgba(255, 215, 0, 0.25)',
     });
   } catch (_) {
@@ -3834,6 +3998,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
       color: '#ff7f0e',
       start,
       end,
+      startAtZero: true,
       windowColor: 'rgba(255, 215, 0, 0.25)',
     });
   } catch (_) {
@@ -3870,35 +4035,11 @@ async function runDeconvolution() {
     return;
   }
 
-  const params = {
-    path: samplePath,
-    start_time: parseFloat(document.getElementById('deconv-start').value),
-    end_time: parseFloat(document.getElementById('deconv-end').value),
-    ion_mode: document.querySelector('input[name="ion-mode"]:checked').value,
-  };
-  Object.assign(params, getGlobalDeconvMassRangeParams());
-
-  // Expert parameters
-  if (document.getElementById('expert-mode-toggle').checked) {
-    params.min_charge = parseInt(document.getElementById('dp-min-charge').value);
-    params.max_charge = parseInt(document.getElementById('dp-max-charge').value);
-    const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree').value);
-    const abundancePct = parseFloat(document.getElementById('dp-abundance').value);
-    const envelopePct = parseFloat(document.getElementById('dp-r2').value);
-    params.mw_agreement = Number.isFinite(mwAgreePct) ? (mwAgreePct / 100.0) : undefined;
-    params.contig_min = parseInt(document.getElementById('dp-contig-min').value);
-    params.abundance_cutoff = Number.isFinite(abundancePct) ? (abundancePct / 100.0) : undefined;
-    params.r2_cutoff = Number.isFinite(envelopePct) ? (envelopePct / 100.0) : undefined;
-    params.fwhm = parseFloat(document.getElementById('dp-fwhm').value);
-    params.monoisotopic = document.getElementById('dp-monoisotopic').checked;
-
-    const massLow = document.getElementById('dp-mass-low').value;
-    const massHigh = document.getElementById('dp-mass-high').value;
-    const noise = document.getElementById('dp-noise').value;
-    if (massLow) params.mass_range_low = parseFloat(massLow);
-    if (massHigh) params.mass_range_high = parseFloat(massHigh);
-    if (noise) params.noise_cutoff = parseFloat(noise);
-  }
+  const params = buildDeconvolutionRequest(
+    samplePath,
+    parseFloat(document.getElementById('deconv-start').value),
+    parseFloat(document.getElementById('deconv-end').value),
+  );
 
   showLoading('Running deconvolution...');
   try {
@@ -4277,9 +4418,8 @@ function getBatchDeconvRunSignature() {
   const fallbackStart = parseFloat(document.getElementById('deconv-start')?.value);
   const fallbackEnd = parseFloat(document.getElementById('deconv-end')?.value);
   const sampleSig = state.selectedFiles.map((f) => f.path).join('||');
-  const startSig = Number.isFinite(fallbackStart) ? fallbackStart.toFixed(4) : 'na';
-  const endSig = Number.isFinite(fallbackEnd) ? fallbackEnd.toFixed(4) : 'na';
-  return `${sampleSig}|${startSig}|${endSig}`;
+  const requestSig = JSON.stringify(buildDeconvolutionRequest('__batch__', fallbackStart, fallbackEnd));
+  return `${sampleSig}|${requestSig}`;
 }
 
 async function autoRunBatchDeconvolutionOnTabOpen() {
@@ -4507,15 +4647,8 @@ async function runBatchDeconvolution() {
       }
 
       try {
-        const massRange = getGlobalDeconvMassRangeParams();
-        const req = {
-          path: file.path,
-          start_time: start,
-          end_time: end,
-          ...massRange,
-        };
+        const req = buildDeconvolutionRequest(file.path, start, end);
         const data = await api.runDeconvolution(req);
-        const components = (data.components || []).slice().sort((a, b) => (b.intensity || 0) - (a.intensity || 0));
         results.push({
           name: file.name,
           path: file.path,
@@ -4523,7 +4656,7 @@ async function runBatchDeconvolution() {
           end,
           status: 'ok',
           error: '',
-          components,
+          components: Array.isArray(data.components) ? data.components : [],
         });
       } catch (err) {
         results.push({
@@ -4561,6 +4694,7 @@ function renderBatchDeconvolution(data) {
   const samplesContainer = document.getElementById('batch-deconv-samples');
   const topNInput = document.getElementById('batch-deconv-top-n');
   const topN = Math.max(1, Math.min(20, parseInt(topNInput.value) || 5));
+  const expertMode = document.getElementById('expert-mode-toggle')?.checked === true;
   topNInput.value = String(topN);
 
   Object.values(state.batchDeconvPreviewUrls || {}).forEach((url) => {
@@ -4576,7 +4710,13 @@ function renderBatchDeconvolution(data) {
   samplesContainer.innerHTML = '';
   tableContainer.innerHTML = '';
 
-  const samples = data.samples || [];
+  const samples = (data.samples || []).map((sample) => ({
+    ...sample,
+    displayComponents: filterDeconvDisplayResults(sample.components || [], {
+      expertMode,
+      topN,
+    }),
+  }));
   if (samples.length === 0) {
     setBatchDeconvEmptyState(true);
     return;
@@ -4584,12 +4724,13 @@ function renderBatchDeconvolution(data) {
   setBatchDeconvEmptyState(false);
 
   const okCount = samples.filter(s => s.status === 'ok').length;
-  const totalComponents = samples.reduce((acc, s) => acc + ((s.components || []).length), 0);
+  const displayedComponents = samples.reduce((acc, s) => acc + ((s.displayComponents || []).length), 0);
   summary.innerHTML = `
     <div class="metric"><span class="dot blue"></span> Samples: ${samples.length}</div>
     <div class="metric"><span class="dot green"></span> Successful: ${okCount}</div>
     <div class="metric"><span class="dot ${okCount === samples.length ? 'green' : 'red'}"></span> Failed: ${samples.length - okCount}</div>
-    <div class="metric"><span class="dot blue"></span> Total Components: ${totalComponents}</div>
+    <div class="metric"><span class="dot blue"></span> Mode: ${expertMode ? 'Expert' : 'Basic'}</div>
+    <div class="metric"><span class="dot blue"></span> Displayed Components: ${displayedComponents}</div>
     <div class="metric"><span class="dot blue"></span> Showing Top N: ${topN}</div>
   `;
 
@@ -4608,7 +4749,7 @@ function renderBatchDeconvolution(data) {
       return;
     }
 
-    const components = (sample.components || []).slice(0, topN);
+    const components = sample.displayComponents || [];
     if (components.length === 0) {
       section.insertAdjacentHTML('beforeend', '<p class="placeholder-msg" style="padding:16px 10px;">No masses detected for this sample.</p>');
       samplesContainer.appendChild(section);
@@ -4646,7 +4787,7 @@ function renderBatchDeconvolution(data) {
     `);
 
     samplesContainer.appendChild(section);
-    charts.plotDeconvMasses(plotId, components, { height: 320, hideGrid: true });
+    charts.plotDeconvMasses(plotId, components, { height: 320 });
     renderBatchDeconvTicWindow(sample, ticPlotId);
     renderBatchDeconvExportPreview(sample, components, previewId);
 
@@ -4664,10 +4805,10 @@ function renderBatchDeconvolution(data) {
 
   samples.forEach((sample) => {
     const windowStr = `${Number.isFinite(sample.start) ? sample.start.toFixed(2) : '-'} - ${Number.isFinite(sample.end) ? sample.end.toFixed(2) : '-'}`;
-    const comps = sample.components || [];
-    const topMasses = comps.slice(0, topN).map(c => c.mass.toFixed(1)).join(', ') || '-';
+    const comps = sample.displayComponents || [];
+    const topMasses = comps.map(c => c.mass.toFixed(1)).join(', ') || '-';
     const maxIntensity = Math.max(0, ...comps.map((c) => Number(c.intensity || 0)));
-    const relInts = comps.slice(0, topN)
+    const relInts = comps
       .map((c) => (maxIntensity > 0 ? ((Number(c.intensity || 0) / maxIntensity) * 100).toFixed(1) : '-'))
       .join(', ') || '-';
     html += `<tr>
@@ -5550,13 +5691,24 @@ async function startWatching(watchPath) {
   const dot = document.getElementById('watch-status-dot');
   const statusText = document.getElementById('watch-status-text');
   const log = document.getElementById('watch-log');
+  const pathInput = document.getElementById('watch-path-input');
+  const sourcePath = normalizeEnteredPath(watchPath);
+  let resolvedWatchPath = sourcePath;
 
   // Seed known paths (don't auto-select existing .D folders)
   try {
-    const items = await api.browse(watchPath);
-    state.watchKnownPaths = new Set(items.filter(i => i.is_d_folder).map(i => i.path));
+    const data = await api.browse(sourcePath);
+    const items = Array.isArray(data.items) ? data.items : [];
+    resolvedWatchPath = data.path || sourcePath;
+    if (pathInput) pathInput.value = resolvedWatchPath;
+    rememberCustomMountPath(resolvedWatchPath, sourcePath);
+    state.watchKnownPaths = new Set(
+      items
+        .filter((item) => item.is_d_folder && !item.run_in_progress)
+        .map((item) => item.path),
+    );
   } catch (e) {
-    toast(`Watch: cannot access ${watchPath}`, 'error');
+    toast(`Watch: cannot access ${sourcePath}`, 'error');
     return;
   }
 
@@ -5567,9 +5719,10 @@ async function startWatching(watchPath) {
 
   state.watchInterval = setInterval(async () => {
     try {
-      const items = await api.browse(watchPath);
-      const dFolders = items.filter(i => i.is_d_folder);
+      const data = await api.browse(resolvedWatchPath);
+      const dFolders = (Array.isArray(data.items) ? data.items : []).filter((item) => item.is_d_folder);
       for (const item of dFolders) {
+        if (item.run_in_progress) continue;
         if (!state.watchKnownPaths.has(item.path)) {
           state.watchKnownPaths.add(item.path);
           selectFile(item);
