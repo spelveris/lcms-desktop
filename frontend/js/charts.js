@@ -251,6 +251,18 @@ const charts = {
       showticklabels: !compact,
       fixedrange: compact,
     };
+    if (options.startAtZero === true) {
+      let xMax = Number.NEGATIVE_INFINITY;
+      (times || []).forEach((tv) => {
+        const v = Number(tv);
+        if (Number.isFinite(v) && v > xMax) xMax = v;
+      });
+      if (Number.isFinite(xMax) && xMax > 0) {
+        xaxis.range = [0, xMax];
+      } else {
+        xaxis.range = [0, 1];
+      }
+    }
     const yaxis = {
       title: compact ? '' : (options.yLabel || 'Intensity'),
       showticklabels: !compact,

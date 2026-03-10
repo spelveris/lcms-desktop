@@ -5,6 +5,7 @@ The Electron frontend communicates with this server via HTTP.
 """
 
 import os
+import re
 import sys
 import io
 import datetime
@@ -64,6 +65,8 @@ app.add_middleware(
 
 # In-memory cache of loaded samples  {folder_path: SampleData}
 _sample_cache: dict[str, SampleData] = {}
+_sample_cache_state: dict[str, str] = {}
+RUN_SETTLE_SECONDS = 120
 
 
 # ---------------------------------------------------------------------------
@@ -79,15 +82,134 @@ def _ndarray_to_list(arr):
     return arr
 
 
+def _normalize_filesystem_path(path_str: str) -> str:
+    """Normalize incoming manual paths, including UNC/smb paths on macOS."""
+    raw = str(path_str or "").strip()
+    if not raw:
+        return raw
+
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1].strip()
+    if not raw:
+        return raw
+
+    if raw.lower().startswith("smb://"):
+        smb_path = raw[6:]
+        parts = [part for part in smb_path.split("/") if part]
+        if len(parts) >= 2:
+            host, share, *rest = parts
+            if sys.platform == "darwin":
+                mount_root = Path("/Volumes") / share
+                if mount_root.exists():
+                    return str(mount_root.joinpath(*rest))
+            return "\\\\" + "\\".join([host, share, *rest])
+
+    if raw.startswith("\\\\") or raw.startswith("//"):
+        parts = [part for part in re.split(r"[\\/]+", raw.lstrip("\\/")) if part]
+        if len(parts) >= 2:
+            host, share, *rest = parts
+            if sys.platform == "darwin":
+                mount_root = Path("/Volumes") / share
+                if mount_root.exists():
+                    return str(mount_root.joinpath(*rest))
+            return "\\\\" + "\\".join([host, share, *rest])
+
+    return raw
+
+
+def _decode_text_file(path: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw[:200]:
+            return raw.decode("utf-16", errors="ignore")
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return raw.decode("latin-1", errors="ignore")
+
+
+def _folder_latest_mtime(folder: Path) -> float:
+    try:
+        latest = folder.stat().st_mtime
+    except Exception:
+        return 0.0
+
+    try:
+        for entry in folder.iterdir():
+            try:
+                latest = max(latest, entry.stat().st_mtime)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return latest
+
+
+def _inspect_sample_run_state(folder_path: str | Path) -> dict:
+    folder = Path(_normalize_filesystem_path(str(folder_path)))
+    latest_mtime = _folder_latest_mtime(folder)
+    now_ts = datetime.datetime.now().timestamp()
+    settled = latest_mtime > 0 and (now_ts - latest_mtime) >= RUN_SETTLE_SECONDS
+    completion_source = "mtime-settled" if settled else "active-write"
+    run_complete = False
+
+    try:
+        run_logs = sorted(folder.glob("RUN*.LOG"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        run_logs = []
+
+    if run_logs:
+        text = _decode_text_file(run_logs[0]).lower()
+        if "instrument run completed" in text or "method completed" in text:
+            run_complete = True
+            completion_source = "run-log"
+
+    cacheable = run_complete or settled
+    return {
+        "folder_path": str(folder),
+        "latest_mtime": latest_mtime,
+        "run_complete": run_complete,
+        "run_in_progress": not cacheable,
+        "cacheable": cacheable,
+        "completion_source": completion_source,
+    }
+
+
+def _sample_cache_token(run_state: dict) -> str:
+    latest = float(run_state.get("latest_mtime") or 0.0)
+    completion_source = str(run_state.get("completion_source") or "")
+    cacheable = "1" if run_state.get("cacheable") else "0"
+    return f"{latest:.6f}|{completion_source}|{cacheable}"
+
+
 def _get_sample(folder_path: str) -> SampleData:
     """Load sample with caching."""
-    if folder_path not in _sample_cache:
-        sample = SampleData(folder_path)
-        ok = sample.load()
-        if not ok:
-            raise HTTPException(status_code=400, detail=sample.error or "Failed to load sample")
-        _sample_cache[folder_path] = sample
-    return _sample_cache[folder_path]
+    normalized_path = _normalize_filesystem_path(folder_path)
+    run_state = _inspect_sample_run_state(normalized_path)
+    cache_token = _sample_cache_token(run_state)
+
+    if run_state["cacheable"]:
+        cached = _sample_cache.get(normalized_path)
+        if cached is not None and _sample_cache_state.get(normalized_path) == cache_token:
+            return cached
+    else:
+        _sample_cache.pop(normalized_path, None)
+        _sample_cache_state.pop(normalized_path, None)
+
+    sample = SampleData(normalized_path)
+    ok = sample.load()
+    if not ok:
+        raise HTTPException(status_code=400, detail=sample.error or "Failed to load sample")
+
+    if run_state["cacheable"]:
+        _sample_cache[normalized_path] = sample
+        _sample_cache_state[normalized_path] = cache_token
+
+    return sample
 
 
 def _coerce_float(value, default: float) -> float:
@@ -745,7 +867,7 @@ def get_config():
 @app.get("/api/browse")
 def browse_folder(path: str = Query(..., description="Directory to list")):
     """List contents of a directory (folders and .D folders)."""
-    p = Path(path)
+    p = Path(_normalize_filesystem_path(path))
     if not p.exists():
         raise HTTPException(status_code=404, detail="Path not found")
     if not p.is_dir():
@@ -757,12 +879,15 @@ def browse_folder(path: str = Query(..., description="Directory to list")):
             if entry.name.startswith("."):
                 continue
             is_d = entry.is_dir() and (entry.name.endswith(".D") or entry.name.endswith(".d"))
-            items.append({
+            item = {
                 "name": entry.name,
                 "path": str(entry),
                 "is_dir": entry.is_dir(),
                 "is_d_folder": is_d,
-            })
+            }
+            if is_d:
+                item.update(_inspect_sample_run_state(entry))
+            items.append(item)
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
 
@@ -775,7 +900,7 @@ def find_d_folders(
     search: str = Query("", description="Optional name filter"),
 ):
     """Recursively find .D folders under a path."""
-    folders = list_d_folders(path, search)
+    folders = list_d_folders(_normalize_filesystem_path(path), search)
     for f in folders:
         f["date"] = f["date"].isoformat()
     return {"folders": folders}
@@ -784,7 +909,9 @@ def find_d_folders(
 @app.get("/api/load-sample")
 def load_sample(path: str = Query(..., description="Path to .D folder")):
     """Load a sample and return its metadata."""
-    sample = _get_sample(path)
+    normalized_path = _normalize_filesystem_path(path)
+    sample = _get_sample(normalized_path)
+    run_state = _inspect_sample_run_state(normalized_path)
     return {
         "name": sample.name,
         "folder_path": sample.folder_path,
@@ -799,6 +926,11 @@ def load_sample(path: str = Query(..., description="Path to .D folder")):
         "uv_wavelengths": _ndarray_to_list(sample.uv_wavelengths),
         "ms_time_range": [float(sample.ms_times[0]), float(sample.ms_times[-1])] if sample.ms_times is not None else None,
         "uv_time_range": [float(sample.uv_times[0]), float(sample.uv_times[-1])] if sample.uv_times is not None else None,
+        "run_complete": run_state["run_complete"],
+        "run_in_progress": run_state["run_in_progress"],
+        "cacheable": run_state["cacheable"],
+        "completion_source": run_state["completion_source"],
+        "latest_update": datetime.datetime.fromtimestamp(run_state["latest_mtime"]).isoformat() if run_state["latest_mtime"] else None,
     }
 
 
@@ -1321,6 +1453,7 @@ def list_volumes():
 def clear_cache():
     """Clear the sample cache."""
     _sample_cache.clear()
+    _sample_cache_state.clear()
     return {"status": "cleared"}
 
 
