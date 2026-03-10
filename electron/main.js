@@ -117,7 +117,7 @@ function stopBackend() {
 }
 
 /** Poll /api/health until the backend responds. */
-function waitForBackend(retries = 30, interval = 500) {
+function waitForBackend(retries = 120, interval = 500) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
     const check = () => {
@@ -314,7 +314,7 @@ if (gotSingleInstanceLock) {
       closeSplashWindow();
       dialog.showErrorBox(
         "Backend Error",
-        "Could not start the Python backend.\nMake sure Python 3 and requirements are installed.\n\n" +
+        "Could not start the CATrupole backend.\nIf this is the first launch after an update, wait a moment and try opening the app again.\n\n" +
           err.message
       );
       app.quit();
