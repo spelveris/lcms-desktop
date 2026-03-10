@@ -13,7 +13,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 # Patch out Streamlit before any lcms-webapp imports
 from data_reader_patch import patch_streamlit
@@ -149,7 +149,7 @@ def _folder_latest_mtime(folder: Path) -> float:
     return latest
 
 
-def _inspect_sample_run_state(folder_path: str | Path) -> dict:
+def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     folder = Path(_normalize_filesystem_path(str(folder_path)))
     latest_mtime = _folder_latest_mtime(folder)
     now_ts = datetime.datetime.now().timestamp()
