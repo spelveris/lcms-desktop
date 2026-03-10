@@ -14,6 +14,8 @@ const state = {
   sortMode: 'date-desc',
   singleSampleData: null,
   singleLoadInFlight: false,
+  backgroundSubtractionData: null,
+  backgroundSubtractInFlight: false,
   progressionData: null,
   progressionLoadInFlight: false,
   eicBatchData: null,
@@ -84,6 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initFileBrowser();
   initWatchFolder();
   initSingleSample();
+  initBackgroundSubtraction();
   initProgression();
   initEICBatch();
   initDeconvolution();
@@ -208,6 +211,18 @@ function setSingleEmptyState(isEmpty, forceNew = false) {
   if (metrics) metrics.classList.toggle('hidden', isEmpty);
 }
 
+function setBackgroundSubtractionEmptyState(isEmpty, forceNew = false) {
+  const empty = document.getElementById('bgsub-empty-state');
+  const results = document.getElementById('bgsub-results');
+  const metrics = document.getElementById('bgsub-metrics');
+  if (empty) {
+    empty.classList.toggle('hidden', !isEmpty);
+    if (isEmpty) renderQuoteEmptyState('bgsub-empty-state', 'background-subtraction', forceNew);
+  }
+  if (results) results.classList.toggle('hidden', isEmpty);
+  if (metrics) metrics.classList.toggle('hidden', isEmpty);
+}
+
 function setEICBatchEmptyState(isEmpty, forceNew = false) {
   setQuoteContainerState('eic-empty-state', 'eic-batch', isEmpty, forceNew);
   setElementHidden('eic-batch-content', isEmpty);
@@ -248,6 +263,11 @@ function refreshVisibleTabQuote(tabId) {
   if (tabId === 'tab-single') {
     const visible = !document.getElementById('single-empty-state')?.classList.contains('hidden');
     if (visible) setSingleEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-background-subtraction') {
+    const visible = !document.getElementById('bgsub-empty-state')?.classList.contains('hidden');
+    if (visible) setBackgroundSubtractionEmptyState(true, true);
     return;
   }
   if (tabId === 'tab-eic-batch') {
@@ -296,6 +316,29 @@ function resetSingleSampleView() {
   if (tic) tic.innerHTML = '';
   if (eic) eic.innerHTML = '';
   setSingleEmptyState(true);
+}
+
+function resetBackgroundSubtractionView() {
+  const metrics = document.getElementById('bgsub-metrics');
+  const uv = document.getElementById('bgsub-uv-plots');
+  const tic = document.getElementById('bgsub-tic-plot');
+  const spectrum = document.getElementById('bgsub-spectrum-plot');
+  const spectrumTable = document.getElementById('bgsub-spectrum-table');
+  const eic = document.getElementById('bgsub-eic-plots');
+  if (metrics) metrics.innerHTML = '';
+  if (uv) uv.innerHTML = '';
+  if (tic) {
+    tic.innerHTML = '';
+    tic.className = 'plot-container';
+  }
+  if (spectrum) spectrum.innerHTML = '';
+  if (spectrum) spectrum.className = 'plot-container';
+  if (spectrumTable) {
+    spectrumTable.innerHTML = '';
+    spectrumTable.className = 'plot-container';
+  }
+  if (eic) eic.innerHTML = '';
+  setBackgroundSubtractionEmptyState(true);
 }
 
 function resetEICBatchView() {
@@ -369,6 +412,9 @@ function resetMasscalcView() {
 function renderDefaultTabEmptyStates() {
   if (state.singleSampleData) setSingleEmptyState(false);
   else resetSingleSampleView();
+
+  if (state.backgroundSubtractionData) setBackgroundSubtractionEmptyState(false);
+  else resetBackgroundSubtractionView();
 
   if (state.eicBatchData) setEICBatchEmptyState(false);
   else resetEICBatchView();
@@ -444,6 +490,12 @@ function schedulePlotlyResize(plotIds = []) {
       'deconv-tic-plot',
       'deconv-ion-selection-plot',
       'single-tic-plot',
+      'bgsub-tic-plot',
+      'bgsub-spectrum-plot',
+      'bgsub-tic-pos-plot',
+      'bgsub-tic-neg-plot',
+      'bgsub-spectrum-positive-plot',
+      'bgsub-spectrum-negative-plot',
       'eic-overlay-plot',
       'timechange-ms-plot',
       'timechange-ms-offset-plot',
@@ -596,6 +648,11 @@ function initSettings() {
   });
 }
 
+function _getMzAddPolarity() {
+  const sel = document.getElementById('mz-add-polarity');
+  return sel ? sel.value : 'positive';
+}
+
 function addMzTargetFromInput(inputRef) {
   const input = typeof inputRef === 'string' ? document.getElementById(inputRef) : inputRef;
   if (!input) return false;
@@ -604,11 +661,12 @@ function addMzTargetFromInput(inputRef) {
     toast('Enter a valid m/z value', 'warning');
     return false;
   }
-  if (state.mzTargets.some((mz) => Math.abs(mz - val) <= 1e-9)) {
+  const polarity = _getMzAddPolarity();
+  if (state.mzTargets.some((t) => Math.abs(t.mz - val) <= 1e-9 && t.polarity === polarity)) {
     toast('m/z already added', 'warning');
     return false;
   }
-  state.mzTargets.push(val);
+  state.mzTargets.push({ mz: val, polarity });
   normalizeMzTargets();
   input.value = '';
   saveMzTargets();
@@ -616,8 +674,10 @@ function addMzTargetFromInput(inputRef) {
   return true;
 }
 
-function removeMzTarget(val) {
-  state.mzTargets = state.mzTargets.filter((v) => Math.abs(Number(v) - Number(val)) > 1e-9);
+function removeMzTarget(mz, polarity) {
+  state.mzTargets = state.mzTargets.filter(
+    (t) => !(Math.abs(t.mz - mz) <= 1e-9 && t.polarity === polarity)
+  );
   normalizeMzTargets();
   saveMzTargets();
   renderMzTargets();
@@ -634,12 +694,15 @@ function clearAllMzTargets() {
 function normalizeMzTargets() {
   const cleaned = [];
   (Array.isArray(state.mzTargets) ? state.mzTargets : []).forEach((raw) => {
-    const mz = Number(raw);
+    // Support legacy plain-number format from localStorage
+    const t = (typeof raw === 'object' && raw !== null) ? raw : { mz: Number(raw), polarity: 'positive' };
+    const mz = Number(t.mz);
+    const polarity = t.polarity === 'negative' ? 'negative' : 'positive';
     if (!Number.isFinite(mz) || mz <= 0) return;
-    if (cleaned.some((existing) => Math.abs(existing - mz) <= 1e-9)) return;
-    cleaned.push(mz);
+    if (cleaned.some((e) => Math.abs(e.mz - mz) <= 1e-9 && e.polarity === polarity)) return;
+    cleaned.push({ mz, polarity });
   });
-  cleaned.sort((a, b) => a - b);
+  cleaned.sort((a, b) => a.mz - b.mz || a.polarity.localeCompare(b.polarity));
   state.mzTargets = cleaned;
 }
 
@@ -661,11 +724,12 @@ function renderMzTargets() {
       return;
     }
 
-    state.mzTargets.forEach((mz) => {
+    state.mzTargets.forEach(({ mz, polarity }) => {
       const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.innerHTML = `${mz.toFixed(2)} <button class="remove-tag" title="Remove">&times;</button>`;
-      tag.querySelector('.remove-tag').addEventListener('click', () => removeMzTarget(mz));
+      const isNeg = polarity === 'negative';
+      tag.className = `tag${isNeg ? ' tag-neg' : ' tag-pos'}`;
+      tag.innerHTML = `${mz.toFixed(2)} <span class="tag-polarity">${isNeg ? '−' : '+'}</span> <button class="remove-tag" title="Remove">&times;</button>`;
+      tag.querySelector('.remove-tag').addEventListener('click', () => removeMzTarget(mz, polarity));
       container.appendChild(tag);
     });
   });
@@ -1009,6 +1073,8 @@ function getSelectedWavelengths() {
 function updateSampleDropdowns() {
   const selects = [
     document.getElementById('single-sample-select'),
+    document.getElementById('bgsub-sample-a-select'),
+    document.getElementById('bgsub-sample-b-select'),
     document.getElementById('eic-sample-select'),
     document.getElementById('deconv-sample-select'),
     document.getElementById('masscalc-sample-select'),
@@ -1030,6 +1096,337 @@ function updateSampleDropdowns() {
       sel.value = currentVal;
     }
   });
+
+  syncBackgroundSubtractionSelections();
+}
+
+function syncBackgroundSubtractionSelections() {
+  const backgroundSelect = document.getElementById('bgsub-background-select');
+  const sampleASelect = document.getElementById('bgsub-sample-a-select');
+  const sampleBSelect = document.getElementById('bgsub-sample-b-select');
+  if (!backgroundSelect || !sampleASelect || !sampleBSelect) return;
+
+  const candidatePaths = [sampleASelect.value, sampleBSelect.value]
+    .filter(Boolean)
+    .filter((path, index, arr) => arr.indexOf(path) === index);
+
+  const currentBackground = backgroundSelect.value;
+  if (candidatePaths.length === 0) {
+    backgroundSelect.innerHTML = '<option value="">-- Choose two files first --</option>';
+    return;
+  }
+
+  backgroundSelect.innerHTML = '<option value="">-- Select background --</option>';
+  candidatePaths.forEach((path) => {
+    const file = state.selectedFiles.find((entry) => entry.path === path);
+    const opt = document.createElement('option');
+    opt.value = path;
+    opt.textContent = file?.name || path.split(/[\\/]/).pop() || path;
+    backgroundSelect.appendChild(opt);
+  });
+
+  if (candidatePaths.includes(currentBackground)) {
+    backgroundSelect.value = currentBackground;
+  } else if (candidatePaths.length === 2) {
+    backgroundSelect.value = candidatePaths[1];
+  } else {
+    backgroundSelect.value = candidatePaths[0];
+  }
+}
+
+// ===== Background Subtraction Tab =====
+function initBackgroundSubtraction() {
+  const runBtn = document.getElementById('btn-run-bgsub');
+  const sampleASelect = document.getElementById('bgsub-sample-a-select');
+  const sampleBSelect = document.getElementById('bgsub-sample-b-select');
+  const backgroundSelect = document.getElementById('bgsub-background-select');
+
+  if (runBtn) runBtn.addEventListener('click', loadBackgroundSubtraction);
+  [sampleASelect, sampleBSelect].forEach((sel) => {
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      syncBackgroundSubtractionSelections();
+    });
+  });
+  if (backgroundSelect) {
+    backgroundSelect.addEventListener('change', () => {
+      if (!backgroundSelect.value) return;
+      const emptyVisible = !document.getElementById('bgsub-empty-state')?.classList.contains('hidden');
+      if (emptyVisible) setBackgroundSubtractionEmptyState(true, true);
+    });
+  }
+
+  syncBackgroundSubtractionSelections();
+}
+
+async function loadBackgroundSubtraction() {
+  if (state.backgroundSubtractInFlight) return;
+
+  const sampleAPath = document.getElementById('bgsub-sample-a-select')?.value || '';
+  const sampleBPath = document.getElementById('bgsub-sample-b-select')?.value || '';
+  const backgroundPath = document.getElementById('bgsub-background-select')?.value || '';
+
+  if (!sampleAPath || !sampleBPath) {
+    toast('Select two samples first', 'warning');
+    return;
+  }
+  if (sampleAPath === sampleBPath) {
+    toast('Choose two different samples for subtraction', 'warning');
+    return;
+  }
+  if (!backgroundPath || (backgroundPath !== sampleAPath && backgroundPath !== sampleBPath)) {
+    toast('Choose which selected file should be treated as the background', 'warning');
+    return;
+  }
+
+  const samplePath = backgroundPath === sampleAPath ? sampleBPath : sampleAPath;
+  const wavelengths = getSelectedWavelengths();
+  const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value, 10);
+  const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value, 10);
+  const mzWindow = parseFloat(document.getElementById('mz-window').value);
+
+  state.backgroundSubtractInFlight = true;
+  showLoading('Subtracting background...');
+  try {
+    const data = await api.runBackgroundSubtraction({
+      samplePath,
+      backgroundPath,
+      wavelengths,
+      uvSmoothing,
+      eicSmoothing,
+      mzTargets: state.mzTargets,
+      mzWindow,
+    });
+    state.backgroundSubtractionData = data;
+    renderBackgroundSubtraction(data);
+    toast('Background subtraction finished', 'success');
+  } catch (err) {
+    toast(`Background subtraction failed: ${err.message}`, 'error');
+  } finally {
+    state.backgroundSubtractInFlight = false;
+    hideLoading();
+  }
+}
+
+function renderBackgroundSubtraction(data) {
+  setBackgroundSubtractionEmptyState(false);
+
+  const metricsBar = document.getElementById('bgsub-metrics');
+  metricsBar.innerHTML = '';
+
+  const uvAvail = data.uv && data.uv.wavelengths && data.uv.wavelengths.length > 0;
+  const hasDualTic = Boolean(data.tic && data.tic.has_dual_polarity);
+  const msAvail = hasDualTic
+    ? Boolean((data.tic.times_pos && data.tic.times_pos.length) || (data.tic.times_neg && data.tic.times_neg.length))
+    : Boolean(data.tic && data.tic.times && data.tic.times.length);
+  const scanCount = Number(data.ms_scan_count) || 0;
+  const sampleTitle = data.sample_name || 'Sample';
+  const backgroundTitle = data.background_name || 'Background';
+  const sampleLabel = escapeHtml(sampleTitle);
+  const backgroundLabel = escapeHtml(backgroundTitle);
+  const residualChannels = (() => {
+    if (Array.isArray(data.residual_channels) && data.residual_channels.length > 0) {
+      return data.residual_channels;
+    }
+    if (data.spectrum || (Array.isArray(data.spectrum_peaks) && data.spectrum_peaks.length > 0)) {
+      return [{
+        polarity: data.spectrum_polarity === 'negative' ? 'negative' : 'positive',
+        spectrum: data.spectrum || null,
+        spectrum_peaks: Array.isArray(data.spectrum_peaks) ? data.spectrum_peaks : [],
+      }];
+    }
+    return [];
+  })();
+  const residualChannelLabels = residualChannels.map((channel) => (
+    channel.polarity === 'negative' ? 'Negative' : 'Positive'
+  ));
+
+  metricsBar.innerHTML = `
+    <div class="metric"><span class="dot blue"></span> ${sampleLabel} - ${backgroundLabel}</div>
+    <div class="metric"><span class="dot ${uvAvail ? 'green' : 'red'}"></span> UV Data ${uvAvail ? 'Available' : 'Not found'}</div>
+    <div class="metric"><span class="dot ${msAvail ? 'green' : 'red'}"></span> MS Data ${msAvail ? 'Available' : 'Not found'}</div>
+    ${residualChannelLabels.length > 0 ? `<div class="metric"><span class="dot blue"></span> Residual MS ${escapeHtml(residualChannelLabels.join(' + '))}</div>` : ''}
+    ${msAvail ? `<div class="metric"><span class="dot blue"></span> ${scanCount} MS Scans</div>` : ''}
+  `;
+
+  const uvContainer = document.getElementById('bgsub-uv-plots');
+  uvContainer.innerHTML = '';
+  if (uvAvail) {
+    const titleInput = document.getElementById('label-uv-panel');
+    const baseTitle = (titleInput && titleInput.value) || 'UV Chromatogram';
+    const plotTitle = `${baseTitle} (${sampleTitle} - ${backgroundTitle})`;
+
+    if (data.uv.wavelengths.length > 1) {
+      const combinedDiv = document.createElement('div');
+      combinedDiv.className = 'plot-container';
+      combinedDiv.id = 'bgsub-uv-combined-plot';
+      uvContainer.appendChild(combinedDiv);
+      charts.plotUV('bgsub-uv-combined-plot', data.uv.wavelengths, plotTitle);
+    } else if (data.uv.wavelengths.length === 1) {
+      const singleDiv = document.createElement('div');
+      singleDiv.className = 'plot-container';
+      singleDiv.id = 'bgsub-uv-plot-0';
+      uvContainer.appendChild(singleDiv);
+      charts.plotUV('bgsub-uv-plot-0', data.uv.wavelengths, `${plotTitle} (${data.uv.wavelengths[0].nm} nm)`);
+    }
+
+    if (data.uv.wavelengths.length > 2) {
+      data.uv.wavelengths.forEach((wl, index) => {
+        const div = document.createElement('div');
+        div.className = 'plot-container';
+        div.id = `bgsub-uv-plot-${index}`;
+        uvContainer.appendChild(div);
+        charts.plotUV(`bgsub-uv-plot-${index}`, [wl], `${plotTitle} (${wl.nm} nm)`);
+      });
+    }
+  } else {
+    uvContainer.innerHTML = '<p class="placeholder-msg">No UV data available for the selected subtraction</p>';
+  }
+
+  const ticContainer = document.getElementById('bgsub-tic-plot');
+  ticContainer.innerHTML = '';
+  if (hasDualTic) {
+    const ticTitle = document.getElementById('label-tic-panel');
+    const baseTitle = (ticTitle && ticTitle.value) || 'Total Ion Chromatogram';
+    ticContainer.className = 'plot-stack';
+
+    const posDiv = document.createElement('div');
+    posDiv.className = 'plot-container';
+    posDiv.id = 'bgsub-tic-pos-plot';
+    ticContainer.appendChild(posDiv);
+    charts.plotTIC('bgsub-tic-pos-plot', data.tic.times_pos, data.tic.intensities_pos, `${baseTitle} (+) (${sampleTitle} - ${backgroundTitle})`, '#1f77b4');
+
+    const negDiv = document.createElement('div');
+    negDiv.className = 'plot-container';
+    negDiv.id = 'bgsub-tic-neg-plot';
+    ticContainer.appendChild(negDiv);
+    charts.plotTIC('bgsub-tic-neg-plot', data.tic.times_neg, data.tic.intensities_neg, `${baseTitle} (-) (${sampleTitle} - ${backgroundTitle})`, '#d62728');
+  } else if (data.tic && data.tic.times && data.tic.times.length > 0) {
+    const ticTitle = document.getElementById('label-tic-panel');
+    ticContainer.className = 'plot-container';
+    charts.plotTIC('bgsub-tic-plot', data.tic.times, data.tic.intensities, `${(ticTitle && ticTitle.value) || 'Total Ion Chromatogram'} (${sampleTitle} - ${backgroundTitle})`);
+  } else {
+    ticContainer.className = 'plot-container';
+    ticContainer.innerHTML = '<p class="placeholder-msg">No TIC data available for the selected subtraction</p>';
+  }
+
+  const spectrumContainer = document.getElementById('bgsub-spectrum-plot');
+  const spectrumTable = document.getElementById('bgsub-spectrum-table');
+  if (spectrumContainer) {
+    spectrumContainer.innerHTML = '';
+    if (residualChannels.length > 0) {
+      spectrumContainer.className = 'plot-stack';
+      residualChannels.forEach((channel) => {
+        const polarity = channel.polarity === 'negative' ? 'negative' : 'positive';
+        const polarityLabel = polarity === 'negative' ? 'Negative' : 'Positive';
+        const plotId = `bgsub-spectrum-${polarity}-plot`;
+        const plotWrap = document.createElement('div');
+        plotWrap.className = 'plot-container';
+        plotWrap.id = plotId;
+        spectrumContainer.appendChild(plotWrap);
+        if (channel.spectrum && Array.isArray(channel.spectrum.mz) && channel.spectrum.mz.length > 0) {
+          charts.plotMassSpectrum(plotId, channel.spectrum.mz, channel.spectrum.intensities || [], [], {
+            title: `Residual Mass Spectrum (${polarityLabel} Channel, ${sampleTitle} - ${backgroundTitle})`,
+          });
+        } else {
+          plotWrap.innerHTML = `<p class="placeholder-msg">No summed MS spectrum available on the ${escapeHtml(polarityLabel.toLowerCase())} channel</p>`;
+        }
+      });
+    } else {
+      spectrumContainer.className = 'plot-container';
+      spectrumContainer.innerHTML = '<p class="placeholder-msg">No summed MS spectrum available for the selected subtraction</p>';
+    }
+  }
+
+  if (spectrumTable) {
+    spectrumTable.innerHTML = '';
+    if (residualChannels.length === 0) {
+      spectrumTable.className = 'plot-container';
+      spectrumTable.innerHTML = '<p class="placeholder-msg">No dominant residual m/z peaks were detected after subtraction</p>';
+    } else {
+      spectrumTable.className = 'plot-stack';
+      residualChannels.forEach((channel) => {
+        const polarity = channel.polarity === 'negative' ? 'negative' : 'positive';
+        const polarityLabel = polarity === 'negative' ? 'Negative' : 'Positive';
+        const peaks = Array.isArray(channel.spectrum_peaks) ? channel.spectrum_peaks : [];
+        const card = document.createElement('div');
+        card.className = 'plot-container';
+        if (peaks.length === 0) {
+          card.innerHTML = `
+            <div class="toolbar-note">Strongest single residual chromatographic peak per m/z. If one mass appears at multiple retention times, only the highest apex is kept.</div>
+            <div class="toolbar-note">Residual peak channel: ${escapeHtml(polarityLabel)}</div>
+            <p class="placeholder-msg">No dominant residual m/z peaks were detected after subtraction on the ${escapeHtml(polarityLabel.toLowerCase())} channel</p>
+          `;
+        } else {
+          const rows = peaks.map((peak) => `
+            <tr>
+              <td>${escapeHtml(String(peak.polarity || polarity))}</td>
+              <td>${Number(peak.mz).toFixed(4)}</td>
+              <td>${Number(peak.apex_time).toFixed(3)}</td>
+              <td>${Number(peak.intensity).toExponential(3)}</td>
+              <td>${Number(peak.area).toExponential(3)}</td>
+              <td>${Number(peak.relative_intensity).toFixed(1)}%</td>
+            </tr>
+          `).join('');
+          card.innerHTML = `
+            <div class="toolbar-note">Strongest single residual chromatographic peak per m/z. If one mass appears at multiple retention times, only the highest apex is kept.</div>
+            <div class="toolbar-note">Residual peak channel: ${escapeHtml(polarityLabel)}</div>
+            <div class="data-table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr><th>Polarity</th><th>m/z</th><th>Apex RT</th><th>Apex Intensity</th><th>Peak Area</th><th>Relative</th></tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          `;
+        }
+        spectrumTable.appendChild(card);
+      });
+    }
+  }
+
+  const eicContainer = document.getElementById('bgsub-eic-plots');
+  eicContainer.innerHTML = '';
+  if (data.eic && data.eic.targets && data.eic.targets.length > 0) {
+    const eicXRange = (() => {
+      let maxTime = Number.NEGATIVE_INFINITY;
+      (data.eic.targets || []).forEach((target) => {
+        (target.times || []).forEach((tv) => {
+          const t = Number(tv);
+          if (Number.isFinite(t) && t > maxTime) maxTime = t;
+        });
+      });
+      return Number.isFinite(maxTime) && maxTime > 0 ? [0, maxTime] : null;
+    })();
+
+    const combinedDiv = document.createElement('div');
+    combinedDiv.className = 'plot-container';
+    combinedDiv.id = 'bgsub-eic-combined';
+    eicContainer.appendChild(combinedDiv);
+    charts.plotEIC('bgsub-eic-combined', data.eic.targets, `Background-Subtracted EICs (${sampleTitle} - ${backgroundTitle})`, {
+      xRange: eicXRange,
+    });
+
+    data.eic.targets.forEach((target, index) => {
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = `bgsub-eic-${index}`;
+      eicContainer.appendChild(div);
+      const traceColor = charts.getColor(index);
+      const polarityLabel = target.polarity === 'negative' ? ' (-)' : ' (+)';
+      charts.plotEIC(`bgsub-eic-${index}`, [target], `Background-Subtracted EIC m/z ${target.mz.toFixed(2)}${polarityLabel}`, {
+        xRange: eicXRange,
+        colorIndexStart: index,
+        traceColor,
+        titleColor: traceColor,
+      });
+    });
+  } else if (state.mzTargets.length === 0) {
+    eicContainer.innerHTML = '<p class="placeholder-msg">Add target m/z values to compare background-subtracted EICs</p>';
+  } else {
+    eicContainer.innerHTML = '<p class="placeholder-msg">No EIC data available for the selected subtraction</p>';
+  }
 }
 
 // ===== Single Sample Tab =====
@@ -1093,6 +1490,14 @@ function getSingleSmilesAdduct() {
   return ADDUCT_SPECS[key] ? key : 'auto';
 }
 
+function normalizeSmilesMassForAdduct(exactMass, netCharge) {
+  const numericMass = Number(exactMass);
+  const numericCharge = Number(netCharge || 0);
+  if (!Number.isFinite(numericMass) || numericMass <= 0) return numericMass;
+  if (!Number.isFinite(numericCharge) || numericCharge === 0) return numericMass;
+  return numericMass - (numericCharge * PROTON_MASS);
+}
+
 async function computeSmilesMz(smiles, adductKey) {
   const props = await api.computeSmiles(smiles);
   const formula = String(props.formula || '');
@@ -1104,10 +1509,15 @@ async function computeSmilesMz(smiles, adductKey) {
 
   let mz;
   let modeLabel;
+  const neutralizedMass = normalizeSmilesMassForAdduct(exactMass, netCharge);
   if (adductKey === 'auto') {
     if (netCharge !== 0) {
-      mz = exactMass / Math.abs(netCharge);
-      modeLabel = `Intrinsic charge z=${netCharge > 0 ? `+${netCharge}` : String(netCharge)}`;
+      const ionMode = document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive';
+      const autoAdductKey = ionMode === 'negative' ? '[M-H]-' : '[M+H]+';
+      const adduct = ADDUCT_SPECS[autoAdductKey];
+      const denom = Math.abs(Number(adduct.charge) || 1);
+      mz = (neutralizedMass + Number(adduct.delta || 0)) / denom;
+      modeLabel = `${autoAdductKey} (auto from ${ionMode} mode; normalized from formal charge ${netCharge > 0 ? `+${netCharge}` : String(netCharge)})`;
     } else {
       const ionMode = document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive';
       const autoAdductKey = ionMode === 'negative' ? '[M-H]-' : '[M+H]+';
@@ -1119,15 +1529,17 @@ async function computeSmilesMz(smiles, adductKey) {
   } else {
     const adduct = ADDUCT_SPECS[adductKey] || ADDUCT_SPECS['[M+H]+'];
     const denom = Math.abs(Number(adduct.charge) || 1);
-    mz = (exactMass + Number(adduct.delta || 0)) / denom;
-    modeLabel = adductKey;
+    mz = (neutralizedMass + Number(adduct.delta || 0)) / denom;
+    modeLabel = netCharge !== 0
+      ? `${adductKey} (normalized from formal charge ${netCharge > 0 ? `+${netCharge}` : String(netCharge)})`
+      : adductKey;
   }
 
   if (!Number.isFinite(mz) || mz <= 0) {
     throw new Error('Calculated m/z is invalid');
   }
 
-  return { formula, exactMass, mz, adductKey: modeLabel, netCharge };
+  return { formula, exactMass, neutralizedMass, mz, adductKey: modeLabel, netCharge };
 }
 
 async function addSmilesMzTarget(smilesOverride = '') {
@@ -1146,9 +1558,17 @@ async function addSmilesMzTarget(smilesOverride = '') {
   try {
     const result = await computeSmilesMz(smiles, adductKey);
     mzInput.value = result.mz.toFixed(4);
+    // Set polarity selector to match the adduct before adding
+    const polaritySel = document.getElementById('mz-add-polarity');
+    if (polaritySel) {
+      polaritySel.value = result.adductKey.includes('-') && result.adductKey.includes('[M') ? 'negative' : 'positive';
+    }
     const added = addMzTargetFromInput(mzInput);
+    const massText = result.netCharge !== 0
+      ? `Exact ion mass ${result.exactMass.toFixed(5)} Da | Neutralized mass ${result.neutralizedMass.toFixed(5)} Da`
+      : `Exact mass ${result.exactMass.toFixed(5)} Da`;
     setSingleSmilesResult(
-      `${result.formula || 'Formula n/a'} | Exact mass ${result.exactMass.toFixed(5)} Da | ${result.adductKey}: m/z ${result.mz.toFixed(4)}`,
+      `${result.formula || 'Formula n/a'} | ${massText} | ${result.adductKey}: m/z ${result.mz.toFixed(4)}`,
       'success'
     );
     if (added) toast(`Added m/z ${result.mz.toFixed(4)} from SMILES`, 'success');
@@ -1349,13 +1769,29 @@ function renderSingleSample(data) {
     }
   }
 
-  // TIC plot
+  // TIC plot(s)
   const ticContainer = document.getElementById('single-tic-plot');
   ticContainer.innerHTML = '';
-  if (data.tic && data.tic.times && data.tic.times.length > 0) {
+  if (data.tic && data.tic.has_dual_polarity && data.tic.times_pos && data.tic.times_neg) {
     const ticTitle = document.getElementById('label-tic-panel');
-    ticContainer.id = 'single-tic-plot';
-    charts.plotTIC('single-tic-plot', data.tic, (ticTitle && ticTitle.value) || 'Total Ion Chromatogram');
+    const baseTitle = (ticTitle && ticTitle.value) || 'Total Ion Chromatogram';
+    ticContainer.className = 'plot-stack';
+
+    const posDiv = document.createElement('div');
+    posDiv.className = 'plot-container';
+    posDiv.id = 'single-tic-pos-plot';
+    ticContainer.appendChild(posDiv);
+    charts.plotTIC('single-tic-pos-plot', data.tic.times_pos, data.tic.intensities_pos, `${baseTitle} (+)`, '#1f77b4');
+
+    const negDiv = document.createElement('div');
+    negDiv.className = 'plot-container';
+    negDiv.id = 'single-tic-neg-plot';
+    ticContainer.appendChild(negDiv);
+    charts.plotTIC('single-tic-neg-plot', data.tic.times_neg, data.tic.intensities_neg, `${baseTitle} (−)`, '#d62728');
+  } else if (data.tic && data.tic.times && data.tic.times.length > 0) {
+    ticContainer.className = 'plot-container';
+    const ticTitle = document.getElementById('label-tic-panel');
+    charts.plotTIC('single-tic-plot', data.tic.times, data.tic.intensities, (ticTitle && ticTitle.value) || 'Total Ion Chromatogram');
   } else {
     ticContainer.innerHTML = '<p class="placeholder-msg">No MS data available</p>';
   }
@@ -1402,7 +1838,8 @@ function renderSingleSample(data) {
       div.id = `eic-single-${i}`;
       eicContainer.appendChild(div);
       const traceColor = charts.getColor(i);
-      charts.plotEIC(`eic-single-${i}`, [t], `EIC m/z ${t.mz.toFixed(2)}`, {
+      const polarityLabel = t.polarity === 'negative' ? ' (−)' : ' (+)';
+      charts.plotEIC(`eic-single-${i}`, [t], `EIC m/z ${t.mz.toFixed(2)}${polarityLabel}`, {
         xRange: eicXRange,
         colorIndexStart: i,
         traceColor,
@@ -2431,11 +2868,12 @@ async function loadProgression() {
 
       // EICs
       result.eics = [];
-      for (const mz of state.mzTargets) {
+      for (const t of state.mzTargets) {
+        const mz = t.mz; const polarity = t.polarity || 'positive';
         try {
-          const eic = await api.getEIC(s.path, mz, mzWindow, eicSmoothing);
-          result.eics.push({ mz, ...eic });
-        } catch { result.eics.push({ mz, times: [], intensities: [] }); }
+          const eic = await api.getEIC(s.path, mz, mzWindow, eicSmoothing, polarity);
+          result.eics.push({ mz, polarity, ...eic });
+        } catch { result.eics.push({ mz, polarity, times: [], intensities: [] }); }
       }
 
       return result;
@@ -2458,8 +2896,8 @@ async function loadProgression() {
 
     // EIC progressions (one per m/z target)
     if (state.mzTargets.length > 0) {
-      data.eic_progressions = state.mzTargets.map((mz, mi) => ({
-        mz,
+      data.eic_progressions = state.mzTargets.map((t, mi) => ({
+        mz: t.mz, polarity: t.polarity || 'positive',
         samples: perSample.map(s => s.eics[mi] || { times: [], intensities: [] }),
       }));
     }
@@ -2529,24 +2967,64 @@ function renderProgression(data, samples) {
 
   // TIC progression
   if (data.tic_progression) {
-    const div = document.createElement('div');
-    div.className = 'plot-container';
-    div.id = 'prog-tic-plot';
-    container.appendChild(div);
-    progressionPlotIds.push(div.id);
+    const hasDual = data.tic_progression.some(s => s.has_dual_polarity);
+    if (hasDual) {
+      // Positive panel
+      const posDiv = document.createElement('div');
+      posDiv.className = 'plot-container';
+      posDiv.id = 'prog-tic-pos-plot';
+      container.appendChild(posDiv);
+      progressionPlotIds.push(posDiv.id);
+      const ticPosSamples = data.tic_progression.map((s, i) => ({
+        times: s.times_pos || s.times,
+        intensities: s.intensities_pos || s.intensities,
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      charts.plotProgression('prog-tic-pos-plot', ticPosSamples, colors, {
+        title: `${baseTitle} - TIC (+)`,
+        yLabel: 'Intensity',
+        xRange,
+      });
 
-    const ticSamples = data.tic_progression.map((s, i) => ({
-      times: s.times,
-      intensities: s.intensities,
-      label: samples[i]?.label || `Sample ${i + 1}`,
-      role: samples[i]?.role || 'mid',
-      color: samples[i]?.color,
-    }));
-    charts.plotProgression('prog-tic-plot', ticSamples, colors, {
-      title: `${baseTitle} - TIC`,
-      yLabel: 'Intensity',
-      xRange,
-    });
+      // Negative panel
+      const negDiv = document.createElement('div');
+      negDiv.className = 'plot-container';
+      negDiv.id = 'prog-tic-neg-plot';
+      container.appendChild(negDiv);
+      progressionPlotIds.push(negDiv.id);
+      const ticNegSamples = data.tic_progression.map((s, i) => ({
+        times: s.times_neg || s.times,
+        intensities: s.intensities_neg || s.intensities,
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      charts.plotProgression('prog-tic-neg-plot', ticNegSamples, colors, {
+        title: `${baseTitle} - TIC (−)`,
+        yLabel: 'Intensity',
+        xRange,
+      });
+    } else {
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = 'prog-tic-plot';
+      container.appendChild(div);
+      progressionPlotIds.push(div.id);
+      const ticSamples = data.tic_progression.map((s, i) => ({
+        times: s.times,
+        intensities: s.intensities,
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      charts.plotProgression('prog-tic-plot', ticSamples, colors, {
+        title: `${baseTitle} - TIC`,
+        yLabel: 'Intensity',
+        xRange,
+      });
+    }
   }
 
   // EIC progressions
@@ -2565,8 +3043,9 @@ function renderProgression(data, samples) {
         role: samples[i]?.role || 'mid',
         color: samples[i]?.color,
       }));
+      const polarityLabel = eicGroup.polarity === 'negative' ? ' (−)' : ' (+)';
       charts.plotProgression(`prog-eic-plot-${gi}`, eicSamples, colors, {
-        title: `${baseTitle} - EIC m/z ${eicGroup.mz.toFixed(2)}`,
+        title: `${baseTitle} - EIC m/z ${eicGroup.mz.toFixed(2)}${polarityLabel}`,
         yLabel: 'Intensity',
         xRange,
       });
@@ -2617,7 +3096,6 @@ async function runEICBatch() {
       targets: state.mzTargets,
       mz_window: parseFloat(document.getElementById('mz-window').value),
       smoothing: parseInt(document.getElementById('eic-smoothing').value),
-      ion_mode: document.querySelector('input[name="ion-mode"]:checked').value,
     });
     if (Array.isArray(data?.targets)) {
       data.targets.forEach((target) => normalizeTargetAutoPeaks(target));

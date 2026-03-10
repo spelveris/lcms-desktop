@@ -17,8 +17,16 @@ const BACKEND_PORT = 8741;
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
 let mainWindow = null;
+let splashWindow = null;
 let backendProcess = null;
 let isQuitting = false;
+let backendReady = false;
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 // ---------------------------------------------------------------------------
 // Backend lifecycle
@@ -133,83 +141,203 @@ function waitForBackend(retries = 30, interval = 500) {
 // Window
 // ---------------------------------------------------------------------------
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    title: "CATrupole",
-    show: false, // Hide until ready to prevent white flash
+function getTrackedWindow(windowRef) {
+  return windowRef && !windowRef.isDestroyed() ? windowRef : null;
+}
+
+function getMainWindow() {
+  const trackedWindow = getTrackedWindow(mainWindow);
+  if (trackedWindow) return trackedWindow;
+
+  const existingWindow = BrowserWindow.getAllWindows().find(
+    (candidate) => candidate !== splashWindow && !candidate.isDestroyed()
+  );
+  mainWindow = existingWindow || null;
+  return mainWindow;
+}
+
+function revealWindow(windowRef) {
+  const windowToReveal = getTrackedWindow(windowRef);
+  if (!windowToReveal) return;
+
+  app.focus();
+  if (windowToReveal.isMinimized()) {
+    windowToReveal.restore();
+  }
+  if (!windowToReveal.isVisible()) {
+    windowToReveal.show();
+  }
+  windowToReveal.focus();
+  if (typeof windowToReveal.moveTop === "function") {
+    windowToReveal.moveTop();
+  }
+}
+
+function closeSplashWindow() {
+  const trackedSplash = getTrackedWindow(splashWindow);
+  if (!trackedSplash) {
+    splashWindow = null;
+    return;
+  }
+
+  splashWindow = null;
+  trackedSplash.close();
+}
+
+function createSplashWindow() {
+  const trackedSplash = getTrackedWindow(splashWindow);
+  if (trackedSplash) return trackedSplash;
+
+  const splash = new BrowserWindow({
+    width: 420,
+    height: 280,
+    minWidth: 420,
+    minHeight: 280,
+    maxWidth: 420,
+    maxHeight: 280,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    backgroundColor: "#0f172a",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
 
+  splash.loadFile(path.join(__dirname, "splash.html"), {
+    query: { appVersion: app.getVersion() },
+  });
+
+  splash.once("ready-to-show", () => {
+    revealWindow(splash);
+  });
+
+  splash.on("closed", () => {
+    if (splashWindow === splash) {
+      splashWindow = null;
+    }
+  });
+
+  splashWindow = splash;
+  return splash;
+}
+
+function createWindow() {
+  const existingWindow = getMainWindow();
+  if (existingWindow) {
+    revealWindow(existingWindow);
+    return existingWindow;
+  }
+
+  const window = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    title: "CATrupole",
+    show: false, // Hide until ready to prevent white flash
+    backgroundColor: "#1e1e2e",
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  mainWindow = window;
+
   // Load the frontend HTML and pass app version into renderer.
-  mainWindow.loadFile(path.join(__dirname, "..", "frontend", "index.html"), {
+  window.loadFile(path.join(__dirname, "..", "frontend", "index.html"), {
     query: { appVersion: app.getVersion() },
   });
 
   // Show window only after content is rendered
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
+  window.once("ready-to-show", () => {
+    closeSplashWindow();
+    revealWindow(window);
   });
 
-  mainWindow.on("close", (event) => {
+  window.on("close", (event) => {
     // On macOS, red close should hide the last window and keep the app running unless quitting explicitly.
     if (process.platform === "darwin" && !isQuitting) {
       event.preventDefault();
-      mainWindow.hide();
+      window.hide();
+      return;
     }
   });
 
-  mainWindow.on("closed", () => {
-    mainWindow = null;
+  window.on("closed", () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
   });
+
+  return window;
+}
+
+function restoreOrCreateMainWindow() {
+  const existingWindow = getMainWindow();
+  if (existingWindow) {
+    revealWindow(existingWindow);
+    return existingWindow;
+  }
+
+  if (!backendReady) {
+    const trackedSplash = getTrackedWindow(splashWindow);
+    if (trackedSplash) revealWindow(trackedSplash);
+    return null;
+  }
+
+  return createWindow();
 }
 
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
 
-app.whenReady().then(async () => {
-  startBackend();
+if (gotSingleInstanceLock) {
+  app.on("second-instance", () => {
+    restoreOrCreateMainWindow();
+  });
 
-  try {
-    await waitForBackend();
-  } catch (err) {
-    dialog.showErrorBox(
-      "Backend Error",
-      "Could not start the Python backend.\nMake sure Python 3 and requirements are installed.\n\n" +
-        err.message
-    );
-    app.quit();
-    return;
-  }
+  app.whenReady().then(async () => {
+    createSplashWindow();
+    startBackend();
 
-  createWindow();
-});
+    try {
+      await waitForBackend();
+      backendReady = true;
+    } catch (err) {
+      closeSplashWindow();
+      dialog.showErrorBox(
+        "Backend Error",
+        "Could not start the Python backend.\nMake sure Python 3 and requirements are installed.\n\n" +
+          err.message
+      );
+      app.quit();
+      return;
+    }
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    stopBackend();
-    app.quit();
-  }
-});
-
-app.on("before-quit", () => {
-  isQuitting = true;
-  stopBackend();
-});
-
-app.on("activate", () => {
-  if (!mainWindow) {
     createWindow();
-    return;
-  }
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
-  mainWindow.show();
-  mainWindow.focus();
-});
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") {
+      stopBackend();
+      app.quit();
+    }
+  });
+
+  app.on("before-quit", () => {
+    isQuitting = true;
+    closeSplashWindow();
+    stopBackend();
+  });
+
+  app.on("activate", () => {
+    restoreOrCreateMainWindow();
+  });
+}

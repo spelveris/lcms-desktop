@@ -40,7 +40,7 @@ def smooth_data(data: np.ndarray, window_size: int = 5) -> np.ndarray:
         return np.convolve(data, np.ones(window_size) / window_size, mode='same')
 
 
-def extract_eic(sample: SampleData, target_mz: float, window: float = 0.5) -> Optional[np.ndarray]:
+def extract_eic(sample: SampleData, target_mz: float, window: float = 0.5, ion_mode: str = 'positive') -> Optional[np.ndarray]:
     """
     Extract ion chromatogram (EIC) for a given m/z value.
 
@@ -48,25 +48,37 @@ def extract_eic(sample: SampleData, target_mz: float, window: float = 0.5) -> Op
         sample: SampleData object with loaded MS data
         target_mz: Target m/z value
         window: m/z window (+/- this value)
+        ion_mode: 'positive' or 'negative' — selects which MS detector to use
 
     Returns:
         Array of intensities at each time point, or None if no MS data
     """
-    if sample.ms_scans is None or sample.ms_times is None:
+    # Select polarity-specific data if available, else fall back to generic
+    if ion_mode == 'negative' and sample.ms_scans_neg is not None:
+        scans = sample.ms_scans_neg
+        mz_axis = sample.ms_mz_axis_neg
+    elif sample.ms_scans_pos is not None:
+        scans = sample.ms_scans_pos
+        mz_axis = sample.ms_mz_axis_pos
+    else:
+        scans = sample.ms_scans
+        mz_axis = sample.ms_mz_axis
+
+    if scans is None:
         return None
 
     mz_min = target_mz - window
     mz_max = target_mz + window
 
     # Check if we have a shared m/z axis (1D scans)
-    if sample.ms_mz_axis is not None:
+    if mz_axis is not None:
         # Find indices within m/z window
-        mask = (sample.ms_mz_axis >= mz_min) & (sample.ms_mz_axis <= mz_max)
+        mask = (mz_axis >= mz_min) & (mz_axis <= mz_max)
         if not np.any(mask):
-            return np.zeros(len(sample.ms_scans))
+            return np.zeros(len(scans))
 
         eic = []
-        for scan in sample.ms_scans:
+        for scan in scans:
             if scan is None:
                 eic.append(0)
             elif isinstance(scan, np.ndarray) and scan.ndim == 1:
@@ -78,7 +90,7 @@ def extract_eic(sample: SampleData, target_mz: float, window: float = 0.5) -> Op
 
     # Fall back to per-scan m/z extraction (2D scans)
     eic = []
-    for scan in sample.ms_scans:
+    for scan in scans:
         if scan is None:
             eic.append(0)
             continue
