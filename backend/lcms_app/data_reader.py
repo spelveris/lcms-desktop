@@ -96,9 +96,19 @@ class SampleData:
         self.uv_times: Optional[np.ndarray] = None
         self.uv_data: Optional[np.ndarray] = None
         self.uv_wavelengths: Optional[np.ndarray] = None
+        # Per-polarity MS data (MSD1=positive, MSD2=negative)
+        self.ms_times_pos: Optional[np.ndarray] = None
+        self.ms_scans_pos: Optional[list] = None
+        self.ms_mz_axis_pos: Optional[np.ndarray] = None
+        self.tic_pos: Optional[np.ndarray] = None
+        self.ms_times_neg: Optional[np.ndarray] = None
+        self.ms_scans_neg: Optional[list] = None
+        self.ms_mz_axis_neg: Optional[np.ndarray] = None
+        self.tic_neg: Optional[np.ndarray] = None
+        # Backward-compat aliases (point to positive, or negative if positive unavailable)
         self.ms_times: Optional[np.ndarray] = None
         self.ms_scans: Optional[list] = None
-        self.ms_mz_axis: Optional[np.ndarray] = None  # m/z values for scans
+        self.ms_mz_axis: Optional[np.ndarray] = None
         self.tic: Optional[np.ndarray] = None
         self.acq_method: Optional[str] = None
         self.acq_info: dict = {}  # All key-value pairs from acq.txt
@@ -113,6 +123,11 @@ class SampleData:
     @property
     def error(self) -> Optional[str]:
         return self._error
+
+    @property
+    def has_dual_polarity(self) -> bool:
+        """True if both positive and negative MS data are available."""
+        return self.ms_times_pos is not None and self.ms_times_neg is not None
 
     @property
     def is_c4_method(self) -> bool:
@@ -140,6 +155,42 @@ class SampleData:
                         self.acq_method = val
         except Exception:
             pass
+
+    def _calc_tic(self, scans: list) -> np.ndarray:
+        """Compute TIC array from a list of scan objects."""
+        tic = []
+        for scan in scans:
+            if scan is None:
+                tic.append(0)
+            elif hasattr(scan, 'intensity'):
+                tic.append(np.sum(scan.intensity))
+            elif hasattr(scan, 'intensities'):
+                tic.append(np.sum(scan.intensities))
+            elif isinstance(scan, np.ndarray):
+                tic.append(np.sum(scan[:, 1]) if scan.ndim == 2 else np.sum(scan))
+            elif isinstance(scan, dict):
+                tic.append(np.sum(scan.get('intensity', scan.get('intensities', [0]))))
+            else:
+                tic.append(0)
+        return np.array(tic)
+
+    def _load_ms_from_df(self, df):
+        """Extract (times, scans, mz_axis, tic) from a rainbow datafile object."""
+        times = None
+        for attr in ['xlabels', 'times', 'retention_times', 'x']:
+            if hasattr(df, attr):
+                times = np.array(getattr(df, attr))
+                break
+        scans = None
+        for attr in ['data', 'scans', 'spectra']:
+            if hasattr(df, attr):
+                scans = getattr(df, attr)
+                break
+        mz_axis = None
+        if hasattr(df, 'ylabels'):
+            mz_axis = np.array(df.ylabels, dtype=float)
+        tic_arr = self._calc_tic(scans) if scans is not None else None
+        return times, scans, mz_axis, tic_arr
 
     def _extract_detector_data(self, detector_data):
         """Extract times, data, and labels from a detector data object."""
@@ -222,6 +273,11 @@ class SampleData:
                             # Use prec=1 for 0.1 Da m/z resolution (sub-dalton precision)
                             df = chemstation.parse_file(filepath, prec=1)
                             if df is not None:
+                                # Set name so dual-polarity detection can use it
+                                try:
+                                    df.name = f
+                                except Exception:
+                                    pass
                                 result.by_detector['MS'] = df
                                 result.datafiles.append(df)
                                 self._debug_info[f'fallback_parsed_{f}'] = 'success'
@@ -328,69 +384,7 @@ class SampleData:
                         self.uv_wavelengths = np.array(all_uv_wavelengths[:all_uv_data[0].shape[1]])
                         self._debug_info['uv_combine_error'] = str(e)
 
-                # Try MS detector
-                ms_detector_names = ['MS', 'MSD', 'ms', 'MS1']
-                for det_name in ms_detector_names:
-                    if det_name in data.by_detector:
-                        ms_detector = data.by_detector[det_name]
-
-                        # Handle list
-                        if isinstance(ms_detector, list) and len(ms_detector) > 0:
-                            ms_detector = ms_detector[0]
-
-                        if ms_detector is not None:
-                            self._debug_info['ms_detector'] = det_name
-                            self._debug_info['ms_detector_type'] = type(ms_detector).__name__
-                            self._debug_info['ms_detector_attrs'] = [a for a in dir(ms_detector) if not a.startswith('_')]
-
-                            # Get times
-                            for attr in ['xlabels', 'times', 'retention_times', 'x']:
-                                if hasattr(ms_detector, attr):
-                                    self.ms_times = np.array(getattr(ms_detector, attr))
-                                    self._debug_info['ms_times_attr'] = attr
-                                    break
-
-                            # Get scans
-                            for attr in ['data', 'scans', 'spectra']:
-                                if hasattr(ms_detector, attr):
-                                    self.ms_scans = getattr(ms_detector, attr)
-                                    self._debug_info['ms_scans_attr'] = attr
-                                    break
-
-                            # Get m/z axis (ylabels contains m/z values for 1D scans)
-                            if hasattr(ms_detector, 'ylabels'):
-                                self.ms_mz_axis = np.array(ms_detector.ylabels, dtype=float)
-                                self._debug_info['ms_mz_range'] = f"{self.ms_mz_axis.min():.1f} - {self.ms_mz_axis.max():.1f}"
-
-                            if self.ms_scans is not None and len(self.ms_scans) > 0:
-                                # Store first scan info for debugging
-                                first_scan = self.ms_scans[0]
-                                self._debug_info['scan_type'] = type(first_scan).__name__
-                                if hasattr(first_scan, '__dict__'):
-                                    self._debug_info['scan_attrs'] = list(first_scan.__dict__.keys())
-                                elif isinstance(first_scan, np.ndarray):
-                                    self._debug_info['scan_shape'] = first_scan.shape
-
-                                # Calculate TIC
-                                tic = []
-                                for scan in self.ms_scans:
-                                    if scan is None:
-                                        tic.append(0)
-                                    elif hasattr(scan, 'intensity'):
-                                        tic.append(np.sum(scan.intensity))
-                                    elif hasattr(scan, 'intensities'):
-                                        tic.append(np.sum(scan.intensities))
-                                    elif isinstance(scan, np.ndarray):
-                                        if scan.ndim == 2:
-                                            tic.append(np.sum(scan[:, 1]))
-                                        else:
-                                            tic.append(np.sum(scan))
-                                    elif isinstance(scan, dict):
-                                        tic.append(np.sum(scan.get('intensity', scan.get('intensities', [0]))))
-                                    else:
-                                        tic.append(0)
-                                self.tic = np.array(tic)
-                            break
+                # MS loading is handled below via datafiles (supports dual polarity)
 
             # Also check for datafiles attribute - collect ALL UV wavelengths
             if hasattr(data, 'datafiles'):
@@ -425,16 +419,7 @@ class SampleData:
                                         uv_times_from_df = times
                             self._debug_info[f'df_uv_{df_name}'] = f"wl={wl_arr.tolist()}"
 
-                    elif 'MS' in str(det_type).upper():
-                        if self.ms_times is None:
-                            for attr in ['xlabels', 'times', 'retention_times', 'x']:
-                                if hasattr(df, attr):
-                                    self.ms_times = np.array(getattr(df, attr))
-                                    break
-                            for attr in ['data', 'scans', 'spectra']:
-                                if hasattr(df, attr):
-                                    self.ms_scans = getattr(df, attr)
-                                    break
+                # MS files are handled below
 
                 # Merge extra UV data if found
                 if extra_uv_data:
@@ -450,6 +435,48 @@ class SampleData:
                         except Exception as e:
                             self._debug_info['uv_merge_error'] = str(e)
                     self._debug_info['extra_uv_wavelengths'] = extra_uv_wl
+
+            # --- Dual-polarity MS loading ---
+            # Collect all .MS datafiles and sort by name (MSD1 → positive, MSD2 → negative)
+            ms_datafiles = []
+            if hasattr(data, 'datafiles'):
+                for df in data.datafiles:
+                    df_name = getattr(df, 'name', '')
+                    if str(df_name).upper().endswith('.MS'):
+                        ms_datafiles.append((str(df_name).upper(), df))
+                ms_datafiles.sort(key=lambda x: x[0])
+
+            if ms_datafiles:
+                name0, df0 = ms_datafiles[0]
+                t, s, m, tc = self._load_ms_from_df(df0)
+                self.ms_times_pos, self.ms_scans_pos, self.ms_mz_axis_pos, self.tic_pos = t, s, m, tc
+                self._debug_info['ms_pos_file'] = name0
+                self._debug_info['ms_pos_scans'] = len(s) if s is not None else 0
+
+                if len(ms_datafiles) >= 2:
+                    name1, df1 = ms_datafiles[1]
+                    t, s, m, tc = self._load_ms_from_df(df1)
+                    self.ms_times_neg, self.ms_scans_neg, self.ms_mz_axis_neg, self.tic_neg = t, s, m, tc
+                    self._debug_info['ms_neg_file'] = name1
+                    self._debug_info['ms_neg_scans'] = len(s) if s is not None else 0
+            else:
+                # Fallback: use by_detector if datafiles not available
+                for det_name in ['MS', 'MSD', 'ms', 'MS1']:
+                    if hasattr(data, 'by_detector') and det_name in data.by_detector:
+                        ms_obj = data.by_detector[det_name]
+                        if isinstance(ms_obj, list) and ms_obj:
+                            ms_obj = ms_obj[0]
+                        if ms_obj is not None:
+                            t, s, m, tc = self._load_ms_from_df(ms_obj)
+                            self.ms_times_pos, self.ms_scans_pos, self.ms_mz_axis_pos, self.tic_pos = t, s, m, tc
+                            self._debug_info['ms_pos_file'] = det_name
+                            break
+
+            # Backward-compat aliases: positive first, negative as fallback
+            self.ms_times = self.ms_times_pos if self.ms_times_pos is not None else self.ms_times_neg
+            self.ms_scans = self.ms_scans_pos if self.ms_scans_pos is not None else self.ms_scans_neg
+            self.ms_mz_axis = self.ms_mz_axis_pos if self.ms_mz_axis_pos is not None else self.ms_mz_axis_neg
+            self.tic = self.tic_pos if self.tic_pos is not None else self.tic_neg
 
             self._loaded = True
             return True

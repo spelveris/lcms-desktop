@@ -67,8 +67,8 @@ const api = {
     return apiFetch(`/api/tic?path=${encodeURIComponent(path)}`);
   },
 
-  getEIC(path, mz, window_, smooth) {
-    return apiFetch(`/api/eic?${qs({ path, mz, window: window_, smooth })}`);
+  getEIC(path, mz, window_, smooth, ionMode = 'positive') {
+    return apiFetch(`/api/eic?${qs({ path, mz, window: window_, smooth, ion_mode: ionMode })}`);
   },
 
   getMSSpectrum(path, time) {
@@ -204,9 +204,12 @@ const api = {
     // TIC
     promises.push(this.getTIC(path).catch(() => null));
 
-    // EICs
-    const eicPromises = (mzTargets || []).map(mz =>
-      this.getEIC(path, mz, mzWindow, eicSmoothing).catch(() => null)
+    // EICs — mzTargets can be plain numbers (legacy) or {mz, polarity} objects
+    const normalizedTargets = (mzTargets || []).map(t =>
+      typeof t === 'object' && t !== null ? t : { mz: Number(t), polarity: 'positive' }
+    );
+    const eicPromises = normalizedTargets.map(t =>
+      this.getEIC(path, t.mz, mzWindow, eicSmoothing, t.polarity || 'positive').catch(() => null)
     );
     promises.push(Promise.all(eicPromises));
 
@@ -223,9 +226,10 @@ const api = {
 
     const eicTargets = eicResults
       .filter(Boolean)
-      .map((eic) => ({
+      .map((eic, i) => ({
         mz: eic.target_mz ?? eic.mz,
         target_mz: eic.target_mz ?? eic.mz,
+        polarity: eic.ion_mode || normalizedTargets[i]?.polarity || 'positive',
         times: eic.times || [],
         intensities: eic.intensities || [],
       }));
@@ -239,15 +243,38 @@ const api = {
     };
   },
 
+  runBackgroundSubtraction(params) {
+    const payload = {
+      sample_path: params.samplePath,
+      background_path: params.backgroundPath,
+      wavelengths: params.wavelengths || [],
+      mz_targets: params.mzTargets || params.mz_targets || [],
+      mz_window: params.mzWindow ?? params.mz_window,
+      uv_smoothing: params.uvSmoothing ?? params.uv_smoothing ?? 0,
+      eic_smoothing: params.eicSmoothing ?? params.eic_smoothing ?? 0,
+    };
+    return apiFetch('/api/background-subtraction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   /**
    * Run EIC batch: fetch EIC + peaks for each target m/z.
    */
   async runEICBatch(params) {
     const { path, targets, mz_window, smoothing } = params;
 
-    const results = await Promise.all(targets.map(async (mz) => {
+    // Normalize targets: support plain numbers (legacy) or {mz, polarity} objects
+    const normalizedTargets = targets.map(t =>
+      (typeof t === 'object' && t !== null) ? t : { mz: Number(t), polarity: 'positive' }
+    );
+
+    const results = await Promise.all(normalizedTargets.map(async (target) => {
+      const { mz, polarity = 'positive' } = target;
       const [eicData, peakData] = await Promise.all([
-        this.getEIC(path, mz, mz_window, smoothing).catch(() => null),
+        this.getEIC(path, mz, mz_window, smoothing, polarity).catch(() => null),
         // EIC batch uses a slightly more sensitive detector to avoid missing
         // lower-abundance shoulder peaks in multi-peak traces.
         this.findPeaks(path, 'eic', {
@@ -271,6 +298,7 @@ const api = {
 
       return {
         mz,
+        polarity,
         times: eicData ? eicData.times : [],
         intensities: eicData ? eicData.intensities : [],
         peaks,

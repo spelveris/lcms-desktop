@@ -191,16 +191,17 @@ const charts = {
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
 
-  plotTIC(divId, data, title) {
+  plotTIC(divId, times, intensities, title, color) {
     const traces = [{
-      x: data.times, y: data.intensities,
+      x: times, y: intensities,
       type: 'scatter', mode: 'lines', name: 'TIC',
-      line: { color: '#ff7f0e', width: getLineWidth() },
+      line: { color: color || '#ff7f0e', width: getLineWidth() },
     }];
     const layout = mergeLayout({
       title: { text: title || 'Total Ion Chromatogram', font: { size: 14 } },
       xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
-      showlegend: false, height: getContainerHeight(divId, 300),
+      showlegend: false,
+      height: getContainerHeight(divId, 300),
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
@@ -483,12 +484,12 @@ const charts = {
       : getContainerHeight(divId, 380);
 
     const layout = mergeLayout({
-      title: { text: 'Mass Spectrum', font: { size: 14 } },
+      title: { text: options.title || 'Mass Spectrum', font: { size: 14 } },
       xaxis: { title: 'm/z', automargin: true }, yaxis: { title: 'Intensity', automargin: true },
       showlegend: false,
       height: plotHeight,
       margin: { l: 64, r: 44, t: 40, b: 96 },
-      annotations,
+      annotations: plotAnnotations,
       shapes,
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);

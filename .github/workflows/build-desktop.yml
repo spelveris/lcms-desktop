@@ -2,6 +2,10 @@ name: Build and Release Desktop Apps
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - master
   push:
     branches:
       - main

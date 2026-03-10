@@ -181,6 +181,7 @@
   <main id="main-content" class="main-content">
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tab-single">Single Sample</button>
+      <button class="tab-btn" data-tab="tab-background-subtraction">Background Subtraction</button>
       <button class="tab-btn" data-tab="tab-eic-batch">EIC Batch</button>
       <button class="tab-btn" data-tab="tab-deconv">Deconvolution</button>
       <button class="tab-btn" data-tab="tab-batch-deconv">Batch Deconvolution</button>
@@ -208,6 +209,10 @@
           <input type="range" id="mz-window" min="0.1" max="2.0" value="0.5" step="0.1">
         </label>
         <input type="number" id="single-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
+        <select id="mz-add-polarity" class="mz-polarity-sel" title="Ionization mode for this m/z">
+          <option value="positive">+ pos</option>
+          <option value="negative">− neg</option>
+        </select>
         <button id="btn-single-add-mz" class="btn btn-sm btn-primary">Add</button>
         <button id="btn-clear-mz" class="btn btn-sm btn-danger">Clear All</button>
         <div id="single-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
@@ -246,6 +251,35 @@
         </div>
         <div class="col" id="single-right">
           <div id="single-eic-plots" class="plot-stack"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-background-subtraction" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <label>Sample A:
+          <select id="bgsub-sample-a-select"><option value="">-- Select sample --</option></select>
+        </label>
+        <label>Sample B:
+          <select id="bgsub-sample-b-select"><option value="">-- Select sample --</option></select>
+        </label>
+        <label>Background:
+          <select id="bgsub-background-select"><option value="">-- Choose two files first --</option></select>
+        </label>
+        <button id="btn-run-bgsub" class="btn btn-primary">Subtract Background</button>
+        <span class="toolbar-note">Choose two already selected files, then mark which one should be treated as the background trace.</span>
+      </div>
+      <div id="bgsub-metrics" class="metrics-bar"></div>
+      <div id="bgsub-empty-state" class="quote-empty-stack"></div>
+      <div id="bgsub-results" class="two-col hidden">
+        <div class="col" id="bgsub-left">
+          <div id="bgsub-uv-plots" class="plot-stack"></div>
+          <div id="bgsub-tic-plot" class="plot-container"></div>
+        </div>
+        <div class="col" id="bgsub-right">
+          <div id="bgsub-spectrum-plot" class="plot-container"></div>
+          <div id="bgsub-spectrum-table" class="plot-container"></div>
+          <div id="bgsub-eic-plots" class="plot-stack"></div>
         </div>
       </div>
     </div>

@@ -53,7 +53,7 @@ import plotting
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="LC-MS Desktop API", version="0.1.0")
+app = FastAPI(title="LC-MS Desktop API", version=lcms_config.APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
@@ -142,12 +142,20 @@ def _resolve_node_command() -> Optional[str]:
             _kw = {}
             if sys.platform == "win32":
                 _kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+            # When the candidate is the Electron binary (set via LCMS_NODE), we must
+            # set ELECTRON_RUN_AS_NODE=1 so Electron acts as a Node.js runtime instead
+            # of launching the GUI app (which on macOS causes a brief window flash and
+            # a non-zero exit code, causing this check to incorrectly reject it).
+            check_env = None
+            if candidate == preferred and preferred:
+                check_env = {**os.environ, "ELECTRON_RUN_AS_NODE": "1"}
             check = subprocess.run(
                 [candidate_path, "--version"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=5,
+                env=check_env,
                 **_kw,
             )
             if check.returncode == 0:
@@ -387,6 +395,330 @@ def _run_default_report_deconvolution(mz_arr: np.ndarray, intensity_arr: np.ndar
     return filtered
 
 
+def _subtract_chromatograms(
+    sample_times,
+    sample_intensities,
+    background_times,
+    background_intensities,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Align the background signal onto the sample time axis and subtract it."""
+    sample_times_arr = np.asarray(sample_times if sample_times is not None else [], dtype=float)
+    sample_int_arr = np.asarray(sample_intensities if sample_intensities is not None else [], dtype=float)
+    if sample_times_arr.size == 0 or sample_int_arr.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    sample_len = min(sample_times_arr.size, sample_int_arr.size)
+    sample_times_arr = sample_times_arr[:sample_len]
+    sample_int_arr = sample_int_arr[:sample_len]
+
+    background_times_arr = np.asarray(background_times if background_times is not None else [], dtype=float)
+    background_int_arr = np.asarray(background_intensities if background_intensities is not None else [], dtype=float)
+    if background_times_arr.size == 0 or background_int_arr.size == 0:
+        return sample_times_arr, sample_int_arr
+
+    background_len = min(background_times_arr.size, background_int_arr.size)
+    background_times_arr = background_times_arr[:background_len]
+    background_int_arr = background_int_arr[:background_len]
+    if background_times_arr.size == 0:
+        return sample_times_arr, sample_int_arr
+
+    sample_order = np.argsort(sample_times_arr)
+    sample_times_arr = sample_times_arr[sample_order]
+    sample_int_arr = sample_int_arr[sample_order]
+
+    background_order = np.argsort(background_times_arr)
+    background_times_arr = background_times_arr[background_order]
+    background_int_arr = background_int_arr[background_order]
+
+    background_times_arr, unique_idx = np.unique(background_times_arr, return_index=True)
+    background_int_arr = background_int_arr[unique_idx]
+
+    aligned_background = np.interp(
+        sample_times_arr,
+        background_times_arr,
+        background_int_arr,
+        left=0.0,
+        right=0.0,
+    )
+    return sample_times_arr, sample_int_arr - aligned_background
+
+
+def _subtract_spectra(
+    sample_mz,
+    sample_intensities,
+    background_mz,
+    background_intensities,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Align the background spectrum onto the sample m/z axis and subtract it."""
+    sample_mz_arr = np.asarray(sample_mz if sample_mz is not None else [], dtype=float)
+    sample_int_arr = np.asarray(sample_intensities if sample_intensities is not None else [], dtype=float)
+    if sample_mz_arr.size == 0 or sample_int_arr.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    sample_len = min(sample_mz_arr.size, sample_int_arr.size)
+    sample_mz_arr = sample_mz_arr[:sample_len]
+    sample_int_arr = sample_int_arr[:sample_len]
+
+    background_mz_arr = np.asarray(background_mz if background_mz is not None else [], dtype=float)
+    background_int_arr = np.asarray(background_intensities if background_intensities is not None else [], dtype=float)
+    if background_mz_arr.size == 0 or background_int_arr.size == 0:
+        return sample_mz_arr, sample_int_arr
+
+    background_len = min(background_mz_arr.size, background_int_arr.size)
+    background_mz_arr = background_mz_arr[:background_len]
+    background_int_arr = background_int_arr[:background_len]
+    if background_mz_arr.size == 0:
+        return sample_mz_arr, sample_int_arr
+
+    sample_order = np.argsort(sample_mz_arr)
+    sample_mz_arr = sample_mz_arr[sample_order]
+    sample_int_arr = sample_int_arr[sample_order]
+
+    background_order = np.argsort(background_mz_arr)
+    background_mz_arr = background_mz_arr[background_order]
+    background_int_arr = background_int_arr[background_order]
+
+    background_mz_arr, unique_idx = np.unique(background_mz_arr, return_index=True)
+    background_int_arr = background_int_arr[unique_idx]
+
+    aligned_background = np.interp(
+        sample_mz_arr,
+        background_mz_arr,
+        background_int_arr,
+        left=0.0,
+        right=0.0,
+    )
+    return sample_mz_arr, sample_int_arr - aligned_background
+
+
+def _get_channel_ms_data(sample: SampleData, polarity: Optional[str]) -> tuple:
+    """Return channel-specific MS arrays, falling back to the generic alias if needed."""
+    if polarity == "negative" and sample.ms_times_neg is not None and sample.ms_scans_neg is not None:
+        return sample.ms_times_neg, sample.ms_scans_neg, sample.ms_mz_axis_neg, sample.tic_neg
+    if polarity == "positive" and sample.ms_times_pos is not None and sample.ms_scans_pos is not None:
+        return sample.ms_times_pos, sample.ms_scans_pos, sample.ms_mz_axis_pos, sample.tic_pos
+    return sample.ms_times, sample.ms_scans, sample.ms_mz_axis, sample.tic
+
+
+def _select_shared_ms_polarity(sample: SampleData, background: SampleData) -> Optional[str]:
+    """Choose one polarity that both samples can compare directly, preferring positive."""
+    if sample.ms_times_pos is not None and background.ms_times_pos is not None:
+        return "positive"
+    if sample.ms_times_neg is not None and background.ms_times_neg is not None:
+        return "negative"
+    if sample.ms_times_pos is not None:
+        return "positive"
+    if sample.ms_times_neg is not None:
+        return "negative"
+    return None
+
+
+def _get_shared_ms_polarities(sample: SampleData, background: SampleData) -> list[str]:
+    """Return the shared MS polarities available in both files, preferring positive first."""
+    polarities = []
+    if sample.ms_times_pos is not None and background.ms_times_pos is not None:
+        polarities.append("positive")
+    if sample.ms_times_neg is not None and background.ms_times_neg is not None:
+        polarities.append("negative")
+    if polarities:
+        return polarities
+
+    fallback = _select_shared_ms_polarity(sample, background)
+    return [fallback] if fallback else []
+
+
+def _sum_spectra_for_polarity(
+    sample: SampleData,
+    start_time: float,
+    end_time: float,
+    polarity: Optional[str],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sum mass spectra within a time range for the requested polarity."""
+    times, scans, mz_axis, _ = _get_channel_ms_data(sample, polarity)
+    if scans is None or times is None:
+        return np.array([]), np.array([])
+
+    time_mask = (times >= start_time) & (times <= end_time)
+    scan_indices = np.where(time_mask)[0]
+    if len(scan_indices) == 0:
+        return np.array([]), np.array([])
+
+    if mz_axis is not None:
+        summed_intensities = np.zeros(len(mz_axis))
+        for idx in scan_indices:
+            scan = scans[idx]
+            if scan is not None and isinstance(scan, np.ndarray):
+                summed_intensities += scan
+        return np.asarray(mz_axis, dtype=float), summed_intensities
+
+    all_mz = []
+    all_int = []
+    for idx in scan_indices:
+        scan = scans[idx]
+        if scan is None:
+            continue
+
+        mz = None
+        intensity = None
+        if hasattr(scan, "mz") and hasattr(scan, "intensity"):
+            mz = np.array(scan.mz)
+            intensity = np.array(scan.intensity)
+        elif hasattr(scan, "masses") and hasattr(scan, "intensities"):
+            mz = np.array(scan.masses)
+            intensity = np.array(scan.intensities)
+        elif isinstance(scan, np.ndarray) and scan.ndim == 2:
+            mz = scan[:, 0]
+            intensity = scan[:, 1]
+        elif isinstance(scan, dict):
+            mz = np.array(scan.get("mz", scan.get("masses", [])))
+            intensity = np.array(scan.get("intensity", scan.get("intensities", [])))
+
+        if mz is not None and intensity is not None and len(mz) > 0:
+            all_mz.extend(mz)
+            all_int.extend(intensity)
+
+    if len(all_mz) == 0:
+        return np.array([]), np.array([])
+
+    all_mz = np.array(all_mz)
+    all_int = np.array(all_int)
+    mz_bins = np.round(all_mz, 1)
+    unique_mz = np.unique(mz_bins)
+    summed_intensities = np.zeros(len(unique_mz))
+    for i, mz_val in enumerate(unique_mz):
+        summed_intensities[i] = np.sum(all_int[mz_bins == mz_val])
+
+    return unique_mz, summed_intensities
+
+
+def _build_residual_ms_channel(
+    sample: SampleData,
+    background: SampleData,
+    polarity: str,
+    mz_window: float,
+) -> Optional[dict]:
+    """Build one residual MS channel summary for the requested polarity."""
+    sample_channel_times, _, _, _ = _get_channel_ms_data(sample, polarity)
+    background_channel_times, _, _, _ = _get_channel_ms_data(background, polarity)
+    if sample_channel_times is None or len(sample_channel_times) <= 1:
+        return None
+
+    sample_mz, sample_intensities = _sum_spectra_for_polarity(
+        sample,
+        float(sample_channel_times[0]),
+        float(sample_channel_times[-1]),
+        polarity,
+    )
+    if background_channel_times is not None and len(background_channel_times) > 1:
+        background_mz, background_intensities = _sum_spectra_for_polarity(
+            background,
+            float(background_channel_times[0]),
+            float(background_channel_times[-1]),
+            polarity,
+        )
+    else:
+        background_mz, background_intensities = np.array([], dtype=float), np.array([], dtype=float)
+
+    spectrum_mz, spectrum_intensities = _subtract_spectra(
+        sample_mz,
+        sample_intensities,
+        background_mz,
+        background_intensities,
+    )
+    if spectrum_mz.size == 0:
+        return None
+
+    channel = {
+        "polarity": polarity,
+        "spectrum": {
+            "mz": _ndarray_to_list(spectrum_mz),
+            "intensities": _ndarray_to_list(spectrum_intensities),
+        },
+        "spectrum_peaks": [],
+    }
+
+    positive_spectrum = np.maximum(spectrum_intensities, 0)
+    if positive_spectrum.size == 0 or float(np.max(positive_spectrum)) <= 0:
+        return channel
+
+    detected_peaks = analysis.find_peaks(
+        spectrum_mz,
+        positive_spectrum,
+        height_threshold=0.03,
+        prominence=0.01,
+    )
+    candidate_mzs = []
+    for peak in sorted(detected_peaks, key=lambda item: item.get("intensity", 0), reverse=True)[:80]:
+        candidate_mzs.append(float(peak.get("time", 0.0)))
+
+    strongest_rows = []
+    for candidate_mz in candidate_mzs:
+        sample_eic = analysis.extract_eic(sample, candidate_mz, mz_window, ion_mode=polarity)
+        if sample_eic is None:
+            continue
+        background_eic = analysis.extract_eic(background, candidate_mz, mz_window, ion_mode=polarity)
+        eic_times = sample.ms_times_neg if polarity == "negative" and sample.ms_times_neg is not None else (
+            sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
+        )
+        bg_times = background.ms_times_neg if polarity == "negative" and background.ms_times_neg is not None else (
+            background.ms_times_pos if background.ms_times_pos is not None else background.ms_times
+        )
+        sub_times, sub_intensities = _subtract_chromatograms(
+            eic_times,
+            sample_eic,
+            bg_times,
+            background_eic,
+        )
+        if sub_times.size == 0 or sub_intensities.size == 0:
+            continue
+
+        positive_trace = np.maximum(sub_intensities, 0)
+        if positive_trace.size == 0:
+            continue
+
+        residual_peaks = analysis.find_peaks(
+            sub_times,
+            positive_trace,
+            height_threshold=0.05,
+            prominence=0.02,
+        )
+
+        if residual_peaks:
+            best_peak = max(residual_peaks, key=lambda item: item.get("intensity", 0))
+        else:
+            max_idx = int(np.argmax(positive_trace))
+            max_val = float(positive_trace[max_idx]) if positive_trace.size > 0 else 0.0
+            if max_val <= 0:
+                continue
+            best_peak = {
+                "time": float(sub_times[max_idx]),
+                "intensity": max_val,
+                "area": 0.0,
+                "start_time": float(sub_times[max_idx]),
+                "end_time": float(sub_times[max_idx]),
+            }
+
+        strongest_rows.append({
+            "mz": candidate_mz,
+            "polarity": polarity,
+            "apex_time": float(best_peak.get("time", 0.0)),
+            "intensity": float(best_peak.get("intensity", 0.0)),
+            "area": float(best_peak.get("area", 0.0)),
+            "start_time": float(best_peak.get("start_time", best_peak.get("time", 0.0))),
+            "end_time": float(best_peak.get("end_time", best_peak.get("time", 0.0))),
+        })
+
+    strongest_rows = [row for row in strongest_rows if row["intensity"] > 0]
+    strongest_rows.sort(key=lambda row: row["intensity"], reverse=True)
+    if strongest_rows:
+        max_apex = max(row["intensity"] for row in strongest_rows)
+        for row in strongest_rows[:25]:
+            row["relative_intensity"] = (row["intensity"] / max_apex) * 100.0 if max_apex > 0 else 0.0
+            channel["spectrum_peaks"].append(row)
+
+    return channel
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -461,6 +793,9 @@ def load_sample(path: str = Query(..., description="Path to .D folder")):
         "acq_info": sample.acq_info,
         "has_uv": sample.uv_data is not None,
         "has_ms": sample.ms_scans is not None,
+        "has_ms_pos": sample.ms_times_pos is not None,
+        "has_ms_neg": sample.ms_times_neg is not None,
+        "has_dual_polarity": sample.has_dual_polarity,
         "uv_wavelengths": _ndarray_to_list(sample.uv_wavelengths),
         "ms_time_range": [float(sample.ms_times[0]), float(sample.ms_times[-1])] if sample.ms_times is not None else None,
         "uv_time_range": [float(sample.uv_times[0]), float(sample.uv_times[-1])] if sample.uv_times is not None else None,
@@ -486,14 +821,21 @@ def uv_chromatogram(
 
 @app.get("/api/tic")
 def tic(path: str = Query(...)):
-    """Return total ion chromatogram."""
+    """Return total ion chromatogram. Returns both polarities if available."""
     sample = _get_sample(path)
     if sample.tic is None:
         raise HTTPException(status_code=404, detail="No MS data")
-    return {
+    result = {
         "times": _ndarray_to_list(sample.ms_times),
         "intensities": _ndarray_to_list(sample.tic),
+        "has_dual_polarity": sample.has_dual_polarity,
     }
+    if sample.has_dual_polarity:
+        result["times_pos"] = _ndarray_to_list(sample.ms_times_pos)
+        result["intensities_pos"] = _ndarray_to_list(sample.tic_pos)
+        result["times_neg"] = _ndarray_to_list(sample.ms_times_neg)
+        result["intensities_neg"] = _ndarray_to_list(sample.tic_neg)
+    return result
 
 
 @app.get("/api/eic")
@@ -502,21 +844,181 @@ def eic(
     mz: float = Query(..., description="Target m/z"),
     window: float = Query(0.5),
     smooth: int = Query(0),
+    ion_mode: str = Query("positive", description="positive or negative"),
 ):
     """Return extracted ion chromatogram."""
     sample = _get_sample(path)
-    eic_data = analysis.extract_eic(sample, mz, window)
+    eic_data = analysis.extract_eic(sample, mz, window, ion_mode=ion_mode)
     if eic_data is None:
         raise HTTPException(status_code=404, detail="No MS data for EIC")
 
     if smooth > 2:
         eic_data = analysis.smooth_data(eic_data, smooth)
 
+    # Return times from the matching polarity detector
+    if ion_mode == 'negative' and sample.ms_times_neg is not None:
+        times = sample.ms_times_neg
+    else:
+        times = sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
+
     return {
-        "times": _ndarray_to_list(sample.ms_times),
+        "times": _ndarray_to_list(times),
         "intensities": _ndarray_to_list(eic_data),
         "target_mz": mz,
         "window": window,
+        "ion_mode": ion_mode,
+    }
+
+
+@app.post("/api/background-subtraction")
+def background_subtraction(payload: dict = Body(...)):
+    """Subtract one selected sample from another across UV, TIC, and EIC traces."""
+    sample_path = str(payload.get("sample_path") or "").strip()
+    background_path = str(payload.get("background_path") or "").strip()
+    if not sample_path or not background_path:
+        raise HTTPException(status_code=400, detail="sample_path and background_path are required")
+    if sample_path == background_path:
+        raise HTTPException(status_code=400, detail="Choose two different files for background subtraction")
+
+    sample = _get_sample(sample_path)
+    background = _get_sample(background_path)
+
+    uv_smoothing = _coerce_int(payload.get("uv_smoothing"), 0)
+    eic_smoothing = _coerce_int(payload.get("eic_smoothing"), 0)
+    mz_window = _coerce_float(payload.get("mz_window"), 0.5)
+
+    requested_wavelengths = payload.get("wavelengths") or []
+    uv_results = []
+    for raw_wavelength in requested_wavelengths:
+        try:
+            wavelength = float(raw_wavelength)
+        except Exception:
+            continue
+
+        sample_uv = sample.get_uv_at_wavelength(wavelength)
+        if sample_uv is None or sample.uv_times is None:
+            continue
+
+        background_uv = background.get_uv_at_wavelength(wavelength)
+        uv_times, uv_intensities = _subtract_chromatograms(
+            sample.uv_times,
+            sample_uv,
+            background.uv_times,
+            background_uv,
+        )
+        if uv_smoothing > 2 and uv_intensities.size > 0:
+            uv_intensities = analysis.smooth_data(uv_intensities, uv_smoothing)
+
+        uv_results.append({
+            "nm": wavelength,
+            "wavelength": wavelength,
+            "times": _ndarray_to_list(uv_times),
+            "intensities": _ndarray_to_list(uv_intensities),
+        })
+
+    tic_result = None
+    if sample.has_dual_polarity and background.has_dual_polarity:
+        pos_times, pos_intensities = _subtract_chromatograms(
+            sample.ms_times_pos,
+            sample.tic_pos,
+            background.ms_times_pos,
+            background.tic_pos,
+        )
+        neg_times, neg_intensities = _subtract_chromatograms(
+            sample.ms_times_neg,
+            sample.tic_neg,
+            background.ms_times_neg,
+            background.tic_neg,
+        )
+        if pos_times.size > 0 or neg_times.size > 0:
+            tic_result = {
+                "has_dual_polarity": True,
+                "times_pos": _ndarray_to_list(pos_times),
+                "intensities_pos": _ndarray_to_list(pos_intensities),
+                "times_neg": _ndarray_to_list(neg_times),
+                "intensities_neg": _ndarray_to_list(neg_intensities),
+            }
+    elif sample.tic is not None and sample.ms_times is not None:
+        tic_times, tic_intensities = _subtract_chromatograms(
+            sample.ms_times,
+            sample.tic,
+            background.ms_times,
+            background.tic,
+        )
+        tic_result = {
+            "times": _ndarray_to_list(tic_times),
+            "intensities": _ndarray_to_list(tic_intensities),
+            "has_dual_polarity": False,
+        }
+
+    raw_targets = payload.get("mz_targets") or payload.get("targets") or []
+    eic_targets = []
+    for raw_target in raw_targets:
+        if isinstance(raw_target, dict):
+            target_mz = _coerce_float(raw_target.get("mz", raw_target.get("target_mz")), float("nan"))
+            polarity = str(raw_target.get("polarity") or raw_target.get("ion_mode") or "positive").strip().lower()
+        else:
+            target_mz = _coerce_float(raw_target, float("nan"))
+            polarity = "positive"
+
+        if not np.isfinite(target_mz) or target_mz <= 0:
+            continue
+        if polarity not in {"positive", "negative"}:
+            polarity = "positive"
+
+        sample_eic = analysis.extract_eic(sample, target_mz, mz_window, ion_mode=polarity)
+        if sample_eic is None:
+            continue
+
+        background_eic = analysis.extract_eic(background, target_mz, mz_window, ion_mode=polarity)
+        sample_times = sample.ms_times_neg if polarity == "negative" and sample.ms_times_neg is not None else (
+            sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
+        )
+        background_times = background.ms_times_neg if polarity == "negative" and background.ms_times_neg is not None else (
+            background.ms_times_pos if background.ms_times_pos is not None else background.ms_times
+        )
+
+        eic_times, eic_intensities = _subtract_chromatograms(
+            sample_times,
+            sample_eic,
+            background_times,
+            background_eic,
+        )
+        if eic_smoothing > 2 and eic_intensities.size > 0:
+            eic_intensities = analysis.smooth_data(eic_intensities, eic_smoothing)
+
+        eic_targets.append({
+            "times": _ndarray_to_list(eic_times),
+            "intensities": _ndarray_to_list(eic_intensities),
+            "mz": target_mz,
+            "target_mz": target_mz,
+            "window": mz_window,
+            "polarity": polarity,
+            "ion_mode": polarity,
+        })
+
+    residual_channels = []
+    for polarity in _get_shared_ms_polarities(sample, background):
+        channel = _build_residual_ms_channel(sample, background, polarity, mz_window)
+        if channel is not None:
+            residual_channels.append(channel)
+
+    first_residual_channel = residual_channels[0] if residual_channels else {}
+
+    scan_count = int(len(sample.ms_times)) if sample.ms_times is not None else 0
+    return {
+        "sample_name": sample.name,
+        "sample_path": sample.folder_path,
+        "background_name": background.name,
+        "background_path": background.folder_path,
+        "uv": {"wavelengths": uv_results},
+        "tic": tic_result,
+        "eic": {"targets": eic_targets},
+        "residual_channels": residual_channels,
+        "spectrum": first_residual_channel.get("spectrum"),
+        "spectrum_peaks": first_residual_channel.get("spectrum_peaks", []),
+        "spectrum_polarity": first_residual_channel.get("polarity"),
+        "ms_scan_count": scan_count,
     }
 
 
@@ -589,7 +1091,7 @@ def find_chromatogram_peaks(
         eic_data = analysis.extract_eic(sample, mz, mz_window)
         if eic_data is None or sample.ms_times is None:
             raise HTTPException(status_code=404, detail="No EIC data")
-        times = sample.ms_times
+        times = sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
         intensities = eic_data
     else:
         raise HTTPException(status_code=400, detail=f"Unknown data_type: {data_type}")

@@ -464,6 +464,12 @@ input[type="radio"] {
   line-height: 1;
 }
 .tag .remove-tag:hover { color: var(--danger); }
+.tag-pos { border-color: #1f77b4; background: #1f77b4; color: #fff; }
+.tag-neg { border-color: #d62728; background: #d62728; color: #fff; }
+.tag-pos .remove-tag, .tag-neg .remove-tag { color: rgba(255,255,255,0.7); }
+.tag-pos .remove-tag:hover, .tag-neg .remove-tag:hover { color: #fff; }
+.tag-polarity { font-weight: 700; font-size: 11px; opacity: 0.85; }
+.mz-polarity-sel { font-size: 12px; padding: 2px 4px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-secondary); cursor: pointer; }
 
 .muted { color: var(--text-muted); font-size: 12px; font-style: italic; }
 
