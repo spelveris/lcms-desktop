@@ -67,6 +67,7 @@ app.add_middleware(
 _sample_cache: dict[str, SampleData] = {}
 _sample_cache_state: dict[str, str] = {}
 RUN_SETTLE_SECONDS = 120
+WASH_POSITIONS = {91}
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,27 @@ def _folder_latest_mtime(folder: Path) -> float:
     return latest
 
 
+def _extract_sample_location(run_log_text: str) -> Optional[int]:
+    """Extract the autosampler position from Agilent RUN.LOG text."""
+    text = str(run_log_text or "")
+    if not text:
+        return None
+
+    patterns = [
+        r"sample from location\s+'?(\d+)'?",
+        r"line#\s+\d+\s+at location\s+'?(\d+)'?",
+        r"\blocation\s+'?(\d+)'?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                return None
+    return None
+
+
 def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     folder = Path(_normalize_filesystem_path(str(folder_path)))
     latest_mtime = _folder_latest_mtime(folder)
@@ -156,6 +178,7 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     settled = latest_mtime > 0 and (now_ts - latest_mtime) >= RUN_SETTLE_SECONDS
     completion_source = "mtime-settled" if settled else "active-write"
     run_complete = False
+    sample_location = None
 
     try:
         run_logs = sorted(folder.glob("RUN*.LOG"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -163,7 +186,9 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
         run_logs = []
 
     if run_logs:
-        text = _decode_text_file(run_logs[0]).lower()
+        raw_text = _decode_text_file(run_logs[0])
+        sample_location = _extract_sample_location(raw_text)
+        text = raw_text.lower()
         if "instrument run completed" in text or "method completed" in text:
             run_complete = True
             completion_source = "run-log"
@@ -176,6 +201,8 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
         "run_in_progress": not cacheable,
         "cacheable": cacheable,
         "completion_source": completion_source,
+        "sample_location": sample_location,
+        "is_wash_position": sample_location in WASH_POSITIONS if sample_location is not None else False,
     }
 
 
@@ -930,6 +957,8 @@ def load_sample(path: str = Query(..., description="Path to .D folder")):
         "run_in_progress": run_state["run_in_progress"],
         "cacheable": run_state["cacheable"],
         "completion_source": run_state["completion_source"],
+        "sample_location": run_state["sample_location"],
+        "is_wash_position": run_state["is_wash_position"],
         "latest_update": datetime.datetime.fromtimestamp(run_state["latest_mtime"]).isoformat() if run_state["latest_mtime"] else None,
     }
 
@@ -1455,6 +1484,100 @@ def clear_cache():
     _sample_cache.clear()
     _sample_cache_state.clear()
     return {"status": "cleared"}
+
+
+@app.post("/api/export-single-sample")
+def export_single_sample(payload: dict = Body(...)):
+    """Export Simple Sample views through the backend for true vector PDF output."""
+    sample_path = payload.get("path")
+    if not sample_path:
+        raise HTTPException(status_code=400, detail="path is required")
+
+    sample = _get_sample(str(sample_path))
+    kind = str(payload.get("kind", "overview")).strip().lower()
+    export_format = str(payload.get("format", "pdf")).lower()
+    if export_format not in {"png", "svg", "pdf"}:
+        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    settings = payload.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+
+    uv_wavelengths = []
+    uv_wavelengths_raw = settings.get("uv_wavelengths", [])
+    if isinstance(uv_wavelengths_raw, list):
+        for wl in uv_wavelengths_raw:
+            try:
+                uv_wavelengths.append(float(wl))
+            except Exception:
+                continue
+
+    mz_targets = payload.get("mz_targets", [])
+    if not isinstance(mz_targets, list):
+        mz_targets = []
+
+    mz_window = _coerce_float(payload.get("mz_window"), lcms_config.DEFAULT_MZ_WINDOW)
+    uv_smoothing = _coerce_int(settings.get("uv_smoothing"), lcms_config.UV_SMOOTHING_WINDOW)
+    eic_smoothing = _coerce_int(settings.get("eic_smoothing"), lcms_config.EIC_SMOOTHING_WINDOW)
+    style = {
+        "fig_width": _coerce_float(settings.get("fig_width"), 10.0),
+        "fig_height_per_panel": _coerce_float(settings.get("fig_height_per_panel"), 2.9),
+        "line_width": _coerce_float(settings.get("line_width"), 0.8),
+        "show_grid": _coerce_bool(settings.get("show_grid"), False),
+        "labels": settings.get("labels", {}) if isinstance(settings.get("labels"), dict) else {},
+    }
+
+    if kind == "eic-overlay":
+        fig = plotting.create_eic_comparison_figure(
+            sample,
+            mz_targets,
+            mz_window=mz_window,
+            smoothing=eic_smoothing,
+            overlay=True,
+            normalize=False,
+            style=style,
+        )
+        filename_suffix = "extracted_ion_chromatograms"
+    else:
+        fig = plotting.create_single_sample_export_figure(
+            sample,
+            uv_wavelengths=uv_wavelengths,
+            eic_targets=mz_targets,
+            style=style,
+            mz_window=mz_window,
+            uv_smoothing=uv_smoothing,
+            eic_smoothing=eic_smoothing,
+        )
+        filename_suffix = "single_sample"
+
+    try:
+        if export_format == "svg":
+            content = plotting.export_figure_svg(fig)
+            media_type = "image/svg+xml"
+        elif export_format == "pdf":
+            content = plotting.export_figure_pdf(fig, dpi=dpi)
+            media_type = "application/pdf"
+        else:
+            content = plotting.export_figure(fig, dpi=dpi, format="png")
+            media_type = "image/png"
+    finally:
+        plt.close(fig)
+
+    base_name = sample.name[:-2] if sample.name.lower().endswith(".d") else sample.name
+    safe_name = _sanitize_filename(base_name, fallback="sample")
+    filename = f"{safe_name}_{filename_suffix}.{export_format}"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/export-deconvoluted-masses")
