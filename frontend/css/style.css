@@ -595,6 +595,17 @@ input[type="radio"] {
   min-width: 520px;
 }
 .toolbar-note { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.deconv-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.deconv-mode-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
 .tab-mz-targets-inline {
   flex: 1 1 100%;
   margin-top: 2px;

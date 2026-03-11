@@ -12,6 +12,7 @@ const state = {
   currentPath: localStorage.getItem('lcms-browse-path') || '/',
   systemVolumes: [],
   customMountPaths: loadStoredCustomMounts(),
+  deconvInteractionMode: localStorage.getItem('lcms-deconv-interaction-mode') || 'deconvolute',
   selectedFiles: JSON.parse(localStorage.getItem('lcms-selected-files') || '[]'),
   loadedSamples: {},      // path -> sample metadata
   mzTargets: JSON.parse(localStorage.getItem('lcms-mz-targets') || '[]'),
@@ -31,6 +32,7 @@ const state = {
   deconvIonSelectionObjectUrl: null,
   deconvAutoRunSignature: '',
   deconvAutoRunInFlight: false,
+  deconvDragSelectionInFlight: false,
   progressionAssignments: {},
   masscalcData: null,
   masscalcFigureUrls: { main: null, clean: null },
@@ -320,6 +322,16 @@ function renderQuoteEmptyState(containerId, keyPrefix, forceNew = false) {
 function setElementHidden(id, hidden) {
   const el = document.getElementById(id);
   if (el) el.classList.toggle('hidden', hidden);
+}
+
+function setDeconvolutionBusy(isBusy) {
+  const runBtn = document.getElementById('btn-run-deconv');
+  if (!runBtn) return;
+  if (!runBtn.dataset.defaultLabel) {
+    runBtn.dataset.defaultLabel = runBtn.textContent || 'Run Deconvolution';
+  }
+  runBtn.disabled = !!isBusy;
+  runBtn.textContent = isBusy ? 'Deconvoluting...' : runBtn.dataset.defaultLabel;
 }
 
 function setQuoteContainerState(emptyId, keyPrefix, isEmpty, forceNew = false) {
@@ -3931,12 +3943,15 @@ function initDeconvolution() {
   document.getElementById('btn-run-deconv').addEventListener('click', runDeconvolution);
   document.getElementById('deconv-start').addEventListener('change', () => refreshDeconvWindowContext());
   document.getElementById('deconv-end').addEventListener('change', () => refreshDeconvWindowContext());
+  document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
+  document.getElementById('btn-deconv-mode-zoom')?.addEventListener('click', () => setDeconvInteractionMode('zoom'));
   document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvMasses(btn.dataset.format));
   });
   document.querySelectorAll('.btn-export-ion-selection').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvIonSelection(btn.dataset.format));
   });
+  renderDeconvInteractionModeButtons();
 
   // Auto-detect window when sample is selected
   const select = document.getElementById('deconv-sample-select');
@@ -3948,6 +3963,73 @@ function initDeconvolution() {
         setDeconvEmptyState(true);
       }
     });
+  }
+}
+
+function renderDeconvInteractionModeButtons() {
+  const deconvoluteBtn = document.getElementById('btn-deconv-mode-deconvolute');
+  const zoomBtn = document.getElementById('btn-deconv-mode-zoom');
+  if (!deconvoluteBtn || !zoomBtn) return;
+
+  const isDeconvolute = state.deconvInteractionMode !== 'zoom';
+  deconvoluteBtn.classList.toggle('btn-primary', isDeconvolute);
+  zoomBtn.classList.toggle('btn-primary', !isDeconvolute);
+}
+
+function setDeconvInteractionMode(mode) {
+  state.deconvInteractionMode = mode === 'zoom' ? 'zoom' : 'deconvolute';
+  localStorage.setItem('lcms-deconv-interaction-mode', state.deconvInteractionMode);
+  renderDeconvInteractionModeButtons();
+
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (samplePath) {
+    refreshDeconvWindowContext(samplePath);
+  }
+}
+
+function bindDeconvWindowDragSelection(divId) {
+  const plot = document.getElementById(divId);
+  if (!plot || typeof plot.on !== 'function') return;
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_relayout');
+  }
+
+  plot.on('plotly_relayout', async (eventData) => {
+    if (!eventData || state.deconvDragSelectionInFlight) return;
+    if (eventData['xaxis.autorange']) return;
+    if (state.deconvInteractionMode === 'zoom') return;
+
+    const startRaw = eventData['xaxis.range[0]'] ?? eventData.xaxis?.range?.[0];
+    const endRaw = eventData['xaxis.range[1]'] ?? eventData.xaxis?.range?.[1];
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    if ((end - start) < 0.02) return;
+
+    await applyDraggedDeconvWindow(start, end);
+  });
+}
+
+async function applyDraggedDeconvWindow(start, end) {
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) return;
+
+  const normalizedStart = Math.max(0, Math.min(start, end));
+  const normalizedEnd = Math.max(normalizedStart, end);
+  if ((normalizedEnd - normalizedStart) < 0.02) return;
+
+  state.deconvDragSelectionInFlight = true;
+  try {
+    document.getElementById('deconv-start').value = normalizedStart.toFixed(2);
+    document.getElementById('deconv-end').value = normalizedEnd.toFixed(2);
+    state.deconvAutoRunSignature = '';
+    await refreshDeconvWindowContext(samplePath);
+    toast(`Dragged window: ${normalizedStart.toFixed(2)} - ${normalizedEnd.toFixed(2)} min`, 'info');
+    await runDeconvolution({ useOverlay: false, silentSuccess: true });
+  } finally {
+    state.deconvDragSelectionInFlight = false;
   }
 }
 
@@ -3986,6 +4068,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
       startAtZero: true,
       windowColor: 'rgba(255, 215, 0, 0.25)',
     });
+    bindDeconvWindowDragSelection('deconv-uv-plot');
   } catch (_) {
     uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for this sample</p>';
   }
@@ -4001,6 +4084,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
       startAtZero: true,
       windowColor: 'rgba(255, 215, 0, 0.25)',
     });
+    bindDeconvWindowDragSelection('deconv-tic-plot');
   } catch (_) {
     ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for this sample</p>';
   }
@@ -4028,7 +4112,7 @@ async function autoDetectDeconvWindow() {
   }
 }
 
-async function runDeconvolution() {
+async function runDeconvolution(options = {}) {
   const samplePath = document.getElementById('deconv-sample-select').value;
   if (!samplePath) {
     toast('Select a sample first', 'warning');
@@ -4041,7 +4125,12 @@ async function runDeconvolution() {
     parseFloat(document.getElementById('deconv-end').value),
   );
 
-  showLoading('Running deconvolution...');
+  const useOverlay = options.useOverlay !== false;
+  const silentSuccess = options.silentSuccess === true;
+  setDeconvolutionBusy(true);
+  if (useOverlay) {
+    showLoading('Running deconvolution...');
+  }
   try {
     const data = await api.runDeconvolution(params);
     state.deconvResults = data;
@@ -4058,12 +4147,17 @@ async function runDeconvolution() {
     state.deconvAutoRunSignature = getDeconvolutionRunSignature() || state.deconvAutoRunSignature;
     renderDeconvResults(data);
     renderReportSummary();
-    toast('Deconvolution complete', 'success');
+    if (!silentSuccess) {
+      toast('Deconvolution complete', 'success');
+    }
   } catch (err) {
     const msg = typeof err === 'object' ? (err.message || JSON.stringify(err)) : String(err);
     toast(`Deconvolution failed: ${msg}`, 'error');
   } finally {
-    hideLoading();
+    setDeconvolutionBusy(false);
+    if (useOverlay) {
+      hideLoading();
+    }
   }
 }
 
