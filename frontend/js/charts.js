@@ -32,6 +32,15 @@ function getContainerHeight(divId, fallback) {
   return fallback;
 }
 
+function applyExplicitPlotHeight(divId, heightPx) {
+  const el = document.getElementById(divId);
+  const explicit = Number(heightPx);
+  if (!el || !Number.isFinite(explicit) || explicit <= 0) return;
+  el.style.height = `${explicit}px`;
+  el.style.minHeight = `${explicit}px`;
+  el.dataset.fixedPlotHeight = String(explicit);
+}
+
 function getColor(index) { return COLOR_CYCLE[index % COLOR_CYCLE.length]; }
 
 function getLineWidth() {
@@ -73,6 +82,14 @@ function downsamplePair(x, y, maxPoints = 8000) {
     ys.push(y[y.length - 1]);
   }
   return { x: xs, y: ys };
+}
+
+function clonePlotConfig(extra = {}) {
+  const base = { ...PLOT_CONFIG };
+  if (Array.isArray(PLOT_CONFIG.modeBarButtonsToRemove)) {
+    base.modeBarButtonsToRemove = [...PLOT_CONFIG.modeBarButtonsToRemove];
+  }
+  return { ...base, ...extra };
 }
 
 function interpAt(xArr, yArr, x) {
@@ -166,6 +183,143 @@ function normalizeEicInput(eicInput) {
   return [];
 }
 
+function getMassSpectrumViewRange(plotEl, mzValues, eventData = null) {
+  const fallbackMin = Array.isArray(mzValues) && mzValues.length > 0 ? Number(mzValues[0]) : 0;
+  const fallbackMax = Array.isArray(mzValues) && mzValues.length > 0 ? Number(mzValues[mzValues.length - 1]) : 1;
+  if (eventData && typeof eventData === 'object') {
+    if (eventData['xaxis.autorange']) {
+      return [fallbackMin, fallbackMax > fallbackMin ? fallbackMax : fallbackMin + 1];
+    }
+    const eventMin = Number(eventData['xaxis.range[0]'] ?? eventData.xaxis?.range?.[0]);
+    const eventMax = Number(eventData['xaxis.range[1]'] ?? eventData.xaxis?.range?.[1]);
+    if (Number.isFinite(eventMin) && Number.isFinite(eventMax) && eventMax > eventMin) {
+      return [eventMin, eventMax];
+    }
+  }
+  const layoutRange = plotEl?.layout?.xaxis?.range;
+  const x0 = Number(Array.isArray(layoutRange) ? layoutRange[0] : fallbackMin);
+  const x1 = Number(Array.isArray(layoutRange) ? layoutRange[1] : fallbackMax);
+  if (Number.isFinite(x0) && Number.isFinite(x1) && x1 > x0) return [x0, x1];
+  return [fallbackMin, fallbackMax > fallbackMin ? fallbackMax : fallbackMin + 1];
+}
+
+function getMassSpectrumLabelDecimals(span) {
+  return 1;
+}
+
+function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations = [], xRange = null, plotWidthPx = 800) {
+  if (!Array.isArray(mzValues) || !Array.isArray(intensities) || mzValues.length !== intensities.length || mzValues.length < 3) {
+    return baseAnnotations;
+  }
+
+  const x0 = Number(Array.isArray(xRange) ? xRange[0] : mzValues[0]);
+  const x1 = Number(Array.isArray(xRange) ? xRange[1] : mzValues[mzValues.length - 1]);
+  if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 <= x0) return baseAnnotations;
+
+  let visibleMax = 0;
+  const candidates = [];
+  for (let i = 1; i < mzValues.length - 1; i += 1) {
+    const mz = Number(mzValues[i]);
+    const y = Number(intensities[i]);
+    if (!Number.isFinite(mz) || !Number.isFinite(y) || mz < x0 || mz > x1 || y <= 0) continue;
+    if (y > visibleMax) visibleMax = y;
+    const prev = Number(intensities[i - 1]) || 0;
+    const next = Number(intensities[i + 1]) || 0;
+    if (y >= prev && y >= next) {
+      candidates.push({ mz, intensity: y });
+    }
+  }
+
+  if (!(visibleMax > 0) || candidates.length === 0) return baseAnnotations;
+
+  const span = x1 - x0;
+  const minRelativeHeight = span > 500 ? 0.12 : span > 200 ? 0.08 : span > 80 ? 0.05 : 0.03;
+  const minPixelSpacing = span > 500 ? 82 : span > 200 ? 62 : span > 80 ? 46 : 30;
+  const maxLabels = Math.max(8, Math.min(48, Math.floor(Math.max(360, plotWidthPx) / minPixelSpacing)));
+  const decimals = getMassSpectrumLabelDecimals(span);
+  const selectedPositions = (baseAnnotations || [])
+    .map((annotation) => Number(annotation.x))
+    .filter((value) => Number.isFinite(value) && value >= x0 && value <= x1)
+    .map((mz) => ((mz - x0) / span) * plotWidthPx);
+
+  const adaptive = [];
+  const sorted = candidates
+    .filter((candidate) => candidate.intensity >= visibleMax * minRelativeHeight)
+    .sort((a, b) => b.intensity - a.intensity);
+
+  for (const candidate of sorted) {
+    if (adaptive.length >= maxLabels) break;
+    const px = ((candidate.mz - x0) / span) * plotWidthPx;
+    if (selectedPositions.some((existingPx) => Math.abs(existingPx - px) < minPixelSpacing)) continue;
+    selectedPositions.push(px);
+    const lane = adaptive.length % 3;
+    adaptive.push({
+      x: candidate.mz,
+      y: candidate.intensity,
+      text: candidate.mz.toFixed(decimals),
+      showarrow: false,
+      xanchor: 'center',
+      yanchor: 'bottom',
+      yshift: 6 + (lane * 10),
+      font: { size: 9, color: '#000000' },
+    });
+  }
+
+  return [...baseAnnotations, ...adaptive];
+}
+
+function bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, baseAnnotations = []) {
+  const plot = document.getElementById(divId);
+  if (!plot || typeof plot.on !== 'function' || !window.Plotly || typeof window.Plotly.relayout !== 'function') return;
+
+  const applyAdaptiveAnnotations = (eventData = null) => {
+    if (plot.__adaptiveMassSpectrumBusy) return;
+    const xRange = getMassSpectrumViewRange(plot, mzValues, eventData);
+    const plotWidth = Math.max(320, Math.floor(plot.clientWidth || plot.offsetWidth || 800));
+    const annotations = buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations, xRange, plotWidth);
+    plot.__adaptiveMassSpectrumBusy = true;
+    Promise.resolve(window.Plotly.relayout(plot, { annotations }))
+      .catch(() => {})
+      .finally(() => {
+        plot.__adaptiveMassSpectrumBusy = false;
+      });
+  };
+
+  const scheduleAdaptiveAnnotations = (eventData = null, delayMs = 0) => {
+    if (plot.__adaptiveMassSpectrumTimer) {
+      clearTimeout(plot.__adaptiveMassSpectrumTimer);
+    }
+    plot.__adaptiveMassSpectrumTimer = setTimeout(() => {
+      plot.__adaptiveMassSpectrumTimer = null;
+      applyAdaptiveAnnotations(eventData);
+    }, delayMs);
+  };
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_relayout');
+    plot.removeAllListeners('plotly_doubleclick');
+  }
+
+  plot.on('plotly_relayout', (eventData) => {
+    if (plot.__adaptiveMassSpectrumBusy || !eventData) return;
+    if (
+      'xaxis.range[0]' in eventData ||
+      'xaxis.range[1]' in eventData ||
+      'xaxis.autorange' in eventData
+    ) {
+      scheduleAdaptiveAnnotations(eventData, 0);
+    }
+  });
+
+  plot.on('plotly_doubleclick', () => {
+    // Plotly can finish its autorange reset after the immediate relayout event.
+    // Re-read the settled layout shortly after double-click completes.
+    scheduleAdaptiveAnnotations(null, 40);
+  });
+
+  scheduleAdaptiveAnnotations(null, 0);
+}
+
 // ---- Chart functions ----
 
 const charts = {
@@ -191,19 +345,73 @@ const charts = {
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
 
-  plotTIC(divId, times, intensities, title, color) {
+  plotTIC(divId, times, intensities, title, color, options = {}) {
     const traces = [{
       x: times, y: intensities,
       type: 'scatter', mode: 'lines', name: 'TIC',
       line: { color: color || '#ff7f0e', width: getLineWidth() },
     }];
+    const shapes = [];
+    const annotations = [];
+    const xaxis = { title: getXAxisLabel() };
+    if (Array.isArray(options.xRange) && options.xRange.length === 2) {
+      const x0 = Number(options.xRange[0]);
+      const x1 = Number(options.xRange[1]);
+      if (Number.isFinite(x0) && Number.isFinite(x1) && x1 > x0) {
+        xaxis.range = [x0, x1];
+      }
+    } else if (options.startAtZero === true) {
+      let xMax = Number.NEGATIVE_INFINITY;
+      (times || []).forEach((tv) => {
+        const v = Number(tv);
+        if (Number.isFinite(v) && v > xMax) xMax = v;
+      });
+      if (Number.isFinite(xMax) && xMax > 0) xaxis.range = [0, xMax];
+    }
+    if (Number.isFinite(options.start) && Number.isFinite(options.end) && options.end > options.start) {
+      shapes.push({
+        type: 'rect',
+        xref: 'x',
+        yref: 'paper',
+        x0: options.start,
+        x1: options.end,
+        y0: 0,
+        y1: 1,
+        fillcolor: options.windowColor || 'rgba(255, 215, 0, 0.25)',
+        line: { width: 0 },
+        layer: 'below',
+      });
+      if (options.showWindowAnnotation !== false) {
+        annotations.push({
+          x: (options.start + options.end) / 2,
+          y: 1.02,
+          xref: 'x',
+          yref: 'paper',
+          text: `Window: ${options.start.toFixed(2)}-${options.end.toFixed(2)} min`,
+          showarrow: false,
+          font: { size: 10, color: '#000000' },
+        });
+      }
+    }
     const layout = mergeLayout({
       title: { text: title || 'Total Ion Chromatogram', font: { size: 14 } },
-      xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
+      xaxis: {
+        ...xaxis,
+        fixedrange: options.fixedRange === true,
+      },
+      yaxis: { title: options.yLabel || 'Intensity', fixedrange: options.fixedRange === true },
       showlegend: false,
-      height: getContainerHeight(divId, 300),
+      height: Number.isFinite(Number(options.heightPx)) && Number(options.heightPx) > 0
+        ? Number(options.heightPx)
+        : getContainerHeight(divId, 300),
+      margin: options.margin || { l: 60, r: 24, t: 40, b: 72 },
+      dragmode: options.dragmode || 'zoom',
+      selectdirection: options.selectdirection,
+      shapes,
+      annotations,
     });
-    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+    applyExplicitPlotHeight(divId, layout.height);
+    Plotly.newPlot(divId, traces, layout, clonePlotConfig(options.plotConfig));
   },
 
   plotChromatogramWithWindow(divId, times, intensities, options = {}) {
@@ -278,9 +486,11 @@ const charts = {
       margin: options.margin || (compact ? { l: 8, r: 8, t: 28, b: 8 } : { l: 60, r: 24, t: 40, b: 72 }),
       shapes,
       annotations,
+      dragmode: options.dragmode || 'zoom',
+      selectdirection: options.selectdirection,
     });
 
-    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+    Plotly.newPlot(divId, traces, layout, clonePlotConfig(options.plotConfig));
   },
 
   plotEIC(divId, eicTraces, title, options = {}) {
@@ -495,16 +705,29 @@ const charts = {
       ? explicitHeight
       : getContainerHeight(divId, 380);
 
+    const xaxis = { title: 'm/z', automargin: true };
+    if (Array.isArray(options.xRange) && options.xRange.length === 2) {
+      const x0 = Number(options.xRange[0]);
+      const x1 = Number(options.xRange[1]);
+      if (Number.isFinite(x0) && Number.isFinite(x1) && x1 > x0) {
+        xaxis.range = [x0, x1];
+      }
+    }
+
     const layout = mergeLayout({
       title: { text: options.title || 'Mass Spectrum', font: { size: 14 } },
-      xaxis: { title: 'm/z', automargin: true }, yaxis: { title: 'Intensity', automargin: true },
+      xaxis,
+      yaxis: { title: 'Intensity', automargin: true },
       showlegend: false,
       height: plotHeight,
       margin: { l: 64, r: 44, t: 40, b: 96 },
       annotations: plotAnnotations,
       shapes,
     });
-    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+    applyExplicitPlotHeight(divId, plotHeight);
+    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG).then(() => {
+      bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, plotAnnotations);
+    });
   },
 
   plotMassSpectraOverlay(divId, spectra, options = {}) {

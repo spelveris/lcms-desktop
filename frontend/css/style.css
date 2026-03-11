@@ -749,6 +749,14 @@ input[type="radio"] {
   margin-bottom: 8px;
 }
 
+.single-tic-compact {
+  min-height: 300px;
+}
+
+.single-spectrum-compact {
+  min-height: 300px;
+}
+
 /* ===== Deconvolution ===== */
 .deconv-controls {
   background: var(--bg-card);
