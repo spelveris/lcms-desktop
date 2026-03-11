@@ -1036,16 +1036,21 @@ function renderFileList() {
     el.className = 'file-item';
 
     if (item.is_d_folder) {
+      const isWashPosition = item.is_wash_position === true;
       const isSelected = state.selectedFiles.some(f => f.path === item.path);
+      if (isWashPosition) {
+        el.classList.add('file-item-wash');
+      }
       el.innerHTML = `
         <input type="checkbox" class="d-folder-check" data-path="${escapeAttr(item.path)}" data-name="${escapeAttr(item.name)}" ${isSelected ? 'checked' : ''}>
         <span class="file-icon d-folder">&#9670;</span>
         <span class="file-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</span>
+        ${isWashPosition ? `<span class="file-item-badge" title="Autosampler location ${escapeAttr(String(item.sample_location || '91'))}">Wash ${escapeHtml(String(item.sample_location || '91'))}</span>` : ''}
       `;
       const checkbox = el.querySelector('.d-folder-check');
       checkbox.addEventListener('change', (e) => {
         if (e.target.checked) {
-          selectFile({ name: item.name, path: item.path });
+          selectFile(item);
         } else {
           deselectFile(item.path);
         }
@@ -1081,19 +1086,24 @@ function sortItems(items, mode) {
     numeric: true,
     sensitivity: 'base',
   });
+  const washBias = (item) => (item && item.is_d_folder && item.is_wash_position ? 1 : 0);
+  const applyWashBias = (a, b) => {
+    const diff = washBias(a) - washBias(b);
+    return diff !== 0 ? diff : null;
+  };
   switch (mode) {
     case 'name-asc':
-      sorted.sort((a, b) => naturalNameCompare(a.name, b.name));
+      sorted.sort((a, b) => applyWashBias(a, b) ?? naturalNameCompare(a.name, b.name));
       break;
     case 'name-desc':
-      sorted.sort((a, b) => naturalNameCompare(b.name, a.name));
+      sorted.sort((a, b) => applyWashBias(a, b) ?? naturalNameCompare(b.name, a.name));
       break;
     case 'date-asc':
-      sorted.sort((a, b) => (a.modified || 0) - (b.modified || 0));
+      sorted.sort((a, b) => applyWashBias(a, b) ?? ((a.modified || 0) - (b.modified || 0)));
       break;
     case 'date-desc':
     default:
-      sorted.sort((a, b) => (b.modified || 0) - (a.modified || 0));
+      sorted.sort((a, b) => applyWashBias(a, b) ?? ((b.modified || 0) - (a.modified || 0)));
       break;
   }
   return sorted;
@@ -2001,6 +2011,38 @@ async function exportSingle(format) {
     return;
   }
   const fileBase = getSingleSampleFilenameBase('single_sample');
+  if (format === 'pdf') {
+    const samplePath = document.getElementById('single-sample-select')?.value || '';
+    if (!samplePath) {
+      toast('Select a sample first', 'warning');
+      return;
+    }
+    const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+    showLoading('Exporting PDF...');
+    try {
+      const response = await api.exportSingleSample({
+        path: samplePath,
+        kind: 'overview',
+        format: 'pdf',
+        dpi,
+        mz_window: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+        mz_targets: state.mzTargets,
+        settings: getReportSettingsPayload(),
+      });
+      const blob = await response.blob();
+      const filename = getFilenameFromContentDisposition(
+        response.headers.get('content-disposition'),
+        `${fileBase}_single_sample.pdf`
+      );
+      downloadBlob(blob, filename);
+      toast('Exported PDF', 'success');
+    } catch (err) {
+      toast(`Export failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
+    return;
+  }
   await exportAllPlots('tab-single', fileBase, format, {
     singleSample: true,
     pdfPerPage: 4,
@@ -2023,6 +2065,38 @@ async function exportSingleCombinedEic(format) {
     return;
   }
   const fileBase = `${getSingleSampleFilenameBase('single_sample')}_extracted_ion_chromatograms`;
+  if (format === 'pdf') {
+    const samplePath = document.getElementById('single-sample-select')?.value || '';
+    if (!samplePath) {
+      toast('Select a sample first', 'warning');
+      return;
+    }
+    const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+    showLoading('Exporting PDF...');
+    try {
+      const response = await api.exportSingleSample({
+        path: samplePath,
+        kind: 'eic-overlay',
+        format: 'pdf',
+        dpi,
+        mz_window: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+        mz_targets: state.mzTargets,
+        settings: getReportSettingsPayload(),
+      });
+      const blob = await response.blob();
+      const filename = getFilenameFromContentDisposition(
+        response.headers.get('content-disposition'),
+        `${fileBase}.pdf`
+      );
+      downloadBlob(blob, filename);
+      toast('Exported PDF', 'success');
+    } catch (err) {
+      toast(`Export failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
+    return;
+  }
   const plotDiv = document.getElementById('eic-combined-single');
   const traceCount = Array.isArray(plotDiv?.data) ? plotDiv.data.length : 0;
   const firstTraceColor = getFirstTraceColor(plotDiv);
@@ -5798,7 +5872,7 @@ async function startWatching(watchPath) {
     rememberCustomMountPath(resolvedWatchPath, sourcePath);
     state.watchKnownPaths = new Set(
       items
-        .filter((item) => item.is_d_folder && !item.run_in_progress)
+        .filter((item) => item.is_d_folder && !item.run_in_progress && !item.is_wash_position)
         .map((item) => item.path),
     );
   } catch (e) {
@@ -5817,6 +5891,7 @@ async function startWatching(watchPath) {
       const dFolders = (Array.isArray(data.items) ? data.items : []).filter((item) => item.is_d_folder);
       for (const item of dFolders) {
         if (item.run_in_progress) continue;
+        if (item.is_wash_position) continue;
         if (!state.watchKnownPaths.has(item.path)) {
           state.watchKnownPaths.add(item.path);
           selectFile(item);

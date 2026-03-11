@@ -472,14 +472,196 @@ def create_single_sample_figure(
     return fig
 
 
+def _normalize_eic_targets(eic_targets) -> list[dict]:
+    """Normalize EIC targets to {mz, polarity} objects."""
+    normalized = []
+    if not eic_targets:
+        return normalized
+
+    for raw in eic_targets:
+        polarity = 'positive'
+        mz_value = raw
+        if isinstance(raw, dict):
+            mz_value = raw.get('mz', raw.get('target_mz'))
+            polarity = str(raw.get('polarity', 'positive')).strip().lower()
+        try:
+            mz = float(mz_value)
+        except Exception:
+            continue
+        if not np.isfinite(mz):
+            continue
+        normalized.append({
+            'mz': mz,
+            'polarity': 'negative' if polarity == 'negative' else 'positive',
+        })
+    return normalized
+
+
+def _get_ms_trace_for_polarity(
+    sample: SampleData,
+    polarity: str = 'positive',
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Select the polarity-specific time axis and TIC, with safe fallback."""
+    pol = 'negative' if str(polarity).strip().lower() == 'negative' else 'positive'
+    if pol == 'negative' and sample.ms_times_neg is not None and sample.tic_neg is not None:
+        return sample.ms_times_neg, sample.tic_neg
+    if pol == 'positive' and sample.ms_times_pos is not None and sample.tic_pos is not None:
+        return sample.ms_times_pos, sample.tic_pos
+    return sample.ms_times, sample.tic
+
+
+def _set_chrom_xlim(ax: plt.Axes, times: Optional[np.ndarray], start_at_zero: bool = True) -> None:
+    """Keep exported chromatograms aligned with the frontend time-axis behavior."""
+    if times is None or len(times) == 0:
+        return
+    start = 0.0 if start_at_zero else float(times[0])
+    end = float(times[-1])
+    if end > start:
+        ax.set_xlim(start, end)
+
+
+def create_single_sample_export_figure(
+    sample: SampleData,
+    uv_wavelengths: Optional[list[float]] = None,
+    eic_targets: Optional[list[dict]] = None,
+    style: Optional[dict] = None,
+    mz_window: float = config.DEFAULT_MZ_WINDOW,
+    uv_smoothing: int = config.UV_SMOOTHING_WINDOW,
+    eic_smoothing: int = config.EIC_SMOOTHING_WINDOW
+) -> matplotlib.figure.Figure:
+    """
+    Create a vector-export figure that matches the Simple Sample tab more closely.
+
+    Supports multiple UV traces, dual-polarity TIC panels, and polarity-aware EICs.
+    """
+    if style is None:
+        style = {}
+    fig_width = style.get('fig_width', 10)
+    fig_height_per_panel = style.get('fig_height_per_panel', 2.9)
+    line_width = style.get('line_width', 0.8)
+    show_grid = style.get('show_grid', False)
+    y_scale = style.get('y_scale', 'linear')
+    labels_config = style.get('labels', {})
+
+    title_template = labels_config.get('title_single', 'Sample: {name}')
+    x_label = labels_config.get('x_label', 'Time (min)')
+    y_label_uv_template = labels_config.get('y_label_uv', 'UV {wavelength}nm (mAU)')
+    y_label_tic = labels_config.get('y_label_tic', 'TIC Intensity')
+    y_label_eic = labels_config.get('y_label_eic', 'EIC Intensity')
+    panel_title_uv_template = labels_config.get('panel_title_uv', 'UV Chromatogram ({wavelength} nm)')
+    panel_title_tic = labels_config.get('panel_title_tic', 'Total Ion Chromatogram (TIC)')
+    panel_title_eic_template = labels_config.get('panel_title_eic', 'EIC m/z {mz} (±{window})')
+
+    title = title_template.format(name=sample.name)
+    if uv_wavelengths is None:
+        uv_wavelengths = []
+    targets = _normalize_eic_targets(eic_targets)
+
+    tic_panels: list[dict] = []
+    if sample.ms_times_pos is not None and sample.tic_pos is not None and sample.ms_times_neg is not None and sample.tic_neg is not None:
+        tic_panels.append({
+            'title': f"{panel_title_tic} (+)",
+            'times': sample.ms_times_pos,
+            'data': sample.tic_pos,
+            'color': '#1f77b4',
+        })
+        tic_panels.append({
+            'title': f"{panel_title_tic} (-)",
+            'times': sample.ms_times_neg,
+            'data': sample.tic_neg,
+            'color': '#d62728',
+        })
+    else:
+        tic_panels.append({
+            'title': panel_title_tic,
+            'times': sample.ms_times,
+            'data': sample.tic,
+            'color': '#ff7f0e',
+        })
+
+    n_rows = max(1, len(uv_wavelengths) + len(tic_panels) + len(targets))
+    fig, axes = plt.subplots(n_rows, 1, figsize=(fig_width, fig_height_per_panel * n_rows))
+    if n_rows == 1:
+        axes = [axes]
+
+    fig.suptitle(title, fontsize=10, fontweight='bold', y=0.992)
+
+    row_idx = 0
+    for wl in uv_wavelengths:
+        uv_data = sample.get_uv_at_wavelength(wl)
+        y_label_uv = y_label_uv_template.format(wavelength=wl)
+        panel_title_uv = panel_title_uv_template.format(wavelength=wl)
+        create_single_panel(
+            axes[row_idx],
+            sample.uv_times, uv_data,
+            xlabel=x_label,
+            ylabel=y_label_uv,
+            color="#1f77b4",
+            smoothing=uv_smoothing,
+            line_width=line_width,
+            show_grid=show_grid,
+            y_scale=y_scale
+        )
+        axes[row_idx].set_title(panel_title_uv)
+        _set_chrom_xlim(axes[row_idx], sample.uv_times)
+        row_idx += 1
+
+    for tic_panel in tic_panels:
+        create_single_panel(
+            axes[row_idx],
+            tic_panel['times'], tic_panel['data'],
+            xlabel=x_label,
+            ylabel=y_label_tic,
+            color=tic_panel['color'],
+            smoothing=eic_smoothing,
+            line_width=line_width,
+            show_grid=show_grid,
+            y_scale=y_scale
+        )
+        axes[row_idx].set_title(tic_panel['title'])
+        _set_chrom_xlim(axes[row_idx], tic_panel['times'])
+        row_idx += 1
+
+    for i, target in enumerate(targets):
+        polarity = target['polarity']
+        polarity_suffix = ' (-)' if polarity == 'negative' else ' (+)'
+        mz = target['mz']
+        times, _ = _get_ms_trace_for_polarity(sample, polarity)
+        eic = extract_eic(sample, mz, mz_window, ion_mode=polarity)
+        panel_title_eic = panel_title_eic_template.format(mz=f"{mz:.2f}", window=mz_window)
+        create_single_panel(
+            axes[row_idx],
+            times, eic,
+            xlabel=x_label,
+            ylabel=y_label_eic,
+            color=config.EIC_COLORS[i % len(config.EIC_COLORS)],
+            smoothing=eic_smoothing,
+            line_width=line_width,
+            show_grid=show_grid,
+            y_scale=y_scale
+        )
+        axes[row_idx].set_title(f"{panel_title_eic}{polarity_suffix}")
+        _set_chrom_xlim(axes[row_idx], times)
+        row_idx += 1
+
+    for idx, ax in enumerate(axes):
+        if idx < (len(axes) - 1):
+            ax.tick_params(axis='x', labelbottom=False)
+            ax.set_xlabel("")
+
+    plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.982))
+    return fig
+
+
 def create_eic_comparison_figure(
     sample: SampleData,
-    mz_values: list[float],
+    mz_values: list,
     mz_window: float = config.DEFAULT_MZ_WINDOW,
     smoothing: int = config.EIC_SMOOTHING_WINDOW,
     overlay: bool = True,
     normalize: bool = True,
-    selected_peaks_by_mz: Optional[dict[str, list[dict]]] = None
+    selected_peaks_by_mz: Optional[dict[str, list[dict]]] = None,
+    style: Optional[dict] = None,
 ) -> matplotlib.figure.Figure:
     """
     Create a figure comparing multiple EICs from a single sample.
@@ -494,33 +676,45 @@ def create_eic_comparison_figure(
     Returns:
         Matplotlib Figure object
     """
-    title_fs = 19
-    panel_title_fs = 16
-    axis_label_fs = 16
-    tick_fs = 14
-    legend_fs = 14
-    peak_label_fs = 13
+    style = style or {}
+    labels_config = style.get('labels', {})
+    fig_width = style.get('fig_width', 10.5)
+    fig_height = style.get('fig_height', 3.8 if overlay else max(3.0, 2.6 * max(1, len(mz_values or []))))
+    line_width = style.get('line_width', 0.9)
+    show_grid = style.get('show_grid', False)
+    title_fs = style.get('title_font_size', 10)
+    panel_title_fs = style.get('panel_title_font_size', 9)
+    axis_label_fs = style.get('axis_label_font_size', 8)
+    tick_fs = style.get('tick_font_size', 7)
+    legend_fs = style.get('legend_font_size', 7)
+    peak_label_fs = style.get('peak_label_font_size', 7)
+    overlay_title = labels_config.get('title_eic_overlay', 'Extracted Ion Chromatograms')
+    x_label = labels_config.get('x_label', 'Time (min)')
+    y_label = labels_config.get('y_label_eic', 'EIC Intensity')
 
     if selected_peaks_by_mz is None:
         selected_peaks_by_mz = {}
+    targets = _normalize_eic_targets(mz_values)
 
     if overlay:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        fig.suptitle(f"EIC Comparison: {sample.name}", fontsize=title_fs, fontweight='bold')
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
         global_y_max = 0.0
 
-        for i, mz in enumerate(mz_values):
-            eic = extract_eic(sample, mz, mz_window)
-            if eic is None or sample.ms_times is None:
+        for i, target in enumerate(targets):
+            mz = target['mz']
+            polarity = target['polarity']
+            eic = extract_eic(sample, mz, mz_window, ion_mode=polarity)
+            times, _ = _get_ms_trace_for_polarity(sample, polarity)
+            if eic is None or times is None:
                 continue
 
-            times = sample.ms_times
             plot_data = smooth_data(eic, smoothing) if smoothing > 0 else eic
             if normalize and np.max(plot_data) > 0:
                 plot_data = plot_data / np.max(plot_data)
 
             color = config.EIC_COLORS[i % len(config.EIC_COLORS)]
-            ax.plot(times, plot_data, color=color, linewidth=1.0, label=f"m/z {mz:.2f}")
+            polarity_suffix = ' (-)' if polarity == 'negative' else ' (+)'
+            ax.plot(times, plot_data, color=color, linewidth=line_width, label=f"m/z {mz:.2f}{polarity_suffix}")
             global_y_max = max(global_y_max, float(np.max(plot_data)) if len(plot_data) > 0 else 0.0)
 
             regions = selected_peaks_by_mz.get(f"{mz:.4f}", [])
@@ -549,12 +743,33 @@ def create_eic_comparison_figure(
                     ax.text(label_x, label_y + y_offset, f"P{number}",
                             ha="center", va="bottom", fontsize=peak_label_fs, color="black")
 
-        ax.set_xlabel("Time (min)", fontsize=axis_label_fs)
-        ax.set_ylabel("Normalized Intensity" if normalize else "Intensity", fontsize=axis_label_fs)
+        ax.set_title(overlay_title, fontsize=title_fs, fontweight='bold')
+        ax.set_xlabel(x_label, fontsize=axis_label_fs)
+        ax.set_ylabel("Normalized Intensity" if normalize else y_label, fontsize=axis_label_fs)
         ax.tick_params(axis='both', labelsize=tick_fs)
-        ax.legend(loc='upper right', fontsize=legend_fs)
-        if sample.ms_times is not None and len(sample.ms_times) > 0:
-            ax.set_xlim(float(sample.ms_times[0]), float(sample.ms_times[-1]))
+        if targets:
+            legend_cols = max(1, min(3, int(np.ceil(len(targets) / 5.0))))
+            legend_loc = 'upper center' if legend_cols > 1 else 'upper right'
+            legend_anchor = (0.5, 1.02) if legend_cols > 1 else (0.995, 0.995)
+            ax.legend(
+                loc=legend_loc,
+                bbox_to_anchor=legend_anchor,
+                fontsize=legend_fs,
+                frameon=False,
+                ncol=legend_cols,
+                handlelength=2.2,
+                columnspacing=0.9,
+                borderaxespad=0.2,
+            )
+        all_time_axes = []
+        for target in targets:
+            times, _ = _get_ms_trace_for_polarity(sample, target['polarity'])
+            if times is not None and len(times) > 0:
+                all_time_axes.append(times)
+        if all_time_axes:
+            max_end = max(float(times[-1]) for times in all_time_axes)
+            if max_end > 0:
+                ax.set_xlim(0.0, max_end)
         if global_y_max > 0:
             # Keep label numbers clearly below the top frame line.
             y_upper = global_y_max * 1.18
@@ -564,18 +779,22 @@ def create_eic_comparison_figure(
         if not normalize:
             ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
             _shift_sci_offset_left(ax)
+        if show_grid:
+            ax.grid(True, alpha=0.3)
     else:
-        n_panels = len(mz_values)
-        fig, axes = plt.subplots(n_panels, 1, figsize=(10, 3 * n_panels))
+        n_panels = max(1, len(targets))
+        fig, axes = plt.subplots(n_panels, 1, figsize=(fig_width, max(fig_height, 2.8 * n_panels)))
         if n_panels == 1:
             axes = [axes]
 
-        fig.suptitle(f"EIC Comparison: {sample.name}", fontsize=title_fs, fontweight='bold')
+        fig.suptitle(overlay_title, fontsize=title_fs, fontweight='bold')
 
-        for i, mz in enumerate(mz_values):
-            eic = extract_eic(sample, mz, mz_window)
-            if eic is not None and sample.ms_times is not None:
-                times = sample.ms_times
+        for i, target in enumerate(targets):
+            mz = target['mz']
+            polarity = target['polarity']
+            eic = extract_eic(sample, mz, mz_window, ion_mode=polarity)
+            times, _ = _get_ms_trace_for_polarity(sample, polarity)
+            if eic is not None and times is not None:
                 plot_data = smooth_data(eic, smoothing) if smoothing > 0 else eic
                 if normalize and np.max(plot_data) > 0:
                     plot_data = plot_data / np.max(plot_data)
@@ -584,16 +803,17 @@ def create_eic_comparison_figure(
                     times,
                     plot_data,
                     color=config.EIC_COLORS[i % len(config.EIC_COLORS)],
-                    linewidth=1.0,
-                    label=f"m/z {mz:.2f}"
+                    linewidth=line_width,
+                    label=f"m/z {mz:.2f}{' (-)' if polarity == 'negative' else ' (+)'}"
                 )
-                axes[i].set_xlabel("Time (min)")
-                axes[i].set_ylabel("Normalized Intensity" if normalize else "Intensity")
+                axes[i].set_xlabel(x_label)
+                axes[i].set_ylabel("Normalized Intensity" if normalize else y_label)
                 axes[i].xaxis.label.set_size(axis_label_fs)
                 axes[i].yaxis.label.set_size(axis_label_fs)
                 axes[i].tick_params(axis='both', labelsize=tick_fs)
-                axes[i].legend(loc='upper right', fontsize=legend_fs)
-                axes[i].set_xlim(float(times[0]), float(times[-1]))
+                axes[i].legend(loc='upper right', fontsize=legend_fs, frameon=False)
+                if len(times) > 0:
+                    axes[i].set_xlim(0.0, float(times[-1]))
                 local_y_max = float(np.max(plot_data)) if len(plot_data) > 0 else 0.0
                 if local_y_max > 0:
                     # Keep label numbers clearly below the top frame line.
@@ -604,6 +824,8 @@ def create_eic_comparison_figure(
                 if not normalize:
                     axes[i].ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
                     _shift_sci_offset_left(axes[i])
+                if show_grid:
+                    axes[i].grid(True, alpha=0.3)
 
                 regions = selected_peaks_by_mz.get(f"{mz:.4f}", [])
                 for region in regions:
@@ -630,7 +852,11 @@ def create_eic_comparison_figure(
                         y_offset = 0.03 * max(1.0, float(np.max(plot_data)))
                         axes[i].text(label_x, label_y + y_offset, f"P{number}",
                                      ha="center", va="bottom", fontsize=peak_label_fs, color="black")
-            axes[i].set_title(f"EIC m/z {mz:.2f} (±{mz_window})", fontsize=panel_title_fs, fontweight='bold')
+            axes[i].set_title(
+                f"EIC m/z {mz:.2f} (±{mz_window}){' (-)' if polarity == 'negative' else ' (+)'}",
+                fontsize=panel_title_fs,
+                fontweight='bold'
+            )
 
     plt.tight_layout()
     return fig

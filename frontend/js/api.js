@@ -154,6 +154,14 @@ const api = {
     });
   },
 
+  exportSingleSample(payload) {
+    return apiFetch('/api/export-single-sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   exportReportPdf(payload) {
     return apiFetch('/api/export-report-pdf', {
       method: 'POST',
