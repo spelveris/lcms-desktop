@@ -305,35 +305,40 @@ def baseline_correction(data: np.ndarray, percentile: float = 5) -> np.ndarray:
     return corrected
 
 
-def sum_spectra_in_range(sample: 'SampleData', start_time: float, end_time: float) -> tuple[np.ndarray, np.ndarray]:
+def sum_spectra_from_channel(times: np.ndarray,
+                             scans: list,
+                             mz_axis: Optional[np.ndarray],
+                             start_time: float,
+                             end_time: float) -> tuple[np.ndarray, np.ndarray]:
     """
-    Sum mass spectra within a time range.
+    Sum mass spectra within a time range for one MS channel.
 
     Args:
-        sample: SampleData object with loaded MS data
+        times: Retention-time array for the channel
+        scans: Scan list for the channel
+        mz_axis: Shared m/z axis if profile data is aligned, else None
         start_time: Start time in minutes
         end_time: End time in minutes
 
     Returns:
         Tuple of (mz_array, intensity_array)
     """
-    if sample.ms_scans is None or sample.ms_times is None:
+    if scans is None or times is None:
         return np.array([]), np.array([])
 
     # Find time indices within range
-    time_mask = (sample.ms_times >= start_time) & (sample.ms_times <= end_time)
+    time_mask = (times >= start_time) & (times <= end_time)
     scan_indices = np.where(time_mask)[0]
 
     if len(scan_indices) == 0:
         return np.array([]), np.array([])
 
     # If we have a shared m/z axis
-    if sample.ms_mz_axis is not None:
-        mz_axis = sample.ms_mz_axis
+    if mz_axis is not None:
         summed_intensities = np.zeros(len(mz_axis))
 
         for idx in scan_indices:
-            scan = sample.ms_scans[idx]
+            scan = scans[idx]
             if scan is not None and isinstance(scan, np.ndarray):
                 summed_intensities += scan
 
@@ -345,7 +350,7 @@ def sum_spectra_in_range(sample: 'SampleData', start_time: float, end_time: floa
     all_int = []
 
     for idx in scan_indices:
-        scan = sample.ms_scans[idx]
+        scan = scans[idx]
         if scan is None:
             continue
 
@@ -377,6 +382,27 @@ def sum_spectra_in_range(sample: 'SampleData', start_time: float, end_time: floa
     mz_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
     return mz_centers, binned_intensity
+
+
+def sum_spectra_in_range(sample: 'SampleData', start_time: float, end_time: float) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Sum mass spectra within a time range.
+
+    Args:
+        sample: SampleData object with loaded MS data
+        start_time: Start time in minutes
+        end_time: End time in minutes
+
+    Returns:
+        Tuple of (mz_array, intensity_array)
+    """
+    return sum_spectra_from_channel(
+        sample.ms_times,
+        sample.ms_scans,
+        sample.ms_mz_axis,
+        start_time,
+        end_time,
+    )
 
 
 def centroid_peak(mz: np.ndarray, intensity: np.ndarray, peak_idx: int, window: int = 3) -> float:

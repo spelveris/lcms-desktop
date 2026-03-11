@@ -19,6 +19,7 @@ const state = {
   sortMode: 'date-desc',
   singleSampleData: null,
   singleLoadInFlight: false,
+  singleSpectrumSelections: {},
   backgroundSubtractionData: null,
   backgroundSubtractInFlight: false,
   progressionData: null,
@@ -453,11 +454,149 @@ function resetSingleSampleView() {
   const uv = document.getElementById('single-uv-plots');
   const tic = document.getElementById('single-tic-plot');
   const eic = document.getElementById('single-eic-plots');
+  state.singleSpectrumSelections = {};
   if (metrics) metrics.innerHTML = '';
   if (uv) uv.innerHTML = '';
-  if (tic) tic.innerHTML = '';
+  if (tic) {
+    tic.innerHTML = '';
+    tic.className = 'plot-container';
+  }
   if (eic) eic.innerHTML = '';
   setSingleEmptyState(true);
+}
+
+function getSingleSpectrumSelectionKey(polarity = null) {
+  if (polarity === 'positive') return 'positive';
+  if (polarity === 'negative') return 'negative';
+  return 'default';
+}
+
+function getSingleSummedSpectrumPlaceholderHtml(panelLabel = '') {
+  const labelText = panelLabel ? ` ${escapeHtml(panelLabel)}` : '';
+  return `<p class="placeholder-msg">Drag over the TIC${labelText} to show the summed m/z spectrum for that retention-time window</p>`;
+}
+
+function renderSingleSummedSpectrumPlaceholder(plotId, panelLabel = '') {
+  const el = document.getElementById(plotId);
+  if (!el) return;
+  el.innerHTML = getSingleSummedSpectrumPlaceholderHtml(panelLabel);
+}
+
+function getSingleSummedSpectrumXRange(mzValues) {
+  if (!Array.isArray(mzValues) || mzValues.length === 0) return null;
+  let maxMz = Number.NEGATIVE_INFINITY;
+  mzValues.forEach((value) => {
+    const mz = Number(value);
+    if (Number.isFinite(mz) && mz > maxMz) maxMz = mz;
+  });
+  if (!Number.isFinite(maxMz) || maxMz <= 100) return null;
+  return [100, Math.min(1000, maxMz)];
+}
+
+async function loadSingleSummedSpectrumWindow({ samplePath, plotId, start, end, polarity = null, panelLabel = '' }) {
+  const plotEl = document.getElementById(plotId);
+  if (!plotEl || !samplePath) return;
+
+  const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  plotEl.dataset.requestToken = token;
+  plotEl.innerHTML = '<p class="muted" style="padding:8px 4px;">Loading summed MS spectrum...</p>';
+
+  try {
+    const spectrum = await api.getSummedSpectrum(samplePath, start, end, polarity);
+    if (!document.body.contains(plotEl) || plotEl.dataset.requestToken !== token) return;
+
+    const labelSuffix = panelLabel ? ` ${panelLabel}` : '';
+    charts.plotMassSpectrum(plotId, spectrum.mz || [], spectrum.intensities || [], [], {
+      title: `Summed MS Spectrum${labelSuffix} (${start.toFixed(2)}-${end.toFixed(2)} min)`,
+      xRange: getSingleSummedSpectrumXRange(spectrum.mz || []),
+      heightPx: 300,
+    });
+    schedulePlotlyResize([plotId]);
+  } catch (_) {
+    if (!document.body.contains(plotEl) || plotEl.dataset.requestToken !== token) return;
+    plotEl.innerHTML = `<p class="placeholder-msg">No summed MS spectrum could be generated for the selected TIC${panelLabel ? ` ${escapeHtml(panelLabel)}` : ''} window</p>`;
+  }
+}
+
+function renderSingleInteractiveTicPlot({
+  plotId,
+  times,
+  intensities,
+  title,
+  color,
+  samplePath,
+  polarity = null,
+  panelLabel = '',
+  spectrumPlotId,
+}) {
+  const selection = state.singleSpectrumSelections[getSingleSpectrumSelectionKey(polarity)] || null;
+  charts.plotTIC(plotId, times, intensities, title, color, {
+    startAtZero: true,
+    dragmode: 'select',
+    selectdirection: 'h',
+    heightPx: 300,
+    start: selection?.start,
+    end: selection?.end,
+    windowColor: 'rgba(255, 215, 0, 0.25)',
+    showWindowAnnotation: false,
+  });
+  bindSingleTicSpectrumSelection(plotId, spectrumPlotId, samplePath, polarity, panelLabel, {
+    times,
+    intensities,
+    title,
+    color,
+  });
+}
+
+function bindSingleTicSpectrumSelection(ticPlotId, spectrumPlotId, samplePath, polarity = null, panelLabel = '', renderArgs = null) {
+  const plot = document.getElementById(ticPlotId);
+  if (!plot || typeof plot.on !== 'function') return;
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_selected');
+  }
+
+  plot.on('plotly_selected', async (eventData) => {
+    if (!eventData) return;
+    const points = Array.isArray(eventData.points) ? eventData.points : [];
+    const startRaw = eventData.range?.x?.[0] ?? points[0]?.x;
+    const endRaw = eventData.range?.x?.[1] ?? points[points.length - 1]?.x;
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    if ((end - start) < 0.02) return;
+
+    const normalizedStart = Math.max(0, Math.min(start, end));
+    const normalizedEnd = Math.max(normalizedStart, end);
+    state.singleSpectrumSelections[getSingleSpectrumSelectionKey(polarity)] = {
+      start: normalizedStart,
+      end: normalizedEnd,
+    };
+
+    if (renderArgs) {
+      renderSingleInteractiveTicPlot({
+        plotId: ticPlotId,
+        times: renderArgs.times,
+        intensities: renderArgs.intensities,
+        title: renderArgs.title,
+        color: renderArgs.color,
+        samplePath,
+        polarity,
+        panelLabel,
+        spectrumPlotId,
+      });
+    }
+
+    await loadSingleSummedSpectrumWindow({
+      samplePath,
+      plotId: spectrumPlotId,
+      start: normalizedStart,
+      end: normalizedEnd,
+      polarity,
+      panelLabel,
+    });
+  });
 }
 
 function resetBackgroundSubtractionView() {
@@ -586,7 +725,14 @@ function resizePlotlyById(plotId) {
   if (!el || !el.classList.contains('js-plotly-plot')) return;
   try {
     const width = Math.floor(el.clientWidth || 0);
-    const height = Math.floor(el.clientHeight || 0);
+    const fixedHeight = Number(el.dataset.fixedPlotHeight || 0);
+    const height = Number.isFinite(fixedHeight) && fixedHeight > 0
+      ? Math.floor(fixedHeight)
+      : Math.floor(el.clientHeight || 0);
+    if (Number.isFinite(fixedHeight) && fixedHeight > 0) {
+      el.style.height = `${Math.floor(fixedHeight)}px`;
+      el.style.minHeight = `${Math.floor(fixedHeight)}px`;
+    }
     if (typeof window.Plotly.relayout === 'function' && width > 80 && height > 120) {
       window.Plotly.relayout(el, { width, height });
     }
@@ -632,6 +778,12 @@ function schedulePlotlyResize(plotIds = []) {
       'deconv-tic-plot',
       'deconv-ion-selection-plot',
       'single-tic-plot',
+      'single-tic-plot-main',
+      'single-tic-pos-plot',
+      'single-tic-neg-plot',
+      'single-spectrum-plot',
+      'single-spectrum-pos-plot',
+      'single-spectrum-neg-plot',
       'bgsub-tic-plot',
       'bgsub-spectrum-plot',
       'bgsub-tic-pos-plot',
@@ -1848,6 +2000,7 @@ async function loadSingleSample(options = {}) {
   state.singleLoadInFlight = true;
   showLoading('Analyzing sample...');
   try {
+    state.singleSpectrumSelections = {};
     const data = await api.getSingleSampleData({
       path: samplePath,
       wavelengths,
@@ -1872,6 +2025,8 @@ async function loadSingleSample(options = {}) {
 
 function renderSingleSample(data) {
   setSingleEmptyState(false);
+  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const singlePlotIds = [];
 
   // Metrics
   const metricsBar = document.getElementById('single-metrics');
@@ -1924,27 +2079,82 @@ function renderSingleSample(data) {
   // TIC plot(s)
   const ticContainer = document.getElementById('single-tic-plot');
   ticContainer.innerHTML = '';
+  ticContainer.className = 'plot-stack';
   if (data.tic && data.tic.has_dual_polarity && data.tic.times_pos && data.tic.times_neg) {
     const ticTitle = document.getElementById('label-tic-panel');
     const baseTitle = (ticTitle && ticTitle.value) || 'Total Ion Chromatogram';
-    ticContainer.className = 'plot-stack';
 
     const posDiv = document.createElement('div');
-    posDiv.className = 'plot-container';
+    posDiv.className = 'plot-container single-tic-compact';
     posDiv.id = 'single-tic-pos-plot';
     ticContainer.appendChild(posDiv);
-    charts.plotTIC('single-tic-pos-plot', data.tic.times_pos, data.tic.intensities_pos, `${baseTitle} (+)`, '#1f77b4');
+    renderSingleInteractiveTicPlot({
+      plotId: 'single-tic-pos-plot',
+      times: data.tic.times_pos,
+      intensities: data.tic.intensities_pos,
+      title: `${baseTitle} (+)`,
+      color: '#1f77b4',
+      samplePath,
+      polarity: 'positive',
+      panelLabel: '(+)',
+      spectrumPlotId: 'single-spectrum-pos-plot',
+    });
+    singlePlotIds.push('single-tic-pos-plot');
+
+    const posSpectrumDiv = document.createElement('div');
+    posSpectrumDiv.className = 'plot-container single-spectrum-compact';
+    posSpectrumDiv.id = 'single-spectrum-pos-plot';
+    ticContainer.appendChild(posSpectrumDiv);
+    renderSingleSummedSpectrumPlaceholder('single-spectrum-pos-plot', '(+)');
 
     const negDiv = document.createElement('div');
-    negDiv.className = 'plot-container';
+    negDiv.className = 'plot-container single-tic-compact';
     negDiv.id = 'single-tic-neg-plot';
     ticContainer.appendChild(negDiv);
-    charts.plotTIC('single-tic-neg-plot', data.tic.times_neg, data.tic.intensities_neg, `${baseTitle} (−)`, '#d62728');
+    renderSingleInteractiveTicPlot({
+      plotId: 'single-tic-neg-plot',
+      times: data.tic.times_neg,
+      intensities: data.tic.intensities_neg,
+      title: `${baseTitle} (−)`,
+      color: '#d62728',
+      samplePath,
+      polarity: 'negative',
+      panelLabel: '(−)',
+      spectrumPlotId: 'single-spectrum-neg-plot',
+    });
+    singlePlotIds.push('single-tic-neg-plot');
+
+    const negSpectrumDiv = document.createElement('div');
+    negSpectrumDiv.className = 'plot-container single-spectrum-compact';
+    negSpectrumDiv.id = 'single-spectrum-neg-plot';
+    ticContainer.appendChild(negSpectrumDiv);
+    renderSingleSummedSpectrumPlaceholder('single-spectrum-neg-plot', '(−)');
   } else if (data.tic && data.tic.times && data.tic.times.length > 0) {
-    ticContainer.className = 'plot-container';
     const ticTitle = document.getElementById('label-tic-panel');
-    charts.plotTIC('single-tic-plot', data.tic.times, data.tic.intensities, (ticTitle && ticTitle.value) || 'Total Ion Chromatogram');
+    const ticDiv = document.createElement('div');
+    ticDiv.className = 'plot-container single-tic-compact';
+    ticDiv.id = 'single-tic-plot-main';
+    ticContainer.appendChild(ticDiv);
+    renderSingleInteractiveTicPlot({
+      plotId: 'single-tic-plot-main',
+      times: data.tic.times,
+      intensities: data.tic.intensities,
+      title: (ticTitle && ticTitle.value) || 'Total Ion Chromatogram',
+      color: '#ff7f0e',
+      samplePath,
+      polarity: null,
+      panelLabel: '',
+      spectrumPlotId: 'single-spectrum-plot',
+    });
+    singlePlotIds.push('single-tic-plot-main');
+
+    const spectrumDiv = document.createElement('div');
+    spectrumDiv.className = 'plot-container single-spectrum-compact';
+    spectrumDiv.id = 'single-spectrum-plot';
+    ticContainer.appendChild(spectrumDiv);
+    renderSingleSummedSpectrumPlaceholder('single-spectrum-plot');
   } else {
+    ticContainer.className = 'plot-container';
     ticContainer.innerHTML = '<p class="placeholder-msg">No MS data available</p>';
   }
 
@@ -2002,6 +2212,10 @@ function renderSingleSample(data) {
     eicContainer.innerHTML = '<p class="placeholder-msg">Add target m/z values in Settings to view EIC plots</p>';
   } else {
     eicContainer.innerHTML = '<p class="placeholder-msg">No EIC data available</p>';
+  }
+
+  if (singlePlotIds.length > 0) {
+    schedulePlotlyResize(singlePlotIds);
   }
 }
 
@@ -4067,15 +4281,19 @@ function bindDeconvWindowDragSelection(divId) {
 
   if (typeof plot.removeAllListeners === 'function') {
     plot.removeAllListeners('plotly_relayout');
+    plot.removeAllListeners('plotly_selected');
   }
 
-  plot.on('plotly_relayout', async (eventData) => {
-    if (!eventData || state.deconvDragSelectionInFlight) return;
-    if (eventData['xaxis.autorange']) return;
-    if (state.deconvInteractionMode === 'zoom') return;
+  if (state.deconvInteractionMode === 'zoom') return;
 
-    const startRaw = eventData['xaxis.range[0]'] ?? eventData.xaxis?.range?.[0];
-    const endRaw = eventData['xaxis.range[1]'] ?? eventData.xaxis?.range?.[1];
+  plot.on('plotly_selected', async (eventData) => {
+    if (!eventData || state.deconvDragSelectionInFlight) return;
+
+    const points = Array.isArray(eventData.points) ? eventData.points : [];
+    const startRaw = eventData.range?.x?.[0]
+      ?? points[0]?.x;
+    const endRaw = eventData.range?.x?.[1]
+      ?? points[points.length - 1]?.x;
     const start = Number(startRaw);
     const end = Number(endRaw);
 
@@ -4100,7 +4318,6 @@ async function applyDraggedDeconvWindow(start, end) {
     document.getElementById('deconv-end').value = normalizedEnd.toFixed(2);
     state.deconvAutoRunSignature = '';
     await refreshDeconvWindowContext(samplePath);
-    toast(`Dragged window: ${normalizedStart.toFixed(2)} - ${normalizedEnd.toFixed(2)} min`, 'info');
     await runDeconvolution({ useOverlay: false, silentSuccess: true });
   } finally {
     state.deconvDragSelectionInFlight = false;
@@ -4141,6 +4358,8 @@ async function refreshDeconvWindowContext(samplePath = null) {
       end,
       startAtZero: true,
       windowColor: 'rgba(255, 215, 0, 0.25)',
+      dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+      selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
     });
     bindDeconvWindowDragSelection('deconv-uv-plot');
   } catch (_) {
@@ -4157,6 +4376,8 @@ async function refreshDeconvWindowContext(samplePath = null) {
       end,
       startAtZero: true,
       windowColor: 'rgba(255, 215, 0, 0.25)',
+      dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+      selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
     });
     bindDeconvWindowDragSelection('deconv-tic-plot');
   } catch (_) {

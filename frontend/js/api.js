@@ -75,8 +75,8 @@ const api = {
     return apiFetch(`/api/ms-spectrum?${qs({ path, time })}`);
   },
 
-  getSummedSpectrum(path, start, end) {
-    return apiFetch(`/api/summed-spectrum?${qs({ path, start, end })}`);
+  getSummedSpectrum(path, start, end, polarity = null) {
+    return apiFetch(`/api/summed-spectrum?${qs({ path, start, end, polarity })}`);
   },
 
   findPeaks(path, dataType, opts = {}) {

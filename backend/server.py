@@ -1206,13 +1206,19 @@ def summed_spectrum(
     path: str = Query(...),
     start: float = Query(...),
     end: float = Query(...),
+    polarity: Optional[str] = Query(None, description="positive, negative, or default channel"),
 ):
     """Return summed mass spectrum over a time range."""
     sample = _get_sample(path)
-    if sample.ms_scans is None:
+    normalized_polarity = str(polarity).strip().lower() if polarity is not None else None
+    if normalized_polarity not in {"positive", "negative"}:
+        normalized_polarity = None
+
+    times, scans, mz_axis, _ = _get_channel_ms_data(sample, normalized_polarity)
+    if scans is None or times is None:
         raise HTTPException(status_code=404, detail="No MS data")
 
-    mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
+    mz_arr, intensity_arr = analysis.sum_spectra_from_channel(times, scans, mz_axis, start, end)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
 
@@ -1220,6 +1226,7 @@ def summed_spectrum(
         "mz": _ndarray_to_list(mz_arr),
         "intensities": _ndarray_to_list(intensity_arr),
         "time_range": [start, end],
+        "polarity": normalized_polarity,
     }
 
 
