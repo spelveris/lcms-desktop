@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.14">
+  <link rel="stylesheet" href="css/style.css?v=0.2.15">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -333,6 +333,12 @@
         </label>
         <button id="btn-auto-detect-window" class="btn btn-sm">Auto-Detect Window</button>
         <button id="btn-run-deconv" class="btn btn-primary">Run Deconvolution</button>
+        <div class="deconv-mode-toggle">
+          <span class="deconv-mode-label">Drag Mode</span>
+          <button id="btn-deconv-mode-deconvolute" class="btn btn-sm btn-primary" type="button">Deconvolute</button>
+          <button id="btn-deconv-mode-zoom" class="btn btn-sm" type="button">Zoom</button>
+        </div>
+        <span class="toolbar-note">In Deconvolute mode, drag over UV or TIC to set the window and run automatically. Switch to Zoom if you only want to inspect the chromatogram.</span>
       </div>
       <div class="deconv-controls">
         <div class="input-row">
@@ -515,9 +521,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.14"></script>
-  <script src="js/charts.js?v=0.2.14"></script>
-  <script src="js/quotes.js?v=0.2.14"></script>
-  <script src="js/app.js?v=0.2.14"></script>
+  <script src="js/api.js?v=0.2.15"></script>
+  <script src="js/charts.js?v=0.2.15"></script>
+  <script src="js/quotes.js?v=0.2.15"></script>
+  <script src="js/app.js?v=0.2.15"></script>
 </body>
 </html>
