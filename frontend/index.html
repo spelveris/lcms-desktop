@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.17">
+  <link rel="stylesheet" href="css/style.css?v=0.2.18">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -189,6 +189,7 @@
       <button class="tab-btn" data-tab="tab-time-change-ms">Time Change MS</button>
       <button class="tab-btn" data-tab="tab-masscalc">Mass Calculator</button>
       <button class="tab-btn" data-tab="tab-report">Report Export</button>
+      <button class="tab-btn" data-tab="tab-run-router">Transfer Router</button>
     </nav>
 
     <!-- Tab: Single Sample -->
@@ -518,12 +519,67 @@
         <p class="placeholder-msg">Generate analyses in other tabs, then export a session report here.</p>
       </div>
     </div>
+
+    <div id="tab-run-router" class="tab-panel hidden">
+      <div class="tab-toolbar router-toolbar">
+        <label class="router-field router-field-wide">Read-only source folder
+          <input type="text" id="router-source-path" placeholder="\\\\169.254.107.1\\1\\Data or /Volumes/1/Data" spellcheck="false">
+        </label>
+        <label class="router-field router-field-wide">Initials folders root
+          <input type="text" id="router-initials-root" placeholder="\\\\nas22.ethz.ch\\chab_loc_lang_s1\\Group\\LC-MS Agilent data" spellcheck="false">
+        </label>
+      </div>
+      <div class="tab-toolbar router-toolbar">
+        <label class="router-field router-field-wide">Destination root
+          <input type="text" id="router-destination-root" placeholder="Folder that should receive the copied runs" spellcheck="false">
+        </label>
+        <label class="router-field router-field-sm">Poll (s)
+          <input type="number" id="router-poll-seconds" min="5" max="3600" step="1" value="15">
+        </label>
+        <label class="checkbox-label"><input type="checkbox" id="router-recursive" checked> Recursive scan</label>
+        <label class="checkbox-label"><input type="checkbox" id="router-auto-copy" checked> Auto-copy ready runs</label>
+      </div>
+      <div class="tab-toolbar router-toolbar">
+        <button id="btn-router-use-current" class="btn btn-sm">Use Current Folder</button>
+        <button id="btn-router-scan" class="btn btn-primary">Scan Finished Runs</button>
+        <button id="btn-router-copy" class="btn btn-sm">Copy Ready Runs</button>
+        <button id="btn-router-toggle" class="btn btn-sm btn-primary">Start Monitoring</button>
+        <span id="router-status-dot" style="display:none;width:8px;height:8px;border-radius:50%;background:#2ecc71;flex-shrink:0;animation:watch-pulse 2s infinite;"></span>
+        <span id="router-status-text" class="muted">Idle</span>
+      </div>
+
+      <div id="router-summary" class="metrics-bar">
+        <div class="metric-card"><span class="metric-label">Ready</span><span id="router-ready-count" class="metric-value">0</span></div>
+        <div class="metric-card"><span class="metric-label">Already There</span><span id="router-copied-count" class="metric-value">0</span></div>
+        <div class="metric-card"><span class="metric-label">To Unnamed</span><span id="router-unnamed-count" class="metric-value">0</span></div>
+        <div class="metric-card"><span class="metric-label">In Progress</span><span id="router-inprogress-count" class="metric-value">0</span></div>
+      </div>
+
+      <div class="router-grid">
+        <div class="plot-container router-panel">
+          <div class="tab-toolbar" style="margin-bottom:8px;">
+            <span class="toolbar-note">Current finished runs found in the scan folder</span>
+          </div>
+          <div id="router-results-table-container">
+            <p class="placeholder-msg">Scan a source folder to list finished runs and their transfer targets.</p>
+          </div>
+        </div>
+        <div class="plot-container router-panel">
+          <div class="tab-toolbar" style="margin-bottom:8px;">
+            <span class="toolbar-note">Recent transfer activity (last 50 runs)</span>
+          </div>
+          <div id="router-log-table-container">
+            <p class="placeholder-msg">No transfer activity yet.</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.17"></script>
-  <script src="js/charts.js?v=0.2.17"></script>
-  <script src="js/quotes.js?v=0.2.17"></script>
-  <script src="js/app.js?v=0.2.17"></script>
+  <script src="js/api.js?v=0.2.18"></script>
+  <script src="js/charts.js?v=0.2.18"></script>
+  <script src="js/quotes.js?v=0.2.18"></script>
+  <script src="js/app.js?v=0.2.18"></script>
 </body>
 </html>

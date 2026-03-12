@@ -274,6 +274,249 @@ def _sanitize_filename(name: str, fallback: str = "sample") -> str:
     return safe or fallback
 
 
+def _iter_d_folder_paths(base_path: Union[str, Path], recursive: bool = True) -> list[Path]:
+    root = Path(_normalize_filesystem_path(str(base_path)))
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Not a directory")
+
+    folders: list[Path] = []
+    if not recursive:
+        try:
+            for entry in sorted(root.iterdir()):
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir() and entry.name.lower().endswith(".d"):
+                    folders.append(entry)
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        return folders
+
+    def _on_walk_error(exc):
+        if isinstance(exc, PermissionError):
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    for current_root, dirs, _files in os.walk(root, onerror=_on_walk_error):
+        visible_dirs = [d for d in dirs if not d.startswith(".")]
+        d_dirs = [d for d in visible_dirs if d.lower().endswith(".d")]
+        for dirname in d_dirs:
+            folders.append(Path(current_root) / dirname)
+        dirs[:] = [d for d in visible_dirs if not d.lower().endswith(".d")]
+    return folders
+
+
+def _list_router_initial_dirs(initials_root: Union[str, Path]) -> tuple[Path, list[Path]]:
+    root = Path(_normalize_filesystem_path(str(initials_root)))
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="Initials root not found")
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Initials root is not a directory")
+
+    try:
+        folders = [
+            entry for entry in sorted(root.iterdir())
+            if entry.is_dir() and not entry.name.startswith(".")
+        ]
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    if not folders:
+        raise HTTPException(status_code=400, detail="Initials root has no subfolders")
+    return root, folders
+
+
+def _match_router_initials(run_name: str, initials_dirs: list[Path]) -> tuple[Optional[str], Optional[Path]]:
+    base_name = Path(str(run_name)).name
+    if base_name.lower().endswith(".d"):
+        base_name = base_name[:-2]
+    normalized = re.sub(r"\s+", " ", base_name.strip()).upper()
+    if not normalized:
+        return None, None
+
+    candidates = sorted(
+        ((folder.name, folder) for folder in initials_dirs),
+        key=lambda item: (-len(item[0]), item[0].upper()),
+    )
+
+    for folder_name, folder_path in candidates:
+        key = folder_name.upper()
+        if not key:
+            continue
+        if normalized == key:
+            return folder_name, folder_path
+        if normalized.startswith(key):
+            next_char = normalized[len(key):len(key) + 1]
+            if not next_char or not next_char.isalnum():
+                return folder_name, folder_path
+
+    for folder_name, folder_path in candidates:
+        key = folder_name.upper()
+        if key and normalized.startswith(key):
+            return folder_name, folder_path
+
+    return None, None
+
+
+def _build_router_destination(
+    folder_path: Union[str, Path],
+    initials_root: Union[str, Path],
+    destination_root: Optional[Union[str, Path]] = None,
+    initials_dirs: Optional[list[Path]] = None,
+) -> dict:
+    source_folder = Path(_normalize_filesystem_path(str(folder_path)))
+    initials_root_path, initial_dirs = (
+        (Path(_normalize_filesystem_path(str(initials_root))), initials_dirs)
+        if initials_dirs is not None
+        else _list_router_initial_dirs(initials_root)
+    )
+    if initial_dirs is None:
+        initial_dirs = []
+
+    matched_initials, matched_initials_dir = _match_router_initials(source_folder.name, initial_dirs)
+    destination_root_path = Path(
+        _normalize_filesystem_path(str(destination_root or initials_root_path))
+    )
+    route_mode = "matched"
+    recognized_initials = True
+
+    if matched_initials_dir is None:
+        unnamed_folder = next(
+            (folder for folder in initial_dirs if folder.name.strip().lower() == "unnamed"),
+            None,
+        )
+        if unnamed_folder is not None:
+            matched_initials = unnamed_folder.name
+            matched_initials_dir = unnamed_folder
+            route_mode = "unnamed"
+            recognized_initials = False
+
+    if matched_initials_dir is None:
+        return {
+            "matched": False,
+            "initials": None,
+            "recognized_initials": False,
+            "route_mode": "unmatched",
+            "matched_initials_dir": None,
+            "destination_dir": None,
+            "destination_path": None,
+            "destination_exists": False,
+        }
+
+    relative_dir = matched_initials_dir.relative_to(initials_root_path)
+    destination_dir = destination_root_path.joinpath(*relative_dir.parts)
+    destination_path = destination_dir / source_folder.name
+
+    return {
+        "matched": True,
+        "initials": matched_initials,
+        "recognized_initials": recognized_initials,
+        "route_mode": route_mode,
+        "matched_initials_dir": str(matched_initials_dir),
+        "destination_dir": str(destination_dir),
+        "destination_path": str(destination_path),
+        "destination_exists": destination_path.exists(),
+    }
+
+
+def _scan_run_router(
+    source_path: Union[str, Path],
+    initials_root: Union[str, Path],
+    destination_root: Optional[Union[str, Path]] = None,
+    recursive: bool = True,
+    limit: int = 200,
+) -> dict:
+    source_root = Path(_normalize_filesystem_path(str(source_path)))
+    initials_root_path, initials_dirs = _list_router_initial_dirs(initials_root)
+    destination_root_path = Path(_normalize_filesystem_path(str(destination_root or initials_root_path)))
+
+    items = []
+    in_progress_count = 0
+    wash_count = 0
+
+    for folder in _iter_d_folder_paths(source_root, recursive=recursive):
+        run_state = _inspect_sample_run_state(folder)
+        if run_state.get("run_in_progress"):
+            in_progress_count += 1
+            continue
+        if run_state.get("is_wash_position"):
+            wash_count += 1
+            continue
+
+        route = _build_router_destination(
+            folder,
+            initials_root_path,
+            destination_root_path,
+            initials_dirs=initials_dirs,
+        )
+        latest_mtime = float(run_state.get("latest_mtime") or 0.0)
+        latest_iso = (
+            datetime.datetime.fromtimestamp(latest_mtime).isoformat()
+            if latest_mtime > 0
+            else None
+        )
+        status = "unmatched"
+        if route["matched"]:
+            status = "already-copied" if route["destination_exists"] else "ready"
+
+        items.append({
+            "name": folder.name,
+            "path": str(folder),
+            "latest_mtime": latest_mtime,
+            "latest_mtime_iso": latest_iso,
+            "sample_location": run_state.get("sample_location"),
+            "completion_source": run_state.get("completion_source"),
+            "initials": route["initials"],
+            "matched": route["matched"],
+            "recognized_initials": route.get("recognized_initials", False),
+            "route_mode": route.get("route_mode", "unmatched"),
+            "matched_initials_dir": route["matched_initials_dir"],
+            "destination_dir": route["destination_dir"],
+            "destination_path": route["destination_path"],
+            "destination_exists": route["destination_exists"],
+            "status": status,
+        })
+
+    items.sort(key=lambda item: item.get("latest_mtime") or 0.0, reverse=True)
+    if limit > 0:
+        items = items[:limit]
+
+    ready_count = sum(1 for item in items if item["status"] == "ready")
+    copied_count = sum(1 for item in items if item["status"] == "already-copied")
+    unmatched_count = sum(1 for item in items if item["status"] == "unmatched")
+    unnamed_count = sum(1 for item in items if item.get("route_mode") == "unnamed")
+
+    return {
+        "source_path": str(source_root),
+        "initials_root": str(initials_root_path),
+        "destination_root": str(destination_root_path),
+        "recursive": bool(recursive),
+        "items": items,
+        "summary": {
+            "shown": len(items),
+            "ready": ready_count,
+            "already_copied": copied_count,
+            "unmatched": unmatched_count,
+            "unnamed": unnamed_count,
+            "in_progress": in_progress_count,
+            "wash": wash_count,
+        },
+    }
+
+
+def _copy_router_folder(source_folder: Path, destination_path: Path) -> None:
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+    temp_destination = destination_path.with_name(f"{destination_path.name}.copying-{timestamp}")
+
+    try:
+        shutil.copytree(source_folder, temp_destination, copy_function=shutil.copy2)
+        temp_destination.replace(destination_path)
+    except Exception:
+        shutil.rmtree(temp_destination, ignore_errors=True)
+        raise
+
+
 def _resolve_node_command() -> Optional[str]:
     preferred = os.environ.get("LCMS_NODE")
     candidates = []
@@ -1491,6 +1734,156 @@ def clear_cache():
     _sample_cache.clear()
     _sample_cache_state.clear()
     return {"status": "cleared"}
+
+
+@app.post("/api/run-router/scan")
+def run_router_scan(payload: dict = Body(...)):
+    source_path = str(payload.get("source_path") or "").strip()
+    initials_root = str(payload.get("initials_root") or "").strip()
+    destination_root = str(payload.get("destination_root") or initials_root).strip()
+
+    if not source_path:
+        raise HTTPException(status_code=400, detail="source_path is required")
+    if not initials_root:
+        raise HTTPException(status_code=400, detail="initials_root is required")
+
+    recursive = _coerce_bool(payload.get("recursive"), True)
+    limit = _coerce_int(payload.get("limit"), 200)
+    limit = max(0, min(limit, 1000))
+
+    return _scan_run_router(
+        source_path=source_path,
+        initials_root=initials_root,
+        destination_root=destination_root,
+        recursive=recursive,
+        limit=limit,
+    )
+
+
+@app.post("/api/run-router/copy")
+def run_router_copy(payload: dict = Body(...)):
+    source_path = str(payload.get("source_path") or "").strip()
+    initials_root = str(payload.get("initials_root") or "").strip()
+    destination_root = str(payload.get("destination_root") or initials_root).strip()
+
+    if not source_path:
+        raise HTTPException(status_code=400, detail="source_path is required")
+    if not initials_root:
+        raise HTTPException(status_code=400, detail="initials_root is required")
+
+    recursive = _coerce_bool(payload.get("recursive"), True)
+    run_paths_raw = payload.get("run_paths", [])
+    if run_paths_raw is None:
+        run_paths_raw = []
+    if not isinstance(run_paths_raw, list):
+        raise HTTPException(status_code=400, detail="run_paths must be a list")
+
+    if run_paths_raw:
+        run_paths = []
+        seen_paths = set()
+        for raw_path in run_paths_raw:
+            normalized = _normalize_filesystem_path(str(raw_path or ""))
+            if not normalized or normalized in seen_paths:
+                continue
+            seen_paths.add(normalized)
+            run_paths.append(Path(normalized))
+    else:
+        scan_data = _scan_run_router(
+            source_path=source_path,
+            initials_root=initials_root,
+            destination_root=destination_root,
+            recursive=recursive,
+            limit=0,
+        )
+        run_paths = [
+            Path(item["path"])
+            for item in scan_data["items"]
+            if item.get("status") == "ready"
+        ]
+
+    initials_root_path, initials_dirs = _list_router_initial_dirs(initials_root)
+    destination_root_path = Path(_normalize_filesystem_path(destination_root))
+
+    results = []
+    copied_count = 0
+    exists_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for run_path in run_paths:
+        source_folder = Path(_normalize_filesystem_path(str(run_path)))
+        result = {
+            "name": source_folder.name,
+            "path": str(source_folder),
+            "status": "skipped",
+            "detail": "",
+            "destination_path": None,
+        }
+
+        if not source_folder.exists():
+            result["detail"] = "Source run not found"
+            skipped_count += 1
+            results.append(result)
+            continue
+        if not source_folder.is_dir() or not source_folder.name.lower().endswith(".d"):
+            result["detail"] = "Source path is not a .D folder"
+            skipped_count += 1
+            results.append(result)
+            continue
+
+        run_state = _inspect_sample_run_state(source_folder)
+        if run_state.get("run_in_progress"):
+            result["detail"] = "Run is still in progress"
+            skipped_count += 1
+            results.append(result)
+            continue
+        if run_state.get("is_wash_position"):
+            result["detail"] = "Wash position skipped"
+            skipped_count += 1
+            results.append(result)
+            continue
+
+        route = _build_router_destination(
+            source_folder,
+            initials_root_path,
+            destination_root_path,
+            initials_dirs=initials_dirs,
+        )
+        result["destination_path"] = route.get("destination_path")
+        if not route["matched"] or not route["destination_path"]:
+            result["detail"] = "No matching initials folder"
+            skipped_count += 1
+            results.append(result)
+            continue
+
+        destination_path = Path(route["destination_path"])
+        if destination_path.exists():
+            result["status"] = "exists"
+            result["detail"] = "Destination already exists"
+            exists_count += 1
+            results.append(result)
+            continue
+
+        try:
+            _copy_router_folder(source_folder, destination_path)
+            result["status"] = "copied"
+            copied_count += 1
+        except Exception as exc:
+            result["status"] = "error"
+            result["detail"] = str(exc)
+            error_count += 1
+        results.append(result)
+
+    return {
+        "items": results,
+        "summary": {
+            "requested": len(run_paths),
+            "copied": copied_count,
+            "exists": exists_count,
+            "skipped": skipped_count,
+            "errors": error_count,
+        },
+    }
 
 
 @app.post("/api/export-single-sample")

@@ -190,6 +190,22 @@ const api = {
     return apiFetch('/api/volumes');
   },
 
+  runRouterScan(payload) {
+    return apiFetch('/api/run-router/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  runRouterCopy(payload) {
+    return apiFetch('/api/run-router/copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   /**
    * Convenience: get single sample data (UV + TIC + EICs) by making parallel calls.
    */

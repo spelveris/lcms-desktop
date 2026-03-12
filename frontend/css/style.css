@@ -686,6 +686,25 @@ input[type="radio"] {
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 132px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.metric-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
 .metric {
   display: inline-flex;
   align-items: center;
@@ -755,6 +774,85 @@ input[type="radio"] {
 
 .single-spectrum-compact {
   min-height: 300px;
+}
+
+.router-toolbar {
+  gap: 10px;
+  align-items: flex-end;
+}
+.router-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.router-field input {
+  min-width: 0;
+}
+.router-field-wide {
+  flex: 1 1 360px;
+}
+.router-field-sm {
+  width: 110px;
+}
+.router-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.router-panel {
+  min-height: 0;
+}
+#router-results-table-container,
+#router-log-table-container {
+  max-height: 420px;
+  overflow: auto;
+}
+.router-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.router-status-ready {
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+}
+.router-status-already-copied,
+.router-status-exists,
+.router-status-copied {
+  background: rgba(52, 152, 219, 0.15);
+  color: #5dade2;
+}
+.router-status-copying,
+.router-status-scanning {
+  background: rgba(241, 196, 15, 0.16);
+  color: #f1c40f;
+}
+.router-status-unnamed,
+.router-status-skipped {
+  background: rgba(230, 126, 34, 0.16);
+  color: #f39c12;
+}
+.router-status-error,
+.router-status-unmatched {
+  background: rgba(231, 76, 60, 0.16);
+  color: #ff8f87;
+}
+.router-path {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+.router-run-name {
+  font-weight: 600;
 }
 
 /* ===== Deconvolution ===== */
@@ -1154,6 +1252,9 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 /* ===== Responsive ===== */
 @media (max-width: 900px) {
   .two-col {
+    grid-template-columns: 1fr;
+  }
+  .router-grid {
     grid-template-columns: 1fr;
   }
   .batch-deconv-sample-layout {
