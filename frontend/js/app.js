@@ -127,7 +127,6 @@ function loadStoredRunRouterSettings() {
   const defaults = {
     sourcePath: '',
     initialsRoot: '',
-    destinationRoot: '',
     recursive: true,
     autoCopy: true,
     pollSeconds: 15,
@@ -138,7 +137,6 @@ function loadStoredRunRouterSettings() {
     return {
       sourcePath: normalizeEnteredPath(raw.sourcePath || ''),
       initialsRoot: normalizeEnteredPath(raw.initialsRoot || ''),
-      destinationRoot: normalizeEnteredPath(raw.destinationRoot || ''),
       recursive: raw.recursive !== false,
       autoCopy: raw.autoCopy !== false,
       pollSeconds: Math.max(5, Math.min(3600, parseInt(raw.pollSeconds, 10) || defaults.pollSeconds)),
@@ -1231,7 +1229,10 @@ async function initializeBrowsePath() {
 
 function renderFileList() {
   const container = document.getElementById('file-list');
-  let items = [...state.browseItems];
+  let items = [...state.browseItems].filter((item) => {
+    if (!item || item.is_dir || item.is_d_folder) return true;
+    return !String(item.name || '').toLowerCase().endsWith('.pdf');
+  });
 
   // Sort
   items = sortItems(items, state.sortMode);
@@ -5042,13 +5043,15 @@ async function exportBatchDeconvWebappStyle(sample, displayComponents, format, p
     downloadBlob(blob, `${fileBase}.${format}`);
     toast(`Exported ${format.toUpperCase()}`, 'success');
   } catch (err) {
-    const fileBase = `${sanitizeFilename(sample.name)}_batch_deconvoluted_masses`;
-    const didFallback = await fallbackBatchDeconvExport(plotId, fileBase, format, dpi);
-    if (didFallback) {
-      toast(`Exported ${format.toUpperCase()} (frontend fallback)`, 'success');
-    } else {
-      toast(`Export failed: ${err.message}`, 'error');
+    if (format === 'png') {
+      const fileBase = `${sanitizeFilename(sample.name)}_batch_deconvoluted_masses`;
+      const didFallback = await fallbackBatchDeconvExport(plotId, fileBase, format, dpi);
+      if (didFallback) {
+        toast(`Exported ${format.toUpperCase()} (frontend fallback)`, 'success');
+        return;
+      }
     }
+    toast(`Export failed: ${err.message}`, 'error');
   } finally {
     hideLoading();
   }
@@ -6124,14 +6127,12 @@ function syncRunRouterInputsFromState() {
   const settings = state.runRouterSettings || {};
   const sourceInput = document.getElementById('router-source-path');
   const initialsInput = document.getElementById('router-initials-root');
-  const destinationInput = document.getElementById('router-destination-root');
   const pollInput = document.getElementById('router-poll-seconds');
   const recursiveInput = document.getElementById('router-recursive');
   const autoCopyInput = document.getElementById('router-auto-copy');
 
   if (sourceInput) sourceInput.value = settings.sourcePath || '';
   if (initialsInput) initialsInput.value = settings.initialsRoot || '';
-  if (destinationInput) destinationInput.value = settings.destinationRoot || settings.initialsRoot || '';
   if (pollInput) pollInput.value = String(settings.pollSeconds || 15);
   if (recursiveInput) recursiveInput.checked = settings.recursive !== false;
   if (autoCopyInput) autoCopyInput.checked = settings.autoCopy !== false;
@@ -6140,7 +6141,7 @@ function syncRunRouterInputsFromState() {
 function updateRunRouterSettingsFromInputs() {
   const sourcePath = normalizeEnteredPath(document.getElementById('router-source-path')?.value || '');
   const initialsRoot = normalizeEnteredPath(document.getElementById('router-initials-root')?.value || '');
-  const destinationRoot = normalizeEnteredPath(document.getElementById('router-destination-root')?.value || '') || initialsRoot;
+  const destinationRoot = initialsRoot;
   const pollSeconds = Math.max(5, Math.min(3600, parseInt(document.getElementById('router-poll-seconds')?.value, 10) || 15));
   const recursive = document.getElementById('router-recursive')?.checked !== false;
   const autoCopy = document.getElementById('router-auto-copy')?.checked !== false;
@@ -6180,6 +6181,12 @@ function getRunRouterStatusMeta(status, routeMode = '') {
   const normalized = String(status || '').toLowerCase();
   if (normalized === 'ready-unnamed') {
     return { className: 'router-status router-status-unnamed', label: 'Ready -> Unnamed' };
+  }
+  if (normalized === 'running') {
+    return { className: 'router-status router-status-running', label: 'Running' };
+  }
+  if (normalized === 'waiting-completion') {
+    return { className: 'router-status router-status-waiting', label: 'Waiting' };
   }
   if (normalized === 'already-copied') {
     return { className: 'router-status router-status-already-copied', label: 'Already There' };
@@ -6266,16 +6273,22 @@ function renderRunRouterResults() {
 
   let html = `<div class="data-table-wrapper"><table class="data-table">
     <thead><tr>
-      <th>Status</th><th>Route</th><th>Run</th><th>Finished</th><th>Source</th><th>Destination</th>
+      <th>Status</th><th>Step</th><th>Route</th><th>Run</th><th>Last Activity</th><th>Source</th><th>Destination</th>
     </tr></thead><tbody>`;
 
   rows.forEach((row) => {
     const statusMeta = getRunRouterStatusMeta(row.status, row.route_mode);
-    const routeLabel = row.route_mode === 'unnamed'
+    const routeLabel = row.status === 'running'
+      ? (row.route_mode === 'unnamed' ? 'Will go to Unnamed' : (row.initials ? `Will go to ${row.initials}` : 'Waiting'))
+      : row.status === 'waiting-completion'
+      ? (row.route_mode === 'unnamed' ? 'Waiting for completion log, then Unnamed' : (row.initials ? `Waiting for completion log, then ${row.initials}` : 'Waiting for completion log'))
+      : row.route_mode === 'unnamed'
       ? 'Fallback to Unnamed'
       : (row.initials || 'No match');
+    const stepLabel = row.run_log_last_line || '-';
     html += `<tr>
       <td><span class="${statusMeta.className}">${escapeHtml(statusMeta.label)}</span></td>
+      <td><span class="router-step" title="${escapeAttr(stepLabel)}">${escapeHtml(stepLabel)}</span></td>
       <td>${escapeHtml(routeLabel)}</td>
       <td><span class="router-run-name">${escapeHtml(row.name || '')}</span></td>
       <td>${escapeHtml(formatRunRouterTimestamp(row.latest_mtime_iso))}</td>
@@ -6361,9 +6374,23 @@ async function scanRunRouter(options = {}) {
     }
 
     state.runRouterResults.forEach((item) => {
-      const detail = item.route_mode === 'unnamed'
-        ? 'No recognizable initials, routing to Unnamed'
-        : (item.initials ? `Matched ${item.initials}` : 'No transfer target');
+      const detail = item.status === 'running'
+        ? (item.run_log_last_line || (
+          item.route_mode === 'unnamed'
+            ? 'Run still active, will route to Unnamed when finished'
+            : (item.initials ? `Run still active, will route to ${item.initials}` : 'Run still active')
+        ))
+        : item.status === 'waiting-completion'
+          ? (item.run_log_last_line || (
+            item.route_mode === 'unnamed'
+              ? 'No completion marker yet, waiting before routing to Unnamed'
+              : (item.initials ? `No completion marker yet, waiting before routing to ${item.initials}` : 'No completion marker yet')
+          ))
+        : item.status === 'ready' || item.status === 'ready-unnamed' || item.status === 'already-copied'
+          ? (item.run_log_last_line || (item.route_mode === 'unnamed' ? 'Method completed, routing to Unnamed' : (item.initials ? `Method completed, matched ${item.initials}` : 'Method completed')))
+        : item.route_mode === 'unnamed'
+          ? 'No recognizable initials, routing to Unnamed'
+          : (item.initials ? `Matched ${item.initials}` : 'No transfer target');
       upsertRunRouterLogEntry({
         runName: item.name,
         sourcePath: item.path,
@@ -6376,7 +6403,7 @@ async function scanRunRouter(options = {}) {
     renderRunRouterSummary();
     renderRunRouterResults();
     if (!options.silent) {
-      toast(`Router scan complete: ${state.runRouterResults.length} finished runs shown`, 'success');
+      toast(`Router scan complete: ${state.runRouterResults.length} runs shown`, 'success');
     }
     return data;
   } catch (err) {
@@ -6525,7 +6552,7 @@ function initRunRouter() {
     await startRunRouterMonitoring();
   });
 
-  ['router-source-path', 'router-initials-root', 'router-destination-root', 'router-poll-seconds'].forEach((id) => {
+  ['router-source-path', 'router-initials-root', 'router-poll-seconds'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', () => {

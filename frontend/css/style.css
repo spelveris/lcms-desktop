@@ -780,23 +780,36 @@ input[type="radio"] {
   gap: 10px;
   align-items: flex-end;
 }
+.router-actions {
+  align-items: center;
+}
+.router-actions .btn {
+  min-height: 30px;
+  justify-content: center;
+}
+#router-status-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+}
 .router-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 .router-field input {
+  width: 100%;
   min-width: 0;
 }
 .router-field-wide {
-  flex: 1 1 360px;
+  flex: 1 1 100%;
 }
 .router-field-sm {
   width: 110px;
 }
 .router-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
 }
 .router-panel {
@@ -821,12 +834,17 @@ input[type="radio"] {
   background: rgba(46, 204, 113, 0.15);
   color: #2ecc71;
 }
+.router-status-running {
+  background: rgba(155, 89, 182, 0.16);
+  color: #d2a8ff;
+}
 .router-status-already-copied,
 .router-status-exists,
 .router-status-copied {
   background: rgba(52, 152, 219, 0.15);
   color: #5dade2;
 }
+.router-status-waiting,
 .router-status-copying,
 .router-status-scanning {
   background: rgba(241, 196, 15, 0.16);
@@ -845,6 +863,15 @@ input[type="radio"] {
 .router-path {
   display: block;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+.router-step {
+  display: block;
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

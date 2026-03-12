@@ -23,7 +23,10 @@ plt.rcParams.update({
     'figure.titlesize': 10,
     # Embed TrueType fonts in PDF for better editability in vector editors.
     'pdf.fonttype': 42,
-    'ps.fonttype': 42
+    'ps.fonttype': 42,
+    # Convert SVG text to vector paths so the exported SVG matches the PDF
+    # appearance instead of depending on the viewer's font metrics.
+    'svg.fonttype': 'path',
 })
 
 import config
@@ -39,6 +42,42 @@ def _shift_sci_offset_left(ax: plt.Axes, x: float = -0.08) -> None:
         offset.set_ha('left')
     except Exception:
         pass
+
+
+def _coerce_finite_float(value, default: float) -> float:
+    """Return a finite float or a fallback default."""
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not np.isfinite(coerced):
+        return float(default)
+    return coerced
+
+
+def _coerce_bool(value, default: bool) -> bool:
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _normalize_deconvolution_export_results(deconv_results: list) -> list[dict]:
+    """Keep only finite component values that Matplotlib can render safely."""
+    normalized: list[dict] = []
+    for item in deconv_results or []:
+        if not isinstance(item, dict):
+            continue
+        mass = _coerce_finite_float(item.get('mass'), np.nan)
+        intensity = _coerce_finite_float(item.get('intensity'), np.nan)
+        if not np.isfinite(mass) or mass <= 0:
+            continue
+        if not np.isfinite(intensity) or intensity < 0:
+            intensity = 0.0
+        normalized.append({
+            'mass': mass,
+            'intensity': intensity,
+        })
+    return normalized
 
 
 def create_single_panel(
@@ -1022,16 +1061,20 @@ def _plot_deconvoluted_masses_panel(
                     '#5c3a32', '#b8518f', '#4d4d4d', '#8a8b19', '#0f8a94']
 
     # User-configurable default display range (Da -> kDa for axis).
-    x_min_kda = float(x_min_da) / 1000.0
-    x_max_kda = float(x_max_da) / 1000.0
+    x_min_kda = _coerce_finite_float(x_min_da, 1000.0) / 1000.0
+    x_max_kda = _coerce_finite_float(x_max_da, 50000.0) / 1000.0
     if x_max_kda <= x_min_kda:
         x_min_kda, x_max_kda = 1.0, 50.0
 
-    if deconv_results and len(deconv_results) > 0:
-        masses = [r['mass'] for r in deconv_results]
-        intensities = [r['intensity'] for r in deconv_results]
+    normalized_results = _normalize_deconvolution_export_results(deconv_results)
+
+    if normalized_results:
+        masses = [r['mass'] for r in normalized_results]
+        intensities = [r['intensity'] for r in normalized_results]
 
         max_int = max(intensities) if intensities else 1
+        if max_int <= 0:
+            max_int = 1
         norm_intensities = [i / max_int * 100 for i in intensities]
 
         # Convert to kDa for x-axis
@@ -1219,44 +1262,48 @@ def _plot_deconvoluted_masses_panel(
         if show_obs_calc and len(masses_kda) > 0 and calc_mass_da is not None:
             # Normalize calc_mass_da to a list
             if isinstance(calc_mass_da, (int, float)):
-                calc_masses = [float(calc_mass_da)]
+                calc_masses = [_coerce_finite_float(calc_mass_da, np.nan)]
             else:
-                calc_masses = [float(m) for m in calc_mass_da]
+                calc_masses = [_coerce_finite_float(m, np.nan) for m in calc_mass_da]
+            calc_masses = [m for m in calc_masses if np.isfinite(m)]
+            if not calc_masses:
+                calc_masses = []
 
-            top_idx = int(np.argmax(norm_intensities))
-            top_x = masses_kda[top_idx]
-            top_y = float(norm_intensities[top_idx])
-            x_span = max(1e-6, (x_max - x_min))
-            ann_x = min(x_max - 0.02 * x_span, top_x + 0.04 * x_span)
-            ann_y = min(108.0, max(24.0, top_y * 0.84))
-            pt_offset = 20  # points to the right of label anchor
+            if calc_masses:
+                top_idx = int(np.argmax(norm_intensities))
+                top_x = masses_kda[top_idx]
+                top_y = float(norm_intensities[top_idx])
+                x_span = max(1e-6, (x_max - x_min))
+                ann_x = min(x_max - 0.02 * x_span, top_x + 0.04 * x_span)
+                ann_y = min(108.0, max(24.0, top_y * 0.84))
+                pt_offset = 20  # points to the right of label anchor
 
-            row = 0
-            for cm in calc_masses:
-                # Find best matching deconv result for this calc mass
-                match_idx = int(np.argmin([abs(m - cm) for m in masses]))
-                match_delta = abs(masses[match_idx] - cm)
+                row = 0
+                for cm in calc_masses:
+                    # Find best matching deconv result for this calc mass
+                    match_idx = int(np.argmin([abs(m - cm) for m in masses]))
+                    match_delta = abs(masses[match_idx] - cm)
 
-                calc_val = f"{cm:.1f}"
-                if match_delta <= 5.0:
-                    obs_val = f"{masses[match_idx]:.1f}"
-                    obs_color = label_colors[match_idx % len(label_colors)]
-                else:
-                    obs_val = "—"
-                    obs_color = "#888"
+                    calc_val = f"{cm:.1f}"
+                    if match_delta <= 5.0:
+                        obs_val = f"{masses[match_idx]:.1f}"
+                        obs_color = label_colors[match_idx % len(label_colors)]
+                    else:
+                        obs_val = "—"
+                        obs_color = "#888"
 
-                for lbl, val, lbl_color, val_color in [
-                    ("calc:", calc_val, "black", "black"),
-                    ("obs:",  obs_val,  "black", obs_color),
-                ]:
-                    row_y = ann_y - row * 8.0
-                    ax_deconv.text(ann_x, row_y, lbl, ha='left', va='bottom',
-                                   fontsize=8, fontweight='bold', color=lbl_color)
-                    ax_deconv.annotate(val, xy=(ann_x, row_y),
-                                       xytext=(pt_offset, 0), textcoords='offset points',
-                                       ha='left', va='bottom',
-                                       fontsize=8, fontweight='bold', color=val_color)
-                    row += 1
+                    for lbl, val, lbl_color, val_color in [
+                        ("calc:", calc_val, "black", "black"),
+                        ("obs:",  obs_val,  "black", obs_color),
+                    ]:
+                        row_y = ann_y - row * 8.0
+                        ax_deconv.text(ann_x, row_y, lbl, ha='left', va='bottom',
+                                       fontsize=8, fontweight='bold', color=lbl_color)
+                        ax_deconv.annotate(val, xy=(ann_x, row_y),
+                                           xytext=(pt_offset, 0), textcoords='offset points',
+                                           ha='left', va='bottom',
+                                           fontsize=8, fontweight='bold', color=val_color)
+                        row += 1
 
         ax_deconv.set_xlabel("Mass (kDa)")
         ax_deconv.set_ylabel("Relative Intensity (%)")
@@ -1315,12 +1362,12 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
     from analysis import sum_spectra_in_range, get_theoretical_mz
 
     style = style or {}
-    fig_width = style.get('fig_width', 8)  # Smaller default
-    line_width = style.get('line_width', 0.8)
-    show_grid = style.get('show_grid', True)
-    deconv_x_min_da = style.get('deconv_x_min_da', 1000.0)
-    deconv_x_max_da = style.get('deconv_x_max_da', 50000.0)
-    deconv_show_obs_calc = style.get('deconv_show_obs_calc', False)
+    fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))  # Smaller default
+    line_width = max(0.1, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
+    show_grid = _coerce_bool(style.get('show_grid', True), True)
+    deconv_x_min_da = _coerce_finite_float(style.get('deconv_x_min_da', 1000.0), 1000.0)
+    deconv_x_max_da = _coerce_finite_float(style.get('deconv_x_max_da', 50000.0), 50000.0)
+    deconv_show_obs_calc = _coerce_bool(style.get('deconv_show_obs_calc', False), False)
     deconv_calc_mass_da = style.get('deconv_calc_mass_da')
 
     fig = plt.figure(figsize=(fig_width, 5.5))  # Smaller, less zoomed in
@@ -1427,15 +1474,15 @@ def create_deconvoluted_masses_figure(
         Matplotlib Figure
     """
     style = style or {}
-    base_fig_width = style.get('fig_width', 8)
-    show_grid = style.get('show_grid', True)
-    deconv_x_min_da = style.get('deconv_x_min_da', 1000.0)
-    deconv_x_max_da = style.get('deconv_x_max_da', 50000.0)
-    deconv_show_obs_calc = style.get('deconv_show_obs_calc', False)
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
+    show_grid = _coerce_bool(style.get('show_grid', True), True)
+    deconv_x_min_da = _coerce_finite_float(style.get('deconv_x_min_da', 1000.0), 1000.0)
+    deconv_x_max_da = _coerce_finite_float(style.get('deconv_x_max_da', 50000.0), 50000.0)
+    deconv_show_obs_calc = _coerce_bool(style.get('deconv_show_obs_calc', False), False)
     deconv_calc_mass_da = style.get('deconv_calc_mass_da')
-    deconv_show_peak_labels = style.get('deconv_show_peak_labels', True)
-    deconv_show_title = style.get('deconv_show_title', True)
-    deconv_show_subtitle = style.get('deconv_show_subtitle', True)
+    deconv_show_peak_labels = _coerce_bool(style.get('deconv_show_peak_labels', True), True)
+    deconv_show_title = _coerce_bool(style.get('deconv_show_title', True), True)
+    deconv_show_subtitle = _coerce_bool(style.get('deconv_show_subtitle', True), True)
     sample_subtitle = (sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name) if deconv_show_subtitle else None
 
     # Match the physical panel size used by create_deconvolution_figure()
