@@ -9,6 +9,7 @@
 const CUSTOM_MOUNTS_STORAGE_KEY = 'lcms-custom-mounts';
 const RUN_ROUTER_STORAGE_KEY = 'lcms-run-router-settings';
 const RUN_ROUTER_LOG_STORAGE_KEY = 'lcms-run-router-recent-log';
+const RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS = 7;
 
 const state = {
   currentPath: localStorage.getItem('lcms-browse-path') || '/',
@@ -130,6 +131,7 @@ function loadStoredRunRouterSettings() {
     recursive: true,
     autoCopy: true,
     pollSeconds: 15,
+    monitorLookbackDays: RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS,
   };
   try {
     const raw = JSON.parse(localStorage.getItem(RUN_ROUTER_STORAGE_KEY) || '{}');
@@ -140,6 +142,10 @@ function loadStoredRunRouterSettings() {
       recursive: raw.recursive !== false,
       autoCopy: raw.autoCopy !== false,
       pollSeconds: Math.max(5, Math.min(3600, parseInt(raw.pollSeconds, 10) || defaults.pollSeconds)),
+      monitorLookbackDays: Math.max(
+        0,
+        Math.min(30, parseInt(raw.monitorLookbackDays, 10) || defaults.monitorLookbackDays)
+      ),
     };
   } catch (_) {
     return defaults;
@@ -6128,12 +6134,18 @@ function syncRunRouterInputsFromState() {
   const sourceInput = document.getElementById('router-source-path');
   const initialsInput = document.getElementById('router-initials-root');
   const pollInput = document.getElementById('router-poll-seconds');
+  const lookbackInput = document.getElementById('router-monitor-lookback-days');
   const recursiveInput = document.getElementById('router-recursive');
   const autoCopyInput = document.getElementById('router-auto-copy');
 
   if (sourceInput) sourceInput.value = settings.sourcePath || '';
   if (initialsInput) initialsInput.value = settings.initialsRoot || '';
   if (pollInput) pollInput.value = String(settings.pollSeconds || 15);
+  if (lookbackInput) lookbackInput.value = String(
+    Number.isFinite(settings.monitorLookbackDays)
+      ? settings.monitorLookbackDays
+      : RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS
+  );
   if (recursiveInput) recursiveInput.checked = settings.recursive !== false;
   if (autoCopyInput) autoCopyInput.checked = settings.autoCopy !== false;
 }
@@ -6143,6 +6155,16 @@ function updateRunRouterSettingsFromInputs() {
   const initialsRoot = normalizeEnteredPath(document.getElementById('router-initials-root')?.value || '');
   const destinationRoot = initialsRoot;
   const pollSeconds = Math.max(5, Math.min(3600, parseInt(document.getElementById('router-poll-seconds')?.value, 10) || 15));
+  const monitorLookbackDays = Math.max(
+    0,
+    Math.min(
+      30,
+      parseInt(
+        document.getElementById('router-monitor-lookback-days')?.value,
+        10,
+      ) || RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS
+    ),
+  );
   const recursive = document.getElementById('router-recursive')?.checked !== false;
   const autoCopy = document.getElementById('router-auto-copy')?.checked !== false;
 
@@ -6153,6 +6175,7 @@ function updateRunRouterSettingsFromInputs() {
     recursive,
     autoCopy,
     pollSeconds,
+    monitorLookbackDays,
   };
   saveRunRouterSettings();
   return state.runRouterSettings;
@@ -6160,7 +6183,8 @@ function updateRunRouterSettingsFromInputs() {
 
 function buildRunRouterPayload(extra = {}) {
   const settings = updateRunRouterSettingsFromInputs();
-  return {
+  const monitoring = extra.forMonitoring === true;
+  const payload = {
     source_path: settings.sourcePath,
     initials_root: settings.initialsRoot,
     destination_root: settings.destinationRoot || settings.initialsRoot,
@@ -6168,6 +6192,11 @@ function buildRunRouterPayload(extra = {}) {
     limit: 200,
     ...extra,
   };
+  delete payload.forMonitoring;
+  if (monitoring) {
+    payload.monitor_recent_days = settings.monitorLookbackDays ?? RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS;
+  }
+  return payload;
 }
 
 function formatRunRouterTimestamp(value) {
@@ -6341,7 +6370,13 @@ function updateRunRouterMonitorState() {
   if (state.runRouterInterval) {
     btn.textContent = 'Stop Monitoring';
     dot.style.display = 'inline-block';
-    text.textContent = `Monitoring every ${state.runRouterSettings?.pollSeconds || 15}s`;
+    const lookbackDays = Math.max(
+      0,
+      parseInt(state.runRouterSettings?.monitorLookbackDays, 10) || RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS,
+    );
+    text.textContent = lookbackDays > 0
+      ? `Monitoring every ${state.runRouterSettings?.pollSeconds || 15}s (today + previous ${lookbackDays} days)`
+      : `Monitoring every ${state.runRouterSettings?.pollSeconds || 15}s (today only)`;
   } else {
     btn.textContent = 'Start Monitoring';
     dot.style.display = 'none';
@@ -6350,7 +6385,9 @@ function updateRunRouterMonitorState() {
 }
 
 async function scanRunRouter(options = {}) {
-  const payload = buildRunRouterPayload();
+  const payload = buildRunRouterPayload({
+    forMonitoring: options.forMonitoring === true,
+  });
   if (!payload.source_path || !payload.initials_root) {
     if (!options.silent) toast('Enter source and initials root folders first', 'warning');
     return null;
@@ -6483,6 +6520,7 @@ async function runRunRouterCycle(options = {}) {
   state.runRouterCycleInFlight = true;
   try {
     const scanData = await scanRunRouter({
+      forMonitoring: options.forMonitoring === true,
       silent: options.silent !== false,
       showLoading: options.showLoading === true,
     });
@@ -6506,10 +6544,10 @@ async function runRunRouterCycle(options = {}) {
 
 async function startRunRouterMonitoring() {
   updateRunRouterSettingsFromInputs();
-  await runRunRouterCycle({ silent: false, showLoading: true });
+  await runRunRouterCycle({ silent: false, showLoading: true, forMonitoring: true });
   if (state.runRouterInterval) clearInterval(state.runRouterInterval);
   state.runRouterInterval = setInterval(() => {
-    runRunRouterCycle({ silent: true, showLoading: false });
+    runRunRouterCycle({ silent: true, showLoading: false, forMonitoring: true });
   }, (state.runRouterSettings?.pollSeconds || 15) * 1000);
   updateRunRouterMonitorState();
 }
@@ -6552,7 +6590,7 @@ function initRunRouter() {
     await startRunRouterMonitoring();
   });
 
-  ['router-source-path', 'router-initials-root', 'router-poll-seconds'].forEach((id) => {
+  ['router-source-path', 'router-initials-root', 'router-poll-seconds', 'router-monitor-lookback-days'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', () => {
