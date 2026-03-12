@@ -7,11 +7,15 @@
 
 // ===== Application State =====
 const CUSTOM_MOUNTS_STORAGE_KEY = 'lcms-custom-mounts';
+const RUN_ROUTER_STORAGE_KEY = 'lcms-run-router-settings';
+const RUN_ROUTER_LOG_STORAGE_KEY = 'lcms-run-router-recent-log';
 
 const state = {
   currentPath: localStorage.getItem('lcms-browse-path') || '/',
   systemVolumes: [],
   customMountPaths: loadStoredCustomMounts(),
+  runRouterSettings: loadStoredRunRouterSettings(),
+  runRouterRecentLog: loadStoredRunRouterRecentLog(),
   deconvInteractionMode: localStorage.getItem('lcms-deconv-interaction-mode') || 'deconvolute',
   selectedFiles: JSON.parse(localStorage.getItem('lcms-selected-files') || '[]'),
   loadedSamples: {},      // path -> sample metadata
@@ -47,6 +51,10 @@ const state = {
   browseItems: [],
   watchInterval: null,
   watchKnownPaths: new Set(),
+  runRouterResults: [],
+  runRouterSummary: null,
+  runRouterInterval: null,
+  runRouterCycleInFlight: false,
   singleSketcher: null,
   singleSketcherType: '',
   singleSketcherWheelGuardBound: false,
@@ -113,6 +121,62 @@ function loadStoredCustomMounts() {
   } catch (_) {
     return [];
   }
+}
+
+function loadStoredRunRouterSettings() {
+  const defaults = {
+    sourcePath: '',
+    initialsRoot: '',
+    destinationRoot: '',
+    recursive: true,
+    autoCopy: true,
+    pollSeconds: 15,
+  };
+  try {
+    const raw = JSON.parse(localStorage.getItem(RUN_ROUTER_STORAGE_KEY) || '{}');
+    if (!raw || typeof raw !== 'object') return defaults;
+    return {
+      sourcePath: normalizeEnteredPath(raw.sourcePath || ''),
+      initialsRoot: normalizeEnteredPath(raw.initialsRoot || ''),
+      destinationRoot: normalizeEnteredPath(raw.destinationRoot || ''),
+      recursive: raw.recursive !== false,
+      autoCopy: raw.autoCopy !== false,
+      pollSeconds: Math.max(5, Math.min(3600, parseInt(raw.pollSeconds, 10) || defaults.pollSeconds)),
+    };
+  } catch (_) {
+    return defaults;
+  }
+}
+
+function saveRunRouterSettings() {
+  localStorage.setItem(RUN_ROUTER_STORAGE_KEY, JSON.stringify(state.runRouterSettings || {}));
+}
+
+function loadStoredRunRouterRecentLog() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RUN_ROUTER_LOG_STORAGE_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((entry) => entry && typeof entry === 'object')
+      .slice(0, 50)
+      .map((entry) => ({
+        timestamp: String(entry.timestamp || ''),
+        runName: String(entry.runName || ''),
+        sourcePath: String(entry.sourcePath || ''),
+        destinationPath: String(entry.destinationPath || ''),
+        status: String(entry.status || 'scanned'),
+        detail: String(entry.detail || ''),
+      }));
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveRunRouterRecentLog() {
+  localStorage.setItem(
+    RUN_ROUTER_LOG_STORAGE_KEY,
+    JSON.stringify((state.runRouterRecentLog || []).slice(0, 50))
+  );
 }
 
 function saveCustomMounts() {
@@ -218,6 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initSettings();
   initFileBrowser();
   initWatchFolder();
+  initRunRouter();
   initSingleSample();
   initBackgroundSubtraction();
   initProgression();
@@ -4721,7 +4786,7 @@ async function exportDeconvIonSelection(format) {
       dpi,
       style: buildCurrentDeconvStyle(),
     });
-    const blob = await response.blob();
+    const blob = await backendResponseToBlob(response);
     downloadBlob(blob, `${sanitizeFilename(sampleName)}_ion_selection.${format}`);
     toast(`Exported ${format.toUpperCase()} (ion selection)`, 'success');
   } catch (err) {
@@ -4751,7 +4816,7 @@ async function exportDeconvMasses(format) {
       dpi,
       style: buildCurrentDeconvStyle(),
     });
-    const blob = await response.blob();
+    const blob = await backendResponseToBlob(response);
     downloadBlob(blob, `${sanitizeFilename(sampleName)}_deconvoluted_masses.${format}`);
     toast(`Exported ${String(format || '').toUpperCase()} (deconvoluted masses)`, 'success');
   } catch (err) {
@@ -4895,7 +4960,7 @@ async function fetchBatchDeconvPreviewBlob(sample, displayComponents, dpi = 180)
     dpi,
     style: buildBatchDeconvExportStyle(),
   });
-  return response.blob();
+  return backendResponseToBlob(response);
 }
 
 async function renderBatchDeconvExportPreview(sample, displayComponents, previewId) {
@@ -4972,7 +5037,7 @@ async function exportBatchDeconvWebappStyle(sample, displayComponents, format, p
       dpi,
       style,
     });
-    const blob = await response.blob();
+    const blob = await backendResponseToBlob(response);
     const fileBase = `${sanitizeFilename(sample.name)}_batch_deconvoluted_masses`;
     downloadBlob(blob, `${fileBase}.${format}`);
     toast(`Exported ${format.toUpperCase()}`, 'success');
@@ -5811,7 +5876,7 @@ async function fetchMasscalcFigureBlob(target = 'main', format = 'png', dpi = nu
     style: buildMasscalcStyle(calc.theoreticalMasses, clean),
   };
   const response = await api.exportDeconvolutedMasses(payload);
-  return response.blob();
+  return backendResponseToBlob(response);
 }
 
 function setMasscalcFigureImage(target, blob) {
@@ -6054,6 +6119,432 @@ function restoreState() {
   renderReportSummary();
 }
 
+// ===== Transfer Router =====
+function syncRunRouterInputsFromState() {
+  const settings = state.runRouterSettings || {};
+  const sourceInput = document.getElementById('router-source-path');
+  const initialsInput = document.getElementById('router-initials-root');
+  const destinationInput = document.getElementById('router-destination-root');
+  const pollInput = document.getElementById('router-poll-seconds');
+  const recursiveInput = document.getElementById('router-recursive');
+  const autoCopyInput = document.getElementById('router-auto-copy');
+
+  if (sourceInput) sourceInput.value = settings.sourcePath || '';
+  if (initialsInput) initialsInput.value = settings.initialsRoot || '';
+  if (destinationInput) destinationInput.value = settings.destinationRoot || settings.initialsRoot || '';
+  if (pollInput) pollInput.value = String(settings.pollSeconds || 15);
+  if (recursiveInput) recursiveInput.checked = settings.recursive !== false;
+  if (autoCopyInput) autoCopyInput.checked = settings.autoCopy !== false;
+}
+
+function updateRunRouterSettingsFromInputs() {
+  const sourcePath = normalizeEnteredPath(document.getElementById('router-source-path')?.value || '');
+  const initialsRoot = normalizeEnteredPath(document.getElementById('router-initials-root')?.value || '');
+  const destinationRoot = normalizeEnteredPath(document.getElementById('router-destination-root')?.value || '') || initialsRoot;
+  const pollSeconds = Math.max(5, Math.min(3600, parseInt(document.getElementById('router-poll-seconds')?.value, 10) || 15));
+  const recursive = document.getElementById('router-recursive')?.checked !== false;
+  const autoCopy = document.getElementById('router-auto-copy')?.checked !== false;
+
+  state.runRouterSettings = {
+    sourcePath,
+    initialsRoot,
+    destinationRoot,
+    recursive,
+    autoCopy,
+    pollSeconds,
+  };
+  saveRunRouterSettings();
+  return state.runRouterSettings;
+}
+
+function buildRunRouterPayload(extra = {}) {
+  const settings = updateRunRouterSettingsFromInputs();
+  return {
+    source_path: settings.sourcePath,
+    initials_root: settings.initialsRoot,
+    destination_root: settings.destinationRoot || settings.initialsRoot,
+    recursive: settings.recursive,
+    limit: 200,
+    ...extra,
+  };
+}
+
+function formatRunRouterTimestamp(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString();
+}
+
+function getRunRouterStatusMeta(status, routeMode = '') {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'ready-unnamed') {
+    return { className: 'router-status router-status-unnamed', label: 'Ready -> Unnamed' };
+  }
+  if (normalized === 'already-copied') {
+    return { className: 'router-status router-status-already-copied', label: 'Already There' };
+  }
+  if (normalized === 'copied') {
+    return { className: 'router-status router-status-copied', label: 'Copied' };
+  }
+  if (normalized === 'copying') {
+    return { className: 'router-status router-status-copying', label: 'Copying' };
+  }
+  if (normalized === 'ready') {
+    return routeMode === 'unnamed'
+      ? { className: 'router-status router-status-unnamed', label: 'Ready -> Unnamed' }
+      : { className: 'router-status router-status-ready', label: 'Ready' };
+  }
+  if (normalized === 'exists') {
+    return { className: 'router-status router-status-exists', label: 'Already There' };
+  }
+  if (normalized === 'scanning') {
+    return { className: 'router-status router-status-scanning', label: 'Scanning' };
+  }
+  if (normalized === 'skipped') {
+    return { className: 'router-status router-status-skipped', label: 'Not Transferred' };
+  }
+  if (normalized === 'error') {
+    return { className: 'router-status router-status-error', label: 'Error' };
+  }
+  return { className: 'router-status router-status-unmatched', label: 'Unmatched' };
+}
+
+function upsertRunRouterLogEntry(entry) {
+  const normalized = {
+    timestamp: new Date().toISOString(),
+    runName: String(entry.runName || ''),
+    sourcePath: String(entry.sourcePath || ''),
+    destinationPath: String(entry.destinationPath || ''),
+    status: String(entry.status || 'scanned'),
+    detail: String(entry.detail || ''),
+  };
+  const key = normalized.sourcePath || `${normalized.runName}|${normalized.destinationPath}`;
+  const existing = Array.isArray(state.runRouterRecentLog) ? state.runRouterRecentLog : [];
+  const current = existing.find((item) => {
+    const itemKey = item.sourcePath || `${item.runName}|${item.destinationPath}`;
+    return itemKey === key;
+  });
+  if (
+    current
+    && current.status === normalized.status
+    && current.detail === normalized.detail
+    && current.destinationPath === normalized.destinationPath
+  ) {
+    return;
+  }
+  const filtered = existing.filter((item) => {
+    const itemKey = item.sourcePath || `${item.runName}|${item.destinationPath}`;
+    return itemKey !== key;
+  });
+  state.runRouterRecentLog = [normalized, ...filtered].slice(0, 50);
+  saveRunRouterRecentLog();
+  renderRunRouterLog();
+}
+
+function renderRunRouterSummary() {
+  const summary = state.runRouterSummary || {};
+  const readyEl = document.getElementById('router-ready-count');
+  const copiedEl = document.getElementById('router-copied-count');
+  const unnamedEl = document.getElementById('router-unnamed-count');
+  const inProgressEl = document.getElementById('router-inprogress-count');
+  if (readyEl) readyEl.textContent = String(summary.ready || 0);
+  if (copiedEl) copiedEl.textContent = String(summary.already_copied || 0);
+  if (unnamedEl) unnamedEl.textContent = String(summary.unnamed || 0);
+  if (inProgressEl) inProgressEl.textContent = String(summary.in_progress || 0);
+}
+
+function renderRunRouterResults() {
+  const container = document.getElementById('router-results-table-container');
+  if (!container) return;
+
+  const rows = Array.isArray(state.runRouterResults) ? state.runRouterResults : [];
+  if (rows.length === 0) {
+    container.innerHTML = '<p class="placeholder-msg">Scan a source folder to list finished runs and their transfer targets.</p>';
+    return;
+  }
+
+  let html = `<div class="data-table-wrapper"><table class="data-table">
+    <thead><tr>
+      <th>Status</th><th>Route</th><th>Run</th><th>Finished</th><th>Source</th><th>Destination</th>
+    </tr></thead><tbody>`;
+
+  rows.forEach((row) => {
+    const statusMeta = getRunRouterStatusMeta(row.status, row.route_mode);
+    const routeLabel = row.route_mode === 'unnamed'
+      ? 'Fallback to Unnamed'
+      : (row.initials || 'No match');
+    html += `<tr>
+      <td><span class="${statusMeta.className}">${escapeHtml(statusMeta.label)}</span></td>
+      <td>${escapeHtml(routeLabel)}</td>
+      <td><span class="router-run-name">${escapeHtml(row.name || '')}</span></td>
+      <td>${escapeHtml(formatRunRouterTimestamp(row.latest_mtime_iso))}</td>
+      <td><span class="router-path" title="${escapeAttr(row.path || '')}">${escapeHtml(row.path || '')}</span></td>
+      <td><span class="router-path" title="${escapeAttr(row.destination_path || '')}">${escapeHtml(row.destination_path || '-')}</span></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+function renderRunRouterLog() {
+  const container = document.getElementById('router-log-table-container');
+  if (!container) return;
+
+  const rows = Array.isArray(state.runRouterRecentLog) ? state.runRouterRecentLog : [];
+  if (rows.length === 0) {
+    container.innerHTML = '<p class="placeholder-msg">No transfer activity yet.</p>';
+    return;
+  }
+
+  let html = `<div class="data-table-wrapper"><table class="data-table">
+    <thead><tr>
+      <th>Time</th><th>Status</th><th>Run</th><th>Detail</th><th>Destination</th>
+    </tr></thead><tbody>`;
+
+  rows.forEach((row) => {
+    const statusMeta = getRunRouterStatusMeta(row.status, row.status === 'ready-unnamed' ? 'unnamed' : '');
+    const statusLabel = row.status === 'ready-unnamed' ? 'Ready -> Unnamed' : statusMeta.label;
+    html += `<tr>
+      <td>${escapeHtml(formatRunRouterTimestamp(row.timestamp))}</td>
+      <td><span class="${statusMeta.className}">${escapeHtml(statusLabel)}</span></td>
+      <td><span class="router-run-name">${escapeHtml(row.runName || '-')}</span></td>
+      <td>${escapeHtml(row.detail || '-')}</td>
+      <td><span class="router-path" title="${escapeAttr(row.destinationPath || '')}">${escapeHtml(row.destinationPath || '-')}</span></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+function updateRunRouterMonitorState() {
+  const btn = document.getElementById('btn-router-toggle');
+  const dot = document.getElementById('router-status-dot');
+  const text = document.getElementById('router-status-text');
+  if (!btn || !dot || !text) return;
+
+  if (state.runRouterInterval) {
+    btn.textContent = 'Stop Monitoring';
+    dot.style.display = 'inline-block';
+    text.textContent = `Monitoring every ${state.runRouterSettings?.pollSeconds || 15}s`;
+  } else {
+    btn.textContent = 'Start Monitoring';
+    dot.style.display = 'none';
+    text.textContent = 'Idle';
+  }
+}
+
+async function scanRunRouter(options = {}) {
+  const payload = buildRunRouterPayload();
+  if (!payload.source_path || !payload.initials_root) {
+    if (!options.silent) toast('Enter source and initials root folders first', 'warning');
+    return null;
+  }
+
+  if (options.showLoading !== false) showLoading('Scanning finished runs...');
+  try {
+    const data = await api.runRouterScan(payload);
+    state.runRouterResults = Array.isArray(data.items) ? data.items : [];
+    state.runRouterSummary = data.summary || null;
+
+    if (data.source_path) {
+      state.runRouterSettings.sourcePath = normalizeEnteredPath(data.source_path);
+      state.runRouterSettings.initialsRoot = normalizeEnteredPath(data.initials_root || payload.initials_root);
+      state.runRouterSettings.destinationRoot = normalizeEnteredPath(data.destination_root || payload.destination_root);
+      saveRunRouterSettings();
+      syncRunRouterInputsFromState();
+      rememberCustomMountPath(state.runRouterSettings.sourcePath, payload.source_path);
+      rememberCustomMountPath(state.runRouterSettings.initialsRoot, payload.initials_root);
+      rememberCustomMountPath(state.runRouterSettings.destinationRoot, payload.destination_root);
+    }
+
+    state.runRouterResults.forEach((item) => {
+      const detail = item.route_mode === 'unnamed'
+        ? 'No recognizable initials, routing to Unnamed'
+        : (item.initials ? `Matched ${item.initials}` : 'No transfer target');
+      upsertRunRouterLogEntry({
+        runName: item.name,
+        sourcePath: item.path,
+        destinationPath: item.destination_path,
+        status: item.route_mode === 'unnamed' && item.status === 'ready' ? 'ready-unnamed' : item.status,
+        detail,
+      });
+    });
+
+    renderRunRouterSummary();
+    renderRunRouterResults();
+    if (!options.silent) {
+      toast(`Router scan complete: ${state.runRouterResults.length} finished runs shown`, 'success');
+    }
+    return data;
+  } catch (err) {
+    if (!options.silent) toast(`Transfer scan failed: ${err.message}`, 'error');
+    return null;
+  } finally {
+    if (options.showLoading !== false) hideLoading();
+  }
+}
+
+async function copyRunRouterRuns(runPaths = null, options = {}) {
+  const payload = buildRunRouterPayload({
+    run_paths: Array.isArray(runPaths) ? runPaths : undefined,
+  });
+  const readyPaths = Array.isArray(runPaths)
+    ? runPaths
+    : (state.runRouterResults || [])
+      .filter((item) => item.status === 'ready')
+      .map((item) => item.path);
+
+  if (readyPaths.length === 0) {
+    if (!options.silent) toast('No ready runs to copy', 'warning');
+    return null;
+  }
+
+  readyPaths.forEach((path) => {
+    const item = (state.runRouterResults || []).find((row) => row.path === path);
+    upsertRunRouterLogEntry({
+      runName: item?.name || getPathLeafName(path),
+      sourcePath: path,
+      destinationPath: item?.destination_path || '',
+      status: 'copying',
+      detail: 'Copy in progress',
+    });
+  });
+
+  if (options.showLoading !== false) showLoading('Copying finished runs...');
+  try {
+    const data = await api.runRouterCopy({
+      ...payload,
+      run_paths: readyPaths,
+    });
+
+    const items = Array.isArray(data.items) ? data.items : [];
+    items.forEach((item) => {
+      upsertRunRouterLogEntry({
+        runName: item.name,
+        sourcePath: item.path,
+        destinationPath: item.destination_path,
+        status: item.status,
+        detail: item.detail || (item.status === 'copied' ? 'Copied to destination' : ''),
+      });
+    });
+
+    if (!options.skipRefresh) {
+      await scanRunRouter({ silent: true, showLoading: false });
+    }
+
+    if (!options.silent) {
+      const summary = data.summary || {};
+      toast(
+        `Copied ${summary.copied || 0}, already there ${summary.exists || 0}, skipped ${summary.skipped || 0}`,
+        'success'
+      );
+    }
+    return data;
+  } catch (err) {
+    if (!options.silent) toast(`Transfer copy failed: ${err.message}`, 'error');
+    return null;
+  } finally {
+    if (options.showLoading !== false) hideLoading();
+  }
+}
+
+async function runRunRouterCycle(options = {}) {
+  if (state.runRouterCycleInFlight) return;
+  state.runRouterCycleInFlight = true;
+  try {
+    const scanData = await scanRunRouter({
+      silent: options.silent !== false,
+      showLoading: options.showLoading === true,
+    });
+    if (!scanData) return;
+
+    const shouldAutoCopy = state.runRouterSettings?.autoCopy !== false;
+    const readyPaths = (state.runRouterResults || [])
+      .filter((item) => item.status === 'ready')
+      .map((item) => item.path);
+
+    if (shouldAutoCopy && readyPaths.length > 0) {
+      await copyRunRouterRuns(readyPaths, {
+        silent: options.silent !== false,
+        showLoading: false,
+      });
+    }
+  } finally {
+    state.runRouterCycleInFlight = false;
+  }
+}
+
+async function startRunRouterMonitoring() {
+  updateRunRouterSettingsFromInputs();
+  await runRunRouterCycle({ silent: false, showLoading: true });
+  if (state.runRouterInterval) clearInterval(state.runRouterInterval);
+  state.runRouterInterval = setInterval(() => {
+    runRunRouterCycle({ silent: true, showLoading: false });
+  }, (state.runRouterSettings?.pollSeconds || 15) * 1000);
+  updateRunRouterMonitorState();
+}
+
+function stopRunRouterMonitoring() {
+  if (state.runRouterInterval) {
+    clearInterval(state.runRouterInterval);
+    state.runRouterInterval = null;
+  }
+  updateRunRouterMonitorState();
+}
+
+function initRunRouter() {
+  syncRunRouterInputsFromState();
+  renderRunRouterSummary();
+  renderRunRouterResults();
+  renderRunRouterLog();
+  updateRunRouterMonitorState();
+
+  document.getElementById('btn-router-use-current')?.addEventListener('click', () => {
+    const sourceInput = document.getElementById('router-source-path');
+    if (!sourceInput) return;
+    sourceInput.value = state.currentPath || '';
+    updateRunRouterSettingsFromInputs();
+  });
+
+  document.getElementById('btn-router-scan')?.addEventListener('click', () => {
+    scanRunRouter({ silent: false, showLoading: true });
+  });
+
+  document.getElementById('btn-router-copy')?.addEventListener('click', () => {
+    copyRunRouterRuns(null, { silent: false, showLoading: true });
+  });
+
+  document.getElementById('btn-router-toggle')?.addEventListener('click', async () => {
+    if (state.runRouterInterval) {
+      stopRunRouterMonitoring();
+      return;
+    }
+    await startRunRouterMonitoring();
+  });
+
+  ['router-source-path', 'router-initials-root', 'router-destination-root', 'router-poll-seconds'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      updateRunRouterSettingsFromInputs();
+      if (state.runRouterInterval) {
+        stopRunRouterMonitoring();
+      }
+    });
+  });
+
+  ['router-recursive', 'router-auto-copy'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      updateRunRouterSettingsFromInputs();
+    });
+  });
+}
+
 // ===== Watch Folder =====
 function initWatchFolder() {
   const toggleBtn = document.getElementById('btn-watch-toggle');
@@ -6149,6 +6640,18 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+async function backendResponseToBlob(response) {
+  if (!response || typeof response.blob !== 'function') {
+    throw new Error('Invalid download response');
+  }
+  const contentType = String(response.headers?.get('content-type') || '').toLowerCase();
+  if (contentType.includes('image/svg+xml')) {
+    const text = await response.text();
+    return new Blob([text], { type: 'image/svg+xml;charset=utf-8' });
+  }
+  return response.blob();
 }
 
 function escapeHtml(str) {
