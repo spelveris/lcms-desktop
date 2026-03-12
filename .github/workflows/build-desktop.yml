@@ -245,15 +245,12 @@ jobs:
 
             This release is built in CI on both macOS and Windows and includes smoke tests for the packaged backend (`/api/health`) before publishing assets.
 
-            Downloads
+            Download the file that matches your operating system from the assets list below:
 
             | Platform | File | Description |
             | --- | --- | --- |
-            | Windows | `CATrupole.Setup.${{ steps.meta.outputs.version }}.exe` | Installer (recommended) |
-            | Windows | `CATrupole-${{ steps.meta.outputs.version }}-win.zip` | Portable (no install) |
-            | Windows | `CATrupole.${{ steps.meta.outputs.version }}.exe` | Portable executable |
-            | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg` | Disk image (recommended) |
-            | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64-mac.zip` | Zip archive |
+            | Windows | `CATrupole Setup ${{ steps.meta.outputs.version }}.exe` | Installer |
+            | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg` | Disk image |
 
             Notes for users:
             - macOS builds are ad-hoc signed in CI (no notarization).
@@ -261,9 +258,4 @@ jobs:
           generate_release_notes: true
           files: |
             release-assets/*.dmg
-            release-assets/*-mac.zip
-            release-assets/*-win.zip
-            release-assets/CATrupole*.exe
-            release-assets/latest*.yml
-            release-assets/app-update.yml
-            README.md
+            release-assets/*Setup*.exe
