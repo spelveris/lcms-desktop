@@ -331,6 +331,58 @@ def _iter_d_folder_paths(base_path: Union[str, Path], recursive: bool = True) ->
     return folders
 
 
+def _recent_sequence_date_tokens(lookback_days: int) -> list[str]:
+    days = max(0, int(lookback_days))
+    today = datetime.date.today()
+    return [
+        (today - datetime.timedelta(days=offset)).strftime("%y %m %d")
+        for offset in range(days + 1)
+    ]
+
+
+def _folder_name_matches_sequence_tokens(folder_name: str, tokens: list[str]) -> bool:
+    normalized = re.sub(r"\s+", " ", str(folder_name or "").strip())
+    if not normalized or not tokens:
+        return False
+    return any(token in normalized for token in tokens)
+
+
+def _resolve_run_router_scan_roots(
+    source_path: Union[str, Path],
+    monitor_recent_days: int = 0,
+) -> tuple[Path, list[Path], list[str]]:
+    root = Path(_normalize_filesystem_path(str(source_path)))
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Not a directory")
+
+    recent_days = max(0, int(monitor_recent_days))
+    if recent_days <= 0:
+        return root, [root], []
+
+    tokens = _recent_sequence_date_tokens(recent_days)
+    if _folder_name_matches_sequence_tokens(root.name, tokens):
+        return root, [root], tokens
+
+    try:
+        child_dirs = [
+            entry for entry in sorted(root.iterdir())
+            if entry.is_dir() and not entry.name.startswith(".") and not entry.name.lower().endswith(".d")
+        ]
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    matching_children = [
+        entry for entry in child_dirs
+        if _folder_name_matches_sequence_tokens(entry.name, tokens)
+    ]
+    if matching_children:
+        return root, matching_children, tokens
+
+    return root, [root], tokens
+
+
 def _list_router_initial_dirs(initials_root: Union[str, Path]) -> tuple[Path, list[Path]]:
     root = Path(_normalize_filesystem_path(str(initials_root)))
     if not root.exists():
@@ -450,8 +502,12 @@ def _scan_run_router(
     destination_root: Optional[Union[str, Path]] = None,
     recursive: bool = True,
     limit: int = 200,
+    monitor_recent_days: int = 0,
 ) -> dict:
-    source_root = Path(_normalize_filesystem_path(str(source_path)))
+    source_root, scan_roots, monitor_date_tokens = _resolve_run_router_scan_roots(
+        source_path,
+        monitor_recent_days=monitor_recent_days,
+    )
     initials_root_path, initials_dirs = _list_router_initial_dirs(initials_root)
     destination_root_path = Path(_normalize_filesystem_path(str(destination_root or initials_root_path)))
 
@@ -459,52 +515,59 @@ def _scan_run_router(
     in_progress_count = 0
     wash_count = 0
 
-    for folder in _iter_d_folder_paths(source_root, recursive=recursive):
-        run_state = _inspect_sample_run_state(folder)
-        if run_state.get("is_wash_position"):
-            wash_count += 1
-            continue
-        if not run_state.get("run_complete"):
-            in_progress_count += 1
+    seen_paths = set()
+    for scan_root in scan_roots:
+        for folder in _iter_d_folder_paths(scan_root, recursive=recursive):
+            normalized_folder = str(folder)
+            if normalized_folder in seen_paths:
+                continue
+            seen_paths.add(normalized_folder)
 
-        route = _build_router_destination(
-            folder,
-            initials_root_path,
-            destination_root_path,
-            initials_dirs=initials_dirs,
-        )
-        latest_mtime = float(run_state.get("latest_mtime") or 0.0)
-        latest_iso = (
-            datetime.datetime.fromtimestamp(latest_mtime).isoformat()
-            if latest_mtime > 0
-            else None
-        )
-        status = "unmatched"
-        if not run_state.get("run_complete"):
-            status = "running"
-        elif route["matched"]:
-            status = "already-copied" if route["destination_exists"] else "ready"
+            run_state = _inspect_sample_run_state(folder)
+            if run_state.get("is_wash_position"):
+                wash_count += 1
+                continue
+            if not run_state.get("run_complete"):
+                in_progress_count += 1
 
-        items.append({
-            "name": folder.name,
-            "path": str(folder),
-            "latest_mtime": latest_mtime,
-            "latest_mtime_iso": latest_iso,
-            "run_in_progress": bool(run_state.get("run_in_progress")),
-            "run_complete": bool(run_state.get("run_complete")),
-            "sample_location": run_state.get("sample_location"),
-            "completion_source": run_state.get("completion_source"),
-            "run_log_last_line": run_state.get("run_log_last_line"),
-            "initials": route["initials"],
-            "matched": route["matched"],
-            "recognized_initials": route.get("recognized_initials", False),
-            "route_mode": route.get("route_mode", "unmatched"),
-            "matched_initials_dir": route["matched_initials_dir"],
-            "destination_dir": route["destination_dir"],
-            "destination_path": route["destination_path"],
-            "destination_exists": route["destination_exists"],
-            "status": status,
-        })
+            route = _build_router_destination(
+                folder,
+                initials_root_path,
+                destination_root_path,
+                initials_dirs=initials_dirs,
+            )
+            latest_mtime = float(run_state.get("latest_mtime") or 0.0)
+            latest_iso = (
+                datetime.datetime.fromtimestamp(latest_mtime).isoformat()
+                if latest_mtime > 0
+                else None
+            )
+            status = "unmatched"
+            if not run_state.get("run_complete"):
+                status = "running"
+            elif route["matched"]:
+                status = "already-copied" if route["destination_exists"] else "ready"
+
+            items.append({
+                "name": folder.name,
+                "path": normalized_folder,
+                "latest_mtime": latest_mtime,
+                "latest_mtime_iso": latest_iso,
+                "run_in_progress": bool(run_state.get("run_in_progress")),
+                "run_complete": bool(run_state.get("run_complete")),
+                "sample_location": run_state.get("sample_location"),
+                "completion_source": run_state.get("completion_source"),
+                "run_log_last_line": run_state.get("run_log_last_line"),
+                "initials": route["initials"],
+                "matched": route["matched"],
+                "recognized_initials": route.get("recognized_initials", False),
+                "route_mode": route.get("route_mode", "unmatched"),
+                "matched_initials_dir": route["matched_initials_dir"],
+                "destination_dir": route["destination_dir"],
+                "destination_path": route["destination_path"],
+                "destination_exists": route["destination_exists"],
+                "status": status,
+            })
 
     items.sort(key=lambda item: item.get("latest_mtime") or 0.0, reverse=True)
     if limit > 0:
@@ -517,9 +580,12 @@ def _scan_run_router(
 
     return {
         "source_path": str(source_root),
+        "scan_roots": [str(path) for path in scan_roots],
         "initials_root": str(initials_root_path),
         "destination_root": str(destination_root_path),
         "recursive": bool(recursive),
+        "monitor_recent_days": max(0, int(monitor_recent_days)),
+        "monitor_date_tokens": monitor_date_tokens,
         "items": items,
         "summary": {
             "shown": len(items),
@@ -1779,6 +1845,8 @@ def run_router_scan(payload: dict = Body(...)):
     recursive = _coerce_bool(payload.get("recursive"), True)
     limit = _coerce_int(payload.get("limit"), 200)
     limit = max(0, min(limit, 1000))
+    monitor_recent_days = _coerce_int(payload.get("monitor_recent_days"), 0)
+    monitor_recent_days = max(0, min(monitor_recent_days, 30))
 
     return _scan_run_router(
         source_path=source_path,
@@ -1786,6 +1854,7 @@ def run_router_scan(payload: dict = Body(...)):
         destination_root=destination_root,
         recursive=recursive,
         limit=limit,
+        monitor_recent_days=monitor_recent_days,
     )
 
 
