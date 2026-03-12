@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.18">
+  <link rel="stylesheet" href="css/style.css?v=0.2.19">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -530,18 +530,19 @@
         </label>
       </div>
       <div class="tab-toolbar router-toolbar">
-        <label class="router-field router-field-wide">Destination root
-          <input type="text" id="router-destination-root" placeholder="Folder that should receive the copied runs" spellcheck="false">
-        </label>
+        <div class="router-field router-field-wide router-note-block">
+          <span class="router-note-title">Destination</span>
+          <span class="toolbar-note">Runs are copied directly into the matching initials folder under the initials root above.</span>
+        </div>
         <label class="router-field router-field-sm">Poll (s)
           <input type="number" id="router-poll-seconds" min="5" max="3600" step="1" value="15">
         </label>
         <label class="checkbox-label"><input type="checkbox" id="router-recursive" checked> Recursive scan</label>
         <label class="checkbox-label"><input type="checkbox" id="router-auto-copy" checked> Auto-copy ready runs</label>
       </div>
-      <div class="tab-toolbar router-toolbar">
+      <div class="tab-toolbar router-toolbar router-actions">
         <button id="btn-router-use-current" class="btn btn-sm">Use Current Folder</button>
-        <button id="btn-router-scan" class="btn btn-primary">Scan Finished Runs</button>
+        <button id="btn-router-scan" class="btn btn-sm btn-primary">Scan Finished Runs</button>
         <button id="btn-router-copy" class="btn btn-sm">Copy Ready Runs</button>
         <button id="btn-router-toggle" class="btn btn-sm btn-primary">Start Monitoring</button>
         <span id="router-status-dot" style="display:none;width:8px;height:8px;border-radius:50%;background:#2ecc71;flex-shrink:0;animation:watch-pulse 2s infinite;"></span>
@@ -577,9 +578,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.18"></script>
-  <script src="js/charts.js?v=0.2.18"></script>
-  <script src="js/quotes.js?v=0.2.18"></script>
-  <script src="js/app.js?v=0.2.18"></script>
+  <script src="js/api.js?v=0.2.19"></script>
+  <script src="js/charts.js?v=0.2.19"></script>
+  <script src="js/quotes.js?v=0.2.19"></script>
+  <script src="js/app.js?v=0.2.19"></script>
 </body>
 </html>

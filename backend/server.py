@@ -171,6 +171,29 @@ def _extract_sample_location(run_log_text: str) -> Optional[int]:
     return None
 
 
+def _normalized_run_log_lines(run_log_text: str) -> list[str]:
+    text = str(run_log_text or "")
+    if not text:
+        return []
+
+    lines = []
+    for raw_line in text.splitlines():
+        line = " ".join(str(raw_line).replace("\x00", " ").split())
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _latest_run_log_line(run_log_text: str) -> Optional[str]:
+    lines = _normalized_run_log_lines(run_log_text)
+    return lines[-1] if lines else None
+
+
+def _run_log_has_method_completed(run_log_text: str) -> bool:
+    line = _latest_run_log_line(run_log_text) or ""
+    return bool(re.search(r"\bmethod\s+completed\b", line, flags=re.IGNORECASE))
+
+
 def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     folder = Path(_normalize_filesystem_path(str(folder_path)))
     latest_mtime = _folder_latest_mtime(folder)
@@ -179,6 +202,7 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     completion_source = "mtime-settled" if settled else "active-write"
     run_complete = False
     sample_location = None
+    run_log_last_line = None
 
     try:
         run_logs = sorted(folder.glob("RUN*.LOG"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -188,8 +212,8 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     if run_logs:
         raw_text = _decode_text_file(run_logs[0])
         sample_location = _extract_sample_location(raw_text)
-        text = raw_text.lower()
-        if "instrument run completed" in text or "method completed" in text:
+        run_log_last_line = _latest_run_log_line(raw_text)
+        if _run_log_has_method_completed(raw_text):
             run_complete = True
             completion_source = "run-log"
 
@@ -201,6 +225,7 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
         "run_in_progress": not cacheable,
         "cacheable": cacheable,
         "completion_source": completion_source,
+        "run_log_last_line": run_log_last_line,
         "sample_location": sample_location,
         "is_wash_position": sample_location in WASH_POSITIONS if sample_location is not None else False,
     }
@@ -436,12 +461,11 @@ def _scan_run_router(
 
     for folder in _iter_d_folder_paths(source_root, recursive=recursive):
         run_state = _inspect_sample_run_state(folder)
-        if run_state.get("run_in_progress"):
-            in_progress_count += 1
-            continue
         if run_state.get("is_wash_position"):
             wash_count += 1
             continue
+        if not run_state.get("run_complete"):
+            in_progress_count += 1
 
         route = _build_router_destination(
             folder,
@@ -456,7 +480,9 @@ def _scan_run_router(
             else None
         )
         status = "unmatched"
-        if route["matched"]:
+        if not run_state.get("run_complete"):
+            status = "running"
+        elif route["matched"]:
             status = "already-copied" if route["destination_exists"] else "ready"
 
         items.append({
@@ -464,8 +490,11 @@ def _scan_run_router(
             "path": str(folder),
             "latest_mtime": latest_mtime,
             "latest_mtime_iso": latest_iso,
+            "run_in_progress": bool(run_state.get("run_in_progress")),
+            "run_complete": bool(run_state.get("run_complete")),
             "sample_location": run_state.get("sample_location"),
             "completion_source": run_state.get("completion_source"),
+            "run_log_last_line": run_state.get("run_log_last_line"),
             "initials": route["initials"],
             "matched": route["matched"],
             "recognized_initials": route.get("recognized_initials", False),
@@ -1834,6 +1863,11 @@ def run_router_copy(payload: dict = Body(...)):
         run_state = _inspect_sample_run_state(source_folder)
         if run_state.get("run_in_progress"):
             result["detail"] = "Run is still in progress"
+            skipped_count += 1
+            results.append(result)
+            continue
+        if not run_state.get("run_complete"):
+            result["detail"] = "Run completion was not confirmed in RUN.LOG"
             skipped_count += 1
             results.append(result)
             continue
