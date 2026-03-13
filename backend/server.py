@@ -13,6 +13,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from threading import Lock
 from typing import Optional, Union
 
 # Patch out Streamlit before any lcms-webapp imports
@@ -68,6 +69,9 @@ _sample_cache: dict[str, SampleData] = {}
 _sample_cache_state: dict[str, str] = {}
 RUN_SETTLE_SECONDS = 120
 WASH_POSITIONS = {91}
+_router_log_lock = Lock()
+_router_logged_item_state: dict[str, str] = {}
+_router_last_window_signature = ""
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +120,150 @@ def _normalize_filesystem_path(path_str: str) -> str:
             return "\\\\" + "\\".join([host, share, *rest])
 
     return raw
+
+
+def _app_user_data_dir() -> Path:
+    configured = os.environ.get("LCMS_USER_DATA_DIR", "").strip()
+    if configured:
+        return Path(configured)
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "CATrupole"
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_appdata:
+            return Path(local_appdata) / "CATrupole"
+        return Path.home() / "AppData" / "Local" / "CATrupole"
+
+    xdg_state = os.environ.get("XDG_STATE_HOME", "").strip()
+    if xdg_state:
+        return Path(xdg_state) / "CATrupole"
+    return Path.home() / ".local" / "state" / "CATrupole"
+
+
+def _router_log_path() -> Path:
+    return _app_user_data_dir() / "logs" / "transfer-router.log"
+
+
+def _sanitize_log_field(value: object) -> str:
+    return str(value or "").replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+
+
+def _append_router_log(
+    event: str,
+    status: str,
+    run_name: str = "",
+    source_path: str = "",
+    destination_path: str = "",
+    detail: str = "",
+) -> str:
+    log_path = _router_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    header = "timestamp\tevent\tstatus\trun_name\tsource_path\tdestination_path\tdetail\n"
+    line = "\t".join([
+        datetime.datetime.now().isoformat(),
+        _sanitize_log_field(event),
+        _sanitize_log_field(status),
+        _sanitize_log_field(run_name),
+        _sanitize_log_field(source_path),
+        _sanitize_log_field(destination_path),
+        _sanitize_log_field(detail),
+    ]) + "\n"
+    with _router_log_lock:
+        needs_header = not log_path.exists()
+        with log_path.open("a", encoding="utf-8") as handle:
+            if needs_header:
+                handle.write(header)
+            handle.write(line)
+    return str(log_path)
+
+
+def _router_log_detail_for_item(item: dict) -> str:
+    status = str(item.get("status") or "")
+    route_mode = str(item.get("route_mode") or "")
+    initials = str(item.get("initials") or "")
+    last_line = str(item.get("run_log_last_line") or "").strip()
+
+    if status == "running":
+        if last_line:
+            return last_line
+        if route_mode == "unnamed":
+            return "Run still active, will route to Unnamed when finished"
+        if initials:
+            return f"Run still active, will route to {initials}"
+        return "Run still active"
+    if status in {"ready", "already-copied"}:
+        if last_line:
+            return last_line
+        if route_mode == "unnamed":
+            return "Method completed, routing to Unnamed"
+        if initials:
+            return f"Method completed, matched {initials}"
+        return "Method completed"
+    if route_mode == "unnamed":
+        return "No recognizable initials, routing to Unnamed"
+    if initials:
+        return f"Matched {initials}"
+    return "No transfer target"
+
+
+def _maybe_log_router_scan_window(
+    source_root: Path,
+    scan_roots: list[Path],
+    monitor_recent_days: int,
+    monitor_date_tokens: list[str],
+) -> str:
+    global _router_last_window_signature
+
+    status = "monitoring" if monitor_recent_days > 0 else "manual-scan"
+    roots_text = ", ".join(str(path) for path in scan_roots)
+    tokens_text = ", ".join(monitor_date_tokens)
+    signature = "|".join([
+        status,
+        str(source_root),
+        str(monitor_recent_days),
+        roots_text,
+        tokens_text,
+    ])
+
+    if monitor_recent_days > 0 and signature == _router_last_window_signature:
+        return str(_router_log_path())
+
+    _router_last_window_signature = signature
+    detail = f"scan_roots={roots_text or str(source_root)}"
+    if monitor_recent_days > 0 and tokens_text:
+        detail += f"; date_tokens={tokens_text}"
+    return _append_router_log(
+        event="scan-window",
+        status=status,
+        source_path=str(source_root),
+        detail=detail,
+    )
+
+
+def _maybe_log_router_scan_item(item: dict) -> str:
+    source_path = str(item.get("path") or "")
+    detail = _router_log_detail_for_item(item)
+    fingerprint = "|".join([
+        str(item.get("status") or ""),
+        str(item.get("destination_path") or ""),
+        detail,
+    ])
+
+    with _router_log_lock:
+        previous = _router_logged_item_state.get(source_path)
+        if previous == fingerprint:
+            return str(_router_log_path())
+        _router_logged_item_state[source_path] = fingerprint
+
+    return _append_router_log(
+        event="scan-item",
+        status=str(item.get("status") or "scanned"),
+        run_name=str(item.get("name") or ""),
+        source_path=source_path,
+        destination_path=str(item.get("destination_path") or ""),
+        detail=detail,
+    )
 
 
 def _decode_text_file(path: Path) -> str:
@@ -510,10 +658,20 @@ def _scan_run_router(
     )
     initials_root_path, initials_dirs = _list_router_initial_dirs(initials_root)
     destination_root_path = Path(_normalize_filesystem_path(str(destination_root or initials_root_path)))
+    log_path = _maybe_log_router_scan_window(
+        source_root,
+        scan_roots,
+        monitor_recent_days=monitor_recent_days,
+        monitor_date_tokens=monitor_date_tokens,
+    )
 
     items = []
     in_progress_count = 0
     wash_count = 0
+    ready_count = 0
+    copied_count = 0
+    unmatched_count = 0
+    unnamed_count = 0
 
     seen_paths = set()
     for scan_root in scan_roots:
@@ -548,7 +706,7 @@ def _scan_run_router(
             elif route["matched"]:
                 status = "already-copied" if route["destination_exists"] else "ready"
 
-            items.append({
+            item = {
                 "name": folder.name,
                 "path": normalized_folder,
                 "latest_mtime": latest_mtime,
@@ -567,16 +725,22 @@ def _scan_run_router(
                 "destination_path": route["destination_path"],
                 "destination_exists": route["destination_exists"],
                 "status": status,
-            })
+            }
+            items.append(item)
+            _maybe_log_router_scan_item(item)
+
+            if status == "ready":
+                ready_count += 1
+            elif status == "already-copied":
+                copied_count += 1
+            elif status == "unmatched":
+                unmatched_count += 1
+            if route.get("route_mode") == "unnamed":
+                unnamed_count += 1
 
     items.sort(key=lambda item: item.get("latest_mtime") or 0.0, reverse=True)
     if limit > 0:
         items = items[:limit]
-
-    ready_count = sum(1 for item in items if item["status"] == "ready")
-    copied_count = sum(1 for item in items if item["status"] == "already-copied")
-    unmatched_count = sum(1 for item in items if item["status"] == "unmatched")
-    unnamed_count = sum(1 for item in items if item.get("route_mode") == "unnamed")
 
     return {
         "source_path": str(source_root),
@@ -586,6 +750,7 @@ def _scan_run_router(
         "recursive": bool(recursive),
         "monitor_recent_days": max(0, int(monitor_recent_days)),
         "monitor_date_tokens": monitor_date_tokens,
+        "log_path": log_path,
         "items": items,
         "summary": {
             "shown": len(items),
@@ -1870,6 +2035,8 @@ def run_router_copy(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="initials_root is required")
 
     recursive = _coerce_bool(payload.get("recursive"), True)
+    monitor_recent_days = _coerce_int(payload.get("monitor_recent_days"), 0)
+    monitor_recent_days = max(0, min(monitor_recent_days, 30))
     run_paths_raw = payload.get("run_paths", [])
     if run_paths_raw is None:
         run_paths_raw = []
@@ -1892,6 +2059,7 @@ def run_router_copy(payload: dict = Body(...)):
             destination_root=destination_root,
             recursive=recursive,
             limit=0,
+            monitor_recent_days=monitor_recent_days,
         )
         run_paths = [
             Path(item["path"])
@@ -1907,6 +2075,7 @@ def run_router_copy(payload: dict = Body(...)):
     exists_count = 0
     skipped_count = 0
     error_count = 0
+    log_path = str(_router_log_path())
 
     for run_path in run_paths:
         source_folder = Path(_normalize_filesystem_path(str(run_path)))
@@ -1921,11 +2090,25 @@ def run_router_copy(payload: dict = Body(...)):
         if not source_folder.exists():
             result["detail"] = "Source run not found"
             skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
         if not source_folder.is_dir() or not source_folder.name.lower().endswith(".d"):
             result["detail"] = "Source path is not a .D folder"
             skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
 
@@ -1933,16 +2116,37 @@ def run_router_copy(payload: dict = Body(...)):
         if run_state.get("run_in_progress"):
             result["detail"] = "Run is still in progress"
             skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
         if not run_state.get("run_complete"):
             result["detail"] = "Run completion was not confirmed in RUN.LOG"
             skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
         if run_state.get("is_wash_position"):
             result["detail"] = "Wash position skipped"
             skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
 
@@ -1956,6 +2160,14 @@ def run_router_copy(payload: dict = Body(...)):
         if not route["matched"] or not route["destination_path"]:
             result["detail"] = "No matching initials folder"
             skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                destination_path=result["destination_path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
 
@@ -1964,6 +2176,14 @@ def run_router_copy(payload: dict = Body(...)):
             result["status"] = "exists"
             result["detail"] = "Destination already exists"
             exists_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                destination_path=result["destination_path"],
+                detail=result["detail"],
+            )
             results.append(result)
             continue
 
@@ -1975,10 +2195,19 @@ def run_router_copy(payload: dict = Body(...)):
             result["status"] = "error"
             result["detail"] = str(exc)
             error_count += 1
+        log_path = _append_router_log(
+            event="copy",
+            status=result["status"],
+            run_name=result["name"],
+            source_path=result["path"],
+            destination_path=result["destination_path"],
+            detail=result["detail"],
+        )
         results.append(result)
 
     return {
         "items": results,
+        "log_path": log_path,
         "summary": {
             "requested": len(run_paths),
             "copied": copied_count,

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.20">
+  <link rel="stylesheet" href="css/style.css?v=0.2.21">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -551,6 +551,7 @@
         <span id="router-status-dot" style="display:none;width:8px;height:8px;border-radius:50%;background:#2ecc71;flex-shrink:0;animation:watch-pulse 2s infinite;"></span>
         <span id="router-status-text" class="muted">Idle</span>
       </div>
+      <div id="router-debug-log-path" class="toolbar-note router-debug-log">Debug log file will appear here after the first scan or copy.</div>
 
       <div id="router-summary" class="metrics-bar">
         <div class="metric-card"><span class="metric-label">Ready</span><span id="router-ready-count" class="metric-value">0</span></div>
@@ -581,9 +582,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.20"></script>
-  <script src="js/charts.js?v=0.2.20"></script>
-  <script src="js/quotes.js?v=0.2.20"></script>
-  <script src="js/app.js?v=0.2.20"></script>
+  <script src="js/api.js?v=0.2.21"></script>
+  <script src="js/charts.js?v=0.2.21"></script>
+  <script src="js/quotes.js?v=0.2.21"></script>
+  <script src="js/app.js?v=0.2.21"></script>
 </body>
 </html>
