@@ -792,6 +792,11 @@ input[type="radio"] {
   align-items: center;
   min-height: 30px;
 }
+.router-debug-log {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
 .router-field {
   display: flex;
   flex-direction: column;

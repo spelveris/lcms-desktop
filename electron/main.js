@@ -76,6 +76,7 @@ function startBackend() {
     ...process.env,
     LCMS_PORT: String(BACKEND_PORT),
     LCMS_APP_VERSION: String(app.getVersion()),
+    LCMS_USER_DATA_DIR: app.getPath("userData"),
   };
 
   if (app.isPackaged) {

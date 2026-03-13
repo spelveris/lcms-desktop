@@ -17,6 +17,7 @@ const state = {
   customMountPaths: loadStoredCustomMounts(),
   runRouterSettings: loadStoredRunRouterSettings(),
   runRouterRecentLog: loadStoredRunRouterRecentLog(),
+  runRouterBackendLogPath: '',
   deconvInteractionMode: localStorage.getItem('lcms-deconv-interaction-mode') || 'deconvolute',
   selectedFiles: JSON.parse(localStorage.getItem('lcms-selected-files') || '[]'),
   loadedSamples: {},      // path -> sample metadata
@@ -6361,6 +6362,16 @@ function renderRunRouterLog() {
   container.innerHTML = html;
 }
 
+function renderRunRouterBackendLogPath() {
+  const el = document.getElementById('router-debug-log-path');
+  if (!el) return;
+  if (state.runRouterBackendLogPath) {
+    el.textContent = `Debug log file: ${state.runRouterBackendLogPath}`;
+  } else {
+    el.textContent = 'Debug log file will appear here after the first scan or copy.';
+  }
+}
+
 function updateRunRouterMonitorState() {
   const btn = document.getElementById('btn-router-toggle');
   const dot = document.getElementById('router-status-dot');
@@ -6409,6 +6420,7 @@ async function scanRunRouter(options = {}) {
       rememberCustomMountPath(state.runRouterSettings.initialsRoot, payload.initials_root);
       rememberCustomMountPath(state.runRouterSettings.destinationRoot, payload.destination_root);
     }
+    state.runRouterBackendLogPath = String(data.log_path || state.runRouterBackendLogPath || '');
 
     state.runRouterResults.forEach((item) => {
       const detail = item.status === 'running'
@@ -6439,6 +6451,7 @@ async function scanRunRouter(options = {}) {
 
     renderRunRouterSummary();
     renderRunRouterResults();
+    renderRunRouterBackendLogPath();
     if (!options.silent) {
       toast(`Router scan complete: ${state.runRouterResults.length} runs shown`, 'success');
     }
@@ -6453,15 +6466,17 @@ async function scanRunRouter(options = {}) {
 
 async function copyRunRouterRuns(runPaths = null, options = {}) {
   const payload = buildRunRouterPayload({
+    forMonitoring: options.forMonitoring === true,
     run_paths: Array.isArray(runPaths) ? runPaths : undefined,
   });
+  const displayedReadyPaths = (state.runRouterResults || [])
+    .filter((item) => item.status === 'ready')
+    .map((item) => item.path);
   const readyPaths = Array.isArray(runPaths)
     ? runPaths
-    : (state.runRouterResults || [])
-      .filter((item) => item.status === 'ready')
-      .map((item) => item.path);
+    : displayedReadyPaths;
 
-  if (readyPaths.length === 0) {
+  if (Array.isArray(runPaths) && readyPaths.length === 0) {
     if (!options.silent) toast('No ready runs to copy', 'warning');
     return null;
   }
@@ -6479,10 +6494,14 @@ async function copyRunRouterRuns(runPaths = null, options = {}) {
 
   if (options.showLoading !== false) showLoading('Copying finished runs...');
   try {
-    const data = await api.runRouterCopy({
-      ...payload,
-      run_paths: readyPaths,
-    });
+    const copyPayload = { ...payload };
+    if (Array.isArray(runPaths)) {
+      copyPayload.run_paths = readyPaths;
+    } else {
+      delete copyPayload.run_paths;
+    }
+    const data = await api.runRouterCopy(copyPayload);
+    state.runRouterBackendLogPath = String(data.log_path || state.runRouterBackendLogPath || '');
 
     const items = Array.isArray(data.items) ? data.items : [];
     items.forEach((item) => {
@@ -6496,8 +6515,13 @@ async function copyRunRouterRuns(runPaths = null, options = {}) {
     });
 
     if (!options.skipRefresh) {
-      await scanRunRouter({ silent: true, showLoading: false });
+      await scanRunRouter({
+        silent: true,
+        showLoading: false,
+        forMonitoring: options.forMonitoring === true,
+      });
     }
+    renderRunRouterBackendLogPath();
 
     if (!options.silent) {
       const summary = data.summary || {};
@@ -6527,14 +6551,13 @@ async function runRunRouterCycle(options = {}) {
     if (!scanData) return;
 
     const shouldAutoCopy = state.runRouterSettings?.autoCopy !== false;
-    const readyPaths = (state.runRouterResults || [])
-      .filter((item) => item.status === 'ready')
-      .map((item) => item.path);
+    const readyCount = Number(scanData.summary?.ready || 0);
 
-    if (shouldAutoCopy && readyPaths.length > 0) {
-      await copyRunRouterRuns(readyPaths, {
+    if (shouldAutoCopy && readyCount > 0) {
+      await copyRunRouterRuns(null, {
         silent: options.silent !== false,
         showLoading: false,
+        forMonitoring: options.forMonitoring === true,
       });
     }
   } finally {
@@ -6565,6 +6588,7 @@ function initRunRouter() {
   renderRunRouterSummary();
   renderRunRouterResults();
   renderRunRouterLog();
+  renderRunRouterBackendLogPath();
   updateRunRouterMonitorState();
 
   document.getElementById('btn-router-use-current')?.addEventListener('click', () => {
