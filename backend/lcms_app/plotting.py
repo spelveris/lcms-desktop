@@ -80,6 +80,26 @@ def _normalize_deconvolution_export_results(deconv_results: list) -> list[dict]:
     return normalized
 
 
+def _get_deconvolution_panel_dimensions(base_fig_width: float = 8.0) -> tuple[float, float]:
+    """Return the physical panel size used by the deconvolution mass export."""
+    base_fig_width = max(1.0, _coerce_finite_float(base_fig_width, 8.0))
+    base_fig_height = 5.5
+    left, right = 0.125, 0.9
+    bottom, top = 0.11, 0.88
+    wspace = 0.3
+    hspace = 0.45
+    total_width_frac = right - left
+    total_height_frac = top - bottom
+
+    # GridSpec width/height allocation mirrors create_deconvolution_figure():
+    panel_width_frac = total_width_frac / (2 + wspace)
+    panel_height_frac = (2 * total_height_frac) / (1 + 2 + hspace)
+
+    panel_width_in = base_fig_width * panel_width_frac
+    panel_height_in = base_fig_height * panel_height_frac
+    return panel_width_in, panel_height_in
+
+
 def create_single_panel(
     ax: plt.Axes,
     times: np.ndarray,
@@ -901,7 +921,12 @@ def create_eic_comparison_figure(
     return fig
 
 
-def export_figure(fig: matplotlib.figure.Figure, dpi: int = config.EXPORT_DPI, format: str = 'png') -> bytes:
+def export_figure(
+    fig: matplotlib.figure.Figure,
+    dpi: int = config.EXPORT_DPI,
+    format: str = 'png',
+    tight: bool = True,
+) -> bytes:
     """
     Export figure to bytes in specified format with transparent background.
 
@@ -917,30 +942,55 @@ def export_figure(fig: matplotlib.figure.Figure, dpi: int = config.EXPORT_DPI, f
     for ax in fig.get_axes():
         ax.set_facecolor('none')
     buf = io.BytesIO()
-    fig.savefig(buf, format=format, dpi=dpi, bbox_inches='tight', facecolor='none', edgecolor='none', transparent=True)
+    bbox_inches = 'tight' if tight else None
+    fig.savefig(
+        buf,
+        format=format,
+        dpi=dpi,
+        bbox_inches=bbox_inches,
+        facecolor='none',
+        edgecolor='none',
+        transparent=True,
+    )
     buf.seek(0)
     return buf.getvalue()
 
 
-def export_figure_png(fig: matplotlib.figure.Figure, dpi: int = config.EXPORT_DPI) -> bytes:
+def export_figure_png(
+    fig: matplotlib.figure.Figure,
+    dpi: int = config.EXPORT_DPI,
+    tight: bool = True,
+) -> bytes:
     """Export figure to PNG bytes."""
-    return export_figure(fig, dpi=dpi, format='png')
+    return export_figure(fig, dpi=dpi, format='png', tight=tight)
 
 
-def export_figure_svg(fig: matplotlib.figure.Figure) -> bytes:
+def export_figure_svg(fig: matplotlib.figure.Figure, tight: bool = True) -> bytes:
     """Export figure to SVG bytes with transparent background."""
     # Make all axes backgrounds transparent
     for ax in fig.get_axes():
         ax.set_facecolor('none')
     buf = io.BytesIO()
-    fig.savefig(buf, format='svg', bbox_inches='tight', facecolor='none', edgecolor='none', transparent=True)
+    bbox_inches = 'tight' if tight else None
+    fig.savefig(
+        buf,
+        format='svg',
+        bbox_inches=bbox_inches,
+        facecolor='none',
+        edgecolor='none',
+        transparent=True,
+    )
     buf.seek(0)
     return buf.getvalue()
 
 
-def export_figure_pdf(fig: matplotlib.figure.Figure, dpi: int = config.EXPORT_DPI) -> bytes:
+def export_figure_pdf(
+    fig: matplotlib.figure.Figure,
+    dpi: int = config.EXPORT_DPI,
+    tight: bool = True,
+) -> bytes:
     """Export figure to PDF bytes."""
-    return export_figure(fig, dpi=dpi, format='pdf')
+    return export_figure(fig, dpi=dpi, format='pdf', tight=tight)
 
 
 def export_figure_to_file(fig: matplotlib.figure.Figure, filepath: str, dpi: int = config.EXPORT_DPI) -> None:
@@ -1487,21 +1537,7 @@ def create_deconvoluted_masses_figure(
 
     # Match the physical panel size used by create_deconvolution_figure()
     # for the bottom-right deconvoluted-masses subplot.
-    base_fig_height = 5.5
-    left, right = 0.125, 0.9
-    bottom, top = 0.11, 0.88
-    wspace = 0.3
-    hspace = 0.45
-    total_width_frac = right - left
-    total_height_frac = top - bottom
-
-    # GridSpec width/height allocation mirrors create_deconvolution_figure():
-    # 2 columns with wspace=0.3, and row height ratios [1, 2] with hspace=0.45.
-    panel_width_frac = total_width_frac / (2 + wspace)
-    panel_height_frac = (2 * total_height_frac) / (1 + 2 + hspace)
-
-    panel_width_in = base_fig_width * panel_width_frac
-    panel_height_in = base_fig_height * panel_height_frac
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
 
     fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
     _plot_deconvoluted_masses_panel(
@@ -1517,6 +1553,229 @@ def create_deconvoluted_masses_figure(
         show_peak_labels=deconv_show_peak_labels,
     )
     plt.tight_layout(pad=0.8)
+    return fig
+
+
+def create_chromatogram_overlay_export_figure(
+    traces: list[dict],
+    title: str,
+    y_label: str = "Intensity",
+    x_label: str = "Time (min)",
+    style: Optional[dict] = None,
+    x_range: Optional[tuple[float, float]] = None,
+) -> matplotlib.figure.Figure:
+    """Create a single-panel chromatogram overlay figure for progression exports."""
+    style = style or {}
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8.0), 8.0))
+    line_width = max(0.1, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
+    show_grid = _coerce_bool(style.get('show_grid', False), False)
+    panel_width_multiplier = max(1.0, _coerce_finite_float(style.get('panel_width_multiplier', 2.0), 2.0))
+    panel_height_multiplier = max(0.5, _coerce_finite_float(style.get('panel_height_multiplier', 1.0), 1.0))
+
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    # Match the existing standalone deconvolution export page geometry while
+    # keeping progression 2x wider. This lets progression align visually with
+    # the untouched deconvolution PDF without changing that export path.
+    deconv_page_width_scale = 0.985516693
+    deconv_page_height_scale = 1.00101474
+    fig_width_in = panel_width_in * panel_width_multiplier * deconv_page_width_scale
+    fig_height_in = panel_height_in * panel_height_multiplier * deconv_page_height_scale
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width_in, fig_height_in))
+
+    normalized_traces: list[tuple[str, np.ndarray, np.ndarray, str]] = []
+    fallback_colors = config.EIC_COLORS or ["#1f77b4"]
+    for idx, trace in enumerate(traces or []):
+        if not isinstance(trace, dict):
+            continue
+        raw_times = np.asarray(trace.get('times') or [], dtype=float)
+        raw_intensities = np.asarray(trace.get('intensities') or [], dtype=float)
+        count = min(raw_times.size, raw_intensities.size)
+        if count <= 0:
+            continue
+        times = raw_times[:count]
+        intensities = raw_intensities[:count]
+        finite_mask = np.isfinite(times) & np.isfinite(intensities)
+        if not np.any(finite_mask):
+            continue
+        label = str(trace.get('label') or f"Sample {idx + 1}")
+        color = str(trace.get('color') or fallback_colors[idx % len(fallback_colors)])
+        normalized_traces.append((label, times[finite_mask], intensities[finite_mask], color))
+
+    if not normalized_traces:
+        ax.text(0.5, 0.5, "No data available", ha='center', va='center', transform=ax.transAxes)
+        ax.set_axis_off()
+        plt.tight_layout(pad=0.8)
+        return fig
+
+    x_min = float('inf')
+    x_max = float('-inf')
+    for label, times, intensities, color in normalized_traces:
+        ax.plot(times, intensities, color=color, label=label, linewidth=line_width)
+        x_min = min(x_min, float(np.min(times)))
+        x_max = max(x_max, float(np.max(times)))
+
+    ax.set_title(title, fontweight='bold', y=1.08)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.legend(loc='upper right', fontsize='small', frameon=False)
+
+    if (
+        x_range is not None
+        and len(x_range) == 2
+        and np.isfinite(x_range[0])
+        and np.isfinite(x_range[1])
+        and float(x_range[1]) > float(x_range[0])
+    ):
+        ax.set_xlim(float(x_range[0]), float(x_range[1]))
+    elif np.isfinite(x_min) and np.isfinite(x_max) and x_max > x_min:
+        ax.set_xlim(x_min, x_max)
+
+    if show_grid:
+        ax.grid(True, alpha=0.3)
+
+    ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
+    _shift_sci_offset_left(ax)
+    # Match the deconvolution export framing: only left and bottom axes visible.
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.tick_params(top=False, right=False)
+    # Keep a fixed panel box so editable PDF exports retain the same maximum
+    # y-axis spine height as the deconvolution PDF, regardless of tick labels.
+    fig.subplots_adjust(
+        left=0.1250644595709571,
+        right=0.9645386413641364,
+        bottom=0.18161080125814368,
+        top=0.8367908466096177,
+    )
+    return fig
+
+
+def _fit_linear_points(points: list[dict]) -> Optional[dict]:
+    usable: list[tuple[float, float]] = []
+    for point in points or []:
+        if not isinstance(point, dict):
+            continue
+        x_val = _coerce_finite_float(point.get('x'), np.nan)
+        y_val = _coerce_finite_float(point.get('y'), np.nan)
+        if np.isfinite(x_val) and np.isfinite(y_val):
+            usable.append((x_val, y_val))
+
+    if len(usable) < 2:
+        return None
+
+    x_arr = np.asarray([item[0] for item in usable], dtype=float)
+    y_arr = np.asarray([item[1] for item in usable], dtype=float)
+    if np.unique(x_arr).size < 2:
+        return None
+
+    slope, intercept = np.polyfit(x_arr, y_arr, 1)
+    y_fit = slope * x_arr + intercept
+    ss_res = float(np.sum((y_arr - y_fit) ** 2))
+    ss_tot = float(np.sum((y_arr - np.mean(y_arr)) ** 2))
+    r_squared = 1.0 if ss_tot <= 0 else 1.0 - (ss_res / ss_tot)
+    return {
+        'slope': float(slope),
+        'intercept': float(intercept),
+        'r_squared': float(r_squared),
+    }
+
+
+def create_calibration_curve_export_figure(
+    points: list[dict],
+    title: str,
+    x_label: str = "Concentration (uM)",
+    y_label: str = "Integrated Area",
+    style: Optional[dict] = None,
+    fit: Optional[dict] = None,
+) -> matplotlib.figure.Figure:
+    """Create a single-panel calibration-curve export figure."""
+    style = style or {}
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 6.0), 6.0))
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
+
+    normalized_points: list[dict] = []
+    for idx, point in enumerate(points or []):
+        if not isinstance(point, dict):
+            continue
+        x_val = _coerce_finite_float(point.get('x'), np.nan)
+        y_val = _coerce_finite_float(point.get('y'), np.nan)
+        if not np.isfinite(x_val) or not np.isfinite(y_val):
+            continue
+        normalized_points.append({
+            'x': x_val,
+            'y': y_val,
+            'label': str(point.get('label') or f"Point {idx + 1}"),
+        })
+
+    if not normalized_points:
+        ax.text(0.5, 0.5, "No calibration points", ha='center', va='center', transform=ax.transAxes)
+        ax.set_axis_off()
+        plt.tight_layout(pad=0.8)
+        return fig
+
+    x_vals = np.asarray([point['x'] for point in normalized_points], dtype=float)
+    y_vals = np.asarray([point['y'] for point in normalized_points], dtype=float)
+    fit_result = fit if isinstance(fit, dict) else _fit_linear_points(normalized_points)
+    slope = _coerce_finite_float(fit_result.get('slope') if fit_result else np.nan, np.nan)
+    intercept = _coerce_finite_float(fit_result.get('intercept') if fit_result else np.nan, np.nan)
+    r_squared = _coerce_finite_float(fit_result.get('r_squared') if fit_result else np.nan, np.nan)
+
+    x_span = float(np.max(x_vals) - np.min(x_vals)) if x_vals.size > 1 else 0.0
+    x_margin = max(2.0, x_span * 0.05)
+    x_min = min(0.0, float(np.min(x_vals)) - x_margin)
+    x_max = float(np.max(x_vals)) + x_margin
+    y_max = float(np.max(y_vals)) if y_vals.size > 0 else 1.0
+    y_max = max(y_max * 1.08, 1.0)
+
+    if np.isfinite(slope) and np.isfinite(intercept):
+        fit_x = np.linspace(float(np.min(x_vals)), float(np.max(x_vals)), 300)
+        fit_y = slope * fit_x + intercept
+        ax.plot(
+            fit_x,
+            fit_y,
+            color=str(style.get('line_color') or "#1f77b4"),
+            linewidth=max(0.1, _coerce_finite_float(style.get('line_width', 2.0), 2.0)),
+            zorder=2,
+        )
+
+    ax.scatter(
+        x_vals,
+        y_vals,
+        s=max(1.0, _coerce_finite_float(style.get('point_size', 26.0), 26.0)),
+        facecolor=str(style.get('point_face_color') or "#1f77b4"),
+        edgecolor=str(style.get('point_edge_color') or "#0d4f8a"),
+        linewidth=max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8)),
+        clip_on=False,
+        zorder=3,
+    )
+
+    ax.set_title(title, fontweight='bold', y=1.03)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, y_max)
+    ax.grid(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.tick_params(top=False, right=False)
+    ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
+    _shift_sci_offset_left(ax)
+
+    if np.isfinite(slope) and np.isfinite(intercept) and np.isfinite(r_squared):
+        fit_text = f"y = {slope:.1f}x {intercept:+.1f}\nR$^2$ = {r_squared:.4f}"
+        ax.text(
+            0.04,
+            0.96,
+            fit_text,
+            transform=ax.transAxes,
+            ha='left',
+            va='top',
+            fontsize=8,
+            fontweight='bold',
+        )
+
+    fig.subplots_adjust(left=0.25, right=0.98, bottom=0.22, top=0.86)
     return fig
 
 

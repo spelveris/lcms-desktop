@@ -673,6 +673,138 @@ const charts = {
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },
 
+  plotUptakeAssayOverlay(divId, samples, options = {}) {
+    const traces = (samples || []).map((sample, index) => ({
+      x: sample.times || [],
+      y: sample.intensities || [],
+      type: 'scatter',
+      mode: 'lines',
+      name: sample.label || `Sample ${index + 1}`,
+      line: { color: sample.color || getColor(index), width: getLineWidth() },
+    }));
+
+    const shapes = [];
+    const start = Number(options.start);
+    const end = Number(options.end);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      shapes.push({
+        type: 'rect',
+        xref: 'x',
+        yref: 'paper',
+        x0: start,
+        x1: end,
+        y0: 0,
+        y1: 1,
+        fillcolor: 'rgba(33, 92, 175, 0.10)',
+        line: { width: 0 },
+      });
+      [start, end].forEach((xPos) => {
+        shapes.push({
+          type: 'line',
+          xref: 'x',
+          yref: 'paper',
+          x0: xPos,
+          x1: xPos,
+          y0: 0,
+          y1: 1,
+          line: { color: '#215CAF', width: 1.2, dash: 'dash' },
+        });
+      });
+    }
+
+    const layout = mergeLayout({
+      title: { text: options.title || 'Uptake Assay EIC Overlay', font: { size: 14 } },
+      xaxis: { title: options.xLabel || getXAxisLabel() },
+      yaxis: { title: options.yLabel || 'Intensity' },
+      showlegend: traces.length > 1,
+      legend: traces.length > 1 ? {
+        x: 0.995,
+        xanchor: 'right',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.8)',
+      } : undefined,
+      height: getContainerHeight(divId, 320),
+      margin: { r: traces.length > 1 ? 34 : 24 },
+      shapes,
+    });
+    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+  },
+
+  plotCalibrationCurve(divId, points, fit, options = {}) {
+    const usablePoints = Array.isArray(points) ? points.filter((point) =>
+      Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))
+    ) : [];
+    const traces = [];
+
+    if (usablePoints.length > 0) {
+      traces.push({
+        x: usablePoints.map((point) => Number(point.x)),
+        y: usablePoints.map((point) => Number(point.y)),
+        text: usablePoints.map((point) => point.label || ''),
+        customdata: usablePoints.map((point) => ({
+          label: point.label || '',
+          concentration: Number(point.x),
+          area: Number(point.y),
+        })),
+        hovertemplate: '%{customdata.label}<br>Concentration: %{customdata.concentration}<br>Area: %{customdata.area:.4e}<extra></extra>',
+        type: 'scatter',
+        mode: 'markers',
+        marker: {
+          color: '#1f77b4',
+          line: { color: '#0d4f8a', width: 1 },
+          size: 8,
+        },
+        showlegend: false,
+      });
+    }
+
+    const slope = Number(fit?.slope);
+    const intercept = Number(fit?.intercept);
+    const rSquared = Number(fit?.rSquared ?? fit?.r_squared);
+    if (usablePoints.length >= 2 && Number.isFinite(slope) && Number.isFinite(intercept)) {
+      const xVals = usablePoints.map((point) => Number(point.x));
+      const xMin = Math.min(...xVals);
+      const xMax = Math.max(...xVals);
+      traces.push({
+        x: [xMin, xMax],
+        y: [slope * xMin + intercept, slope * xMax + intercept],
+        type: 'scatter',
+        mode: 'lines',
+        line: { color: '#1f77b4', width: 2 },
+        hoverinfo: 'skip',
+        showlegend: false,
+      });
+    }
+
+    const annotations = [];
+    if (Number.isFinite(slope) && Number.isFinite(intercept) && Number.isFinite(rSquared)) {
+      annotations.push({
+        xref: 'paper',
+        yref: 'paper',
+        x: 0.04,
+        y: 0.96,
+        xanchor: 'left',
+        yanchor: 'top',
+        align: 'left',
+        showarrow: false,
+        font: { size: 11, color: '#000000' },
+        text: `<b>y = ${slope.toFixed(1)}x ${intercept >= 0 ? '+' : '-'} ${Math.abs(intercept).toFixed(1)}<br>R² = ${rSquared.toFixed(4)}</b>`,
+      });
+    }
+
+    const layout = mergeLayout({
+      title: { text: options.title || 'Uptake Assay Calibration Curve', font: { size: 14 } },
+      xaxis: { title: options.xLabel || 'Concentration (uM)' },
+      yaxis: { title: options.yLabel || 'Integrated Area' },
+      showlegend: false,
+      height: getContainerHeight(divId, 320),
+      margin: { l: 72, r: 24, t: 40, b: 76 },
+      annotations,
+    });
+    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+  },
+
   plotMassSpectrum(divId, mzValues, intensities, annotations, options = {}) {
     const traces = [{
       x: mzValues, y: intensities,

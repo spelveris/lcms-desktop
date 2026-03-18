@@ -86,6 +86,7 @@ const api = {
       wavelength: opts.wavelength,
       mz: opts.mz,
       mz_window: opts.mzWindow,
+      ion_mode: opts.ionMode,
       smooth: opts.smooth,
       height_threshold: opts.heightThreshold,
       prominence: opts.prominence,
@@ -100,6 +101,7 @@ const api = {
       end,
       mz: opts.mz,
       mz_window: opts.mzWindow,
+      ion_mode: opts.ionMode,
       wavelength: opts.wavelength,
       smooth: opts.smooth,
     })}`);
@@ -116,6 +118,7 @@ const api = {
       end: params.end_time || params.end,
       min_charge: params.min_charge,
       max_charge: params.max_charge,
+      min_peaks: params.min_peaks,
       mw_agreement: params.mw_agreement,
       contig_min: params.contig_min,
       abundance_cutoff: params.abundance_cutoff,
@@ -156,6 +159,22 @@ const api = {
 
   exportSingleSample(payload) {
     return apiFetch('/api/export-single-sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  exportProgressionPanel(payload) {
+    return apiFetch('/api/export-progression-panel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  exportUptakeAssayCC(payload) {
+    return apiFetch('/api/export-uptake-assay-cc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -304,6 +323,7 @@ const api = {
         this.findPeaks(path, 'eic', {
           mz,
           mzWindow: mz_window,
+          ionMode: polarity,
           smooth: smoothing,
           heightThreshold: 0.06,
           prominence: 0.03,

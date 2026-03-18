@@ -908,6 +908,13 @@ input[type="radio"] {
   margin-top: 8px;
 }
 .expert-params.hidden { display: none; }
+.expert-params-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
 .param-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -1059,6 +1066,63 @@ input[type="radio"] {
   padding: 2px;
   margin-bottom: 0;
   background: transparent;
+}
+
+/* ===== Uptake Assay CC ===== */
+.uptake-assay-toolbar {
+  align-items: end;
+  flex-wrap: wrap;
+}
+.uptake-assay-toolbar label {
+  min-width: 120px;
+}
+.uptake-assay-toolbar input,
+.uptake-assay-toolbar select {
+  width: 100%;
+}
+.uptake-assay-samples {
+  margin-bottom: 12px;
+}
+.uptake-assay-sample-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.uptake-assay-sample-table th,
+.uptake-assay-sample-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+.uptake-assay-sample-table th {
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.uptake-assay-sample-table tr:last-child td {
+  border-bottom: none;
+}
+.uptake-assay-sample-table input[type="number"] {
+  width: 110px;
+}
+.uptake-assay-sample-path {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+  word-break: break-all;
+}
+.uptake-assay-area {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.uptake-assay-summary {
+  margin-top: 12px;
 }
 
 /* ===== EIC Batch ===== */

@@ -1740,6 +1740,7 @@ def find_chromatogram_peaks(
     wavelength: float = Query(280.0),
     mz: float = Query(0.0),
     mz_window: float = Query(0.5),
+    ion_mode: str = Query("positive", description="positive or negative"),
     smooth: int = Query(0),
     height_threshold: float = Query(0.1),
     prominence: float = Query(0.05),
@@ -1759,10 +1760,15 @@ def find_chromatogram_peaks(
         times = sample.uv_times
         intensities = uv
     elif data_type == "eic":
-        eic_data = analysis.extract_eic(sample, mz, mz_window)
-        if eic_data is None or sample.ms_times is None:
+        normalized_ion_mode = str(ion_mode).strip().lower()
+        if normalized_ion_mode not in {"positive", "negative"}:
+            normalized_ion_mode = "positive"
+        eic_data = analysis.extract_eic(sample, mz, mz_window, ion_mode=normalized_ion_mode)
+        times = sample.ms_times_neg if normalized_ion_mode == "negative" and sample.ms_times_neg is not None else (
+            sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
+        )
+        if eic_data is None or times is None:
             raise HTTPException(status_code=404, detail="No EIC data")
-        times = sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
         intensities = eic_data
     else:
         raise HTTPException(status_code=400, detail=f"Unknown data_type: {data_type}")
@@ -1787,6 +1793,7 @@ def peak_area(
     data_type: str = Query("eic"),
     mz: float = Query(0.0),
     mz_window: float = Query(0.5),
+    ion_mode: str = Query("positive", description="positive or negative"),
     wavelength: float = Query(280.0),
     smooth: int = Query(0),
     start: float = Query(...),
@@ -1801,8 +1808,13 @@ def peak_area(
         times = sample.uv_times
         intensities = sample.get_uv_at_wavelength(wavelength)
     elif data_type == "eic":
-        times = sample.ms_times
-        intensities = analysis.extract_eic(sample, mz, mz_window)
+        normalized_ion_mode = str(ion_mode).strip().lower()
+        if normalized_ion_mode not in {"positive", "negative"}:
+            normalized_ion_mode = "positive"
+        times = sample.ms_times_neg if normalized_ion_mode == "negative" and sample.ms_times_neg is not None else (
+            sample.ms_times_pos if sample.ms_times_pos is not None else sample.ms_times
+        )
+        intensities = analysis.extract_eic(sample, mz, mz_window, ion_mode=normalized_ion_mode)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown data_type: {data_type}")
 
@@ -1840,6 +1852,7 @@ def deconvolute(
     end: float = Query(...),
     min_charge: int = Query(1),
     max_charge: int = Query(50),
+    min_peaks: int = Query(3),
     mw_agreement: float = Query(0.0002),
     contig_min: int = Query(3),
     abundance_cutoff: float = Query(0.05),
@@ -1876,6 +1889,7 @@ def deconvolute(
         intensity_arr,
         min_charge=max(min_charge, 2),  # Multi-charge needs z>=2
         max_charge=effective_max_charge,
+        min_peaks=max(2, min(10, int(min_peaks))),
         mw_agreement=mw_agreement,
         contig_min=contig_min,
         abundance_cutoff=abundance_cutoff,
@@ -2304,6 +2318,132 @@ def export_single_sample(payload: dict = Body(...)):
     base_name = sample.name[:-2] if sample.name.lower().endswith(".d") else sample.name
     safe_name = _sanitize_filename(base_name, fallback="sample")
     filename = f"{safe_name}_{filename_suffix}.{export_format}"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/export-progression-panel")
+def export_progression_panel(payload: dict = Body(...)):
+    """Export a single Time Progression panel through the backend renderer."""
+    traces = payload.get("traces", [])
+    if not isinstance(traces, list) or len(traces) == 0:
+        raise HTTPException(status_code=400, detail="traces must be a non-empty list")
+
+    export_format = str(payload.get("format", "pdf")).lower()
+    if export_format not in {"png", "svg", "pdf"}:
+        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    title = str(payload.get("title", "Time Progression"))
+    y_label = str(payload.get("y_label", "Intensity"))
+    x_label = str(payload.get("x_label", "Time (min)"))
+    filename_base = str(payload.get("filename_base", "progression_panel"))
+
+    style = payload.get("style", {})
+    if not isinstance(style, dict):
+        style = {}
+
+    x_range_raw = payload.get("x_range")
+    x_range = None
+    if isinstance(x_range_raw, (list, tuple)) and len(x_range_raw) == 2:
+        x0 = _coerce_float(x_range_raw[0], np.nan)
+        x1 = _coerce_float(x_range_raw[1], np.nan)
+        if np.isfinite(x0) and np.isfinite(x1) and x1 > x0:
+            x_range = (float(x0), float(x1))
+
+    fig = plotting.create_chromatogram_overlay_export_figure(
+        traces=traces,
+        title=title,
+        y_label=y_label,
+        x_label=x_label,
+        style=style,
+        x_range=x_range,
+    )
+    try:
+        if export_format == "svg":
+            content = plotting.export_figure_svg(fig, tight=False)
+            media_type = "image/svg+xml"
+        elif export_format == "pdf":
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            media_type = "application/pdf"
+        else:
+            content = plotting.export_figure(fig, dpi=dpi, format="png", tight=False)
+            media_type = "image/png"
+    finally:
+        plt.close(fig)
+
+    safe_name = _sanitize_filename(filename_base, fallback="progression_panel")
+    filename = f"{safe_name}.{export_format}"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/export-uptake-assay-cc")
+def export_uptake_assay_cc(payload: dict = Body(...)):
+    """Export an uptake assay calibration curve through the backend renderer."""
+    points = payload.get("points", [])
+    if not isinstance(points, list) or len(points) == 0:
+        raise HTTPException(status_code=400, detail="points must be a non-empty list")
+
+    export_format = str(payload.get("format", "pdf")).lower()
+    if export_format not in {"png", "svg", "pdf"}:
+        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    title = str(payload.get("title", "Uptake Assay Calibration Curve"))
+    x_label = str(payload.get("x_label", "Concentration (uM)"))
+    y_label = str(payload.get("y_label", "Integrated Area"))
+    filename_base = str(payload.get("filename_base", "uptake_assay_cc"))
+
+    style = payload.get("style", {})
+    if not isinstance(style, dict):
+        style = {}
+
+    fit = payload.get("fit")
+    if not isinstance(fit, dict):
+        fit = None
+
+    fig = plotting.create_calibration_curve_export_figure(
+        points=points,
+        title=title,
+        x_label=x_label,
+        y_label=y_label,
+        style=style,
+        fit=fit,
+    )
+    try:
+        if export_format == "svg":
+            content = plotting.export_figure_svg(fig, tight=False)
+            media_type = "image/svg+xml"
+        elif export_format == "pdf":
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            media_type = "application/pdf"
+        else:
+            content = plotting.export_figure(fig, dpi=dpi, format="png", tight=False)
+            media_type = "image/png"
+    finally:
+        plt.close(fig)
+
+    safe_name = _sanitize_filename(filename_base, fallback="uptake_assay_cc")
+    filename = f"{safe_name}.{export_format}"
 
     return Response(
         content=content,

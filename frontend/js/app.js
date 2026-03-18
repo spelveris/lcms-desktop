@@ -10,6 +10,20 @@ const CUSTOM_MOUNTS_STORAGE_KEY = 'lcms-custom-mounts';
 const RUN_ROUTER_STORAGE_KEY = 'lcms-run-router-settings';
 const RUN_ROUTER_LOG_STORAGE_KEY = 'lcms-run-router-recent-log';
 const RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS = 7;
+const DECONV_EXPERT_DEFAULTS = {
+  minCharge: 1,
+  maxCharge: 50,
+  minIons: 3,
+  mwAgreePct: 0.02,
+  contigMin: 3,
+  abundancePct: 5,
+  envelopePct: 50,
+  fwhm: 0.6,
+  massLow: '',
+  massHigh: '',
+  noiseCutoff: '',
+  monoisotopic: false,
+};
 
 const state = {
   currentPath: localStorage.getItem('lcms-browse-path') || '/',
@@ -30,6 +44,9 @@ const state = {
   backgroundSubtractInFlight: false,
   progressionData: null,
   progressionLoadInFlight: false,
+  uptakeAssayData: null,
+  uptakeAssayEntries: {},
+  uptakeAssayLoadInFlight: false,
   eicBatchData: null,
   eicBatchOriginalData: null,
   deconvResults: null,
@@ -291,6 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initSingleSample();
   initBackgroundSubtraction();
   initProgression();
+  initUptakeAssayCC();
   initEICBatch();
   initDeconvolution();
   initBatchDeconvolution();
@@ -452,6 +470,11 @@ function setProgressionEmptyState(isEmpty, forceNew = false) {
   setElementHidden('progression-plots', isEmpty);
 }
 
+function setUptakeAssayEmptyState(isEmpty, forceNew = false) {
+  setQuoteContainerState('uptake-assay-empty-state', 'uptake-assay', isEmpty, forceNew);
+  setElementHidden('uptake-assay-content', isEmpty);
+}
+
 function setBatchDeconvEmptyState(isEmpty, forceNew = false) {
   setQuoteContainerState('batch-deconv-empty-state', 'batch-deconv', isEmpty, forceNew);
   setElementHidden('batch-deconv-content', isEmpty);
@@ -496,6 +519,11 @@ function refreshVisibleTabQuote(tabId) {
   if (tabId === 'tab-progression') {
     const visible = !document.getElementById('progression-empty-state')?.classList.contains('hidden');
     if (visible) setProgressionEmptyState(true, true);
+    return;
+  }
+  if (tabId === 'tab-uptake-assay-cc') {
+    const visible = !document.getElementById('uptake-assay-empty-state')?.classList.contains('hidden');
+    if (visible) setUptakeAssayEmptyState(true, true);
     return;
   }
   if (tabId === 'tab-batch-deconv') {
@@ -726,6 +754,16 @@ function resetProgressionView() {
   setProgressionEmptyState(true);
 }
 
+function resetUptakeAssayView() {
+  const overlay = document.getElementById('uptake-assay-overlay-plot');
+  const curve = document.getElementById('uptake-assay-curve-plot');
+  const summary = document.getElementById('uptake-assay-summary');
+  if (overlay) overlay.innerHTML = '';
+  if (curve) curve.innerHTML = '';
+  if (summary) summary.innerHTML = '';
+  setUptakeAssayEmptyState(true);
+}
+
 function resetBatchDeconvView() {
   const summary = document.getElementById('batch-deconv-summary');
   const samples = document.getElementById('batch-deconv-samples');
@@ -776,6 +814,9 @@ function renderDefaultTabEmptyStates() {
 
   if (state.progressionData) setProgressionEmptyState(false);
   else resetProgressionView();
+
+  if (state.uptakeAssayData) setUptakeAssayEmptyState(false);
+  else resetUptakeAssayView();
 
   if (state.batchDeconvData) setBatchDeconvEmptyState(false);
   else resetBatchDeconvView();
@@ -861,6 +902,8 @@ function schedulePlotlyResize(plotIds = []) {
       'bgsub-spectrum-positive-plot',
       'bgsub-spectrum-negative-plot',
       'eic-overlay-plot',
+      'uptake-assay-overlay-plot',
+      'uptake-assay-curve-plot',
       'timechange-ms-plot',
       'timechange-ms-offset-plot',
     ];
@@ -967,6 +1010,15 @@ function initSettings() {
   document.getElementById('expert-mode-toggle').addEventListener('change', (e) => {
     document.getElementById('expert-params').classList.toggle('hidden', !e.target.checked);
   });
+  const expertResetBtn = document.getElementById('btn-deconv-expert-reset');
+  if (expertResetBtn) {
+    expertResetBtn.addEventListener('click', () => {
+      restoreDefaultDeconvExpertSettings();
+      if (state.deconvResults) renderDeconvResults(state.deconvResults);
+      if (state.batchDeconvData) renderBatchDeconvolution(state.batchDeconvData);
+      toast('Expert defaults restored', 'success');
+    });
+  }
 
   function syncMassRangeInputs(source) {
     const axisMin = document.getElementById('mass-axis-min');
@@ -1147,6 +1199,8 @@ function initFileBrowser() {
     state.eicBatchData = null;
     state.eicBatchOriginalData = null;
     state.progressionData = null;
+    state.uptakeAssayData = null;
+    state.uptakeAssayEntries = {};
     state.deconvResults = null;
     state.deconvDisplayComponents = [];
     state.batchDeconvData = null;
@@ -1156,12 +1210,15 @@ function initFileBrowser() {
     state.batchDeconvAutoRunSignature = '';
     syncProgressionAssignmentsToSelectedFiles();
     refreshProgressionAssignmentsIfNeeded();
+    syncUptakeAssayEntriesToSelectedFiles();
+    refreshUptakeAssayInputsIfNeeded();
     saveSelectedFiles();
     updateWavelengthCheckboxes();
     resetSingleSampleView();
     resetEICBatchView();
     resetDeconvolutionView();
     resetProgressionView();
+    resetUptakeAssayView();
     resetBatchDeconvView();
     resetTimeChangeView();
     resetMasscalcView();
@@ -1339,8 +1396,11 @@ function selectFile(file) {
     state.selectedFiles.push(file);
     state.deconvAutoRunSignature = '';
     state.batchDeconvAutoRunSignature = '';
+    state.uptakeAssayData = null;
     syncProgressionAssignmentsToSelectedFiles();
     refreshProgressionAssignmentsIfNeeded();
+    syncUptakeAssayEntriesToSelectedFiles();
+    refreshUptakeAssayInputsIfNeeded();
     saveSelectedFiles();
     renderSelectedFiles();
     updateSampleDropdowns();
@@ -1354,8 +1414,11 @@ function deselectFile(path) {
   delete state.loadedSamples[path];
   state.deconvAutoRunSignature = '';
   state.batchDeconvAutoRunSignature = '';
+  state.uptakeAssayData = null;
   syncProgressionAssignmentsToSelectedFiles();
   refreshProgressionAssignmentsIfNeeded();
+  syncUptakeAssayEntriesToSelectedFiles();
+  refreshUptakeAssayInputsIfNeeded();
   saveSelectedFiles();
   renderSelectedFiles();
   renderFileList(); // update checkboxes
@@ -3114,6 +3177,26 @@ function buildAutoProgressionLabel(role, ordinal, totalForRole) {
   return `${base} ${ordinal}`;
 }
 
+function computeAutoProgressionColorMap(assignments = state.progressionAssignments) {
+  const colorsByPath = {};
+  let activeIndex = 0;
+
+  state.selectedFiles.forEach((file) => {
+    const assignment = assignments?.[file.path] || {};
+    if (assignment.active === false) return;
+    colorsByPath[file.path] = NPG_COLOR_PALETTE[activeIndex % NPG_COLOR_PALETTE.length];
+    activeIndex += 1;
+  });
+
+  state.selectedFiles.forEach((file) => {
+    if (!colorsByPath[file.path]) {
+      colorsByPath[file.path] = '#808080';
+    }
+  });
+
+  return colorsByPath;
+}
+
 function computeAutoProgressionLabelMap() {
   const total = state.selectedFiles.length;
   const roleCounts = { initial: 0, mid: 0, final: 0 };
@@ -3142,18 +3225,23 @@ function computeAutoProgressionLabelMap() {
 function syncProgressionAssignmentsToSelectedFiles() {
   const total = state.selectedFiles.length;
   const next = {};
+  const autoColors = computeAutoProgressionColorMap(state.progressionAssignments);
   state.selectedFiles.forEach((file, i) => {
     const existing = state.progressionAssignments[file.path] || {};
     const defaultRole = getDefaultProgressionRole(i, total);
     const hasUserRole = existing.userRole === true;
     const hasUserLabel = existing.userLabel === true;
+    const hasUserColor = existing.userColor === true;
+    const autoColor = autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length];
     next[file.path] = {
       role: hasUserRole ? (existing.role || defaultRole) : defaultRole,
       label: hasUserLabel ? (existing.label || '') : '',
-      color: existing.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length],
+      color: hasUserColor ? (existing.color || autoColor) : autoColor,
+      autoColor,
       active: existing.active !== false,
       userRole: hasUserRole,
       userLabel: hasUserLabel,
+      userColor: hasUserColor,
     };
   });
   state.progressionAssignments = next;
@@ -3193,7 +3281,10 @@ function readProgressionAssignmentsFromDOM() {
     const path = el.dataset.path;
     if (!path) return;
     const item = state.progressionAssignments[path] || {};
-    item.color = el.value || item.color || '#808080';
+    const autoColor = String(item.autoColor || '#808080');
+    const value = String(el.value || '').trim();
+    item.color = value || item.color || autoColor;
+    item.userColor = value.length > 0 && value.toLowerCase() !== String(autoColor).toLowerCase();
     state.progressionAssignments[path] = item;
   });
 }
@@ -3202,6 +3293,7 @@ function getProgressionSamples(options = {}) {
   const activeOnly = options.activeOnly !== false;
   const total = state.selectedFiles.length;
   const autoLabels = computeAutoProgressionLabelMap();
+  const autoColors = computeAutoProgressionColorMap();
   const samples = state.selectedFiles.map((file, i) => {
     const assignment = state.progressionAssignments[file.path] || {};
     const role = assignment.role || getDefaultProgressionRole(i, total);
@@ -3210,9 +3302,12 @@ function getProgressionSamples(options = {}) {
     const active = assignment.active !== false;
     return {
       path: file.path,
+      name: file.name || file.path.split(/[\\/]/).pop() || '',
       role,
       label: manualLabel || autoLabel,
-      color: assignment.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length],
+      color: assignment.userColor === true
+        ? (assignment.color || autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length])
+        : (autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length]),
       active,
     };
   });
@@ -3251,6 +3346,515 @@ function computeProgressionXRange(data) {
   return [minX, maxX];
 }
 
+function getProgressionBaseTitle() {
+  const progTitle = document.getElementById('label-prog-title');
+  return (progTitle && progTitle.value && progTitle.value.trim()) || 'Time Progression Analysis';
+}
+
+function formatProgressionPolarityLabel(polarity) {
+  return polarity === 'negative' ? ' (−)' : ' (+)';
+}
+
+function buildProgressionEicTitle(eicGroup) {
+  const mz = Number(eicGroup?.mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(2) : '?';
+  return `${getProgressionBaseTitle()} - EIC m/z ${mzLabel}${formatProgressionPolarityLabel(eicGroup?.polarity)}`;
+}
+
+function buildProgressionExportStyle() {
+  return {
+    fig_width: 6.0,
+    line_width: 0.8,
+    show_grid: false,
+    panel_width_multiplier: 2.0,
+    panel_height_multiplier: 1.0,
+  };
+}
+
+function buildProgressionEicFilename(eicGroup, progressionSamples) {
+  const mz = Number(eicGroup?.mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(1) : 'EIC';
+  const sampleText = (progressionSamples || [])
+    .map((sample, index) => {
+      const explicitName = String(sample?.name || '').trim();
+      if (explicitName) return explicitName.replace(/\.[dD]$/, '');
+      const pathName = String(sample?.path || '').split(/[\\/]/).pop() || '';
+      if (pathName) return pathName.replace(/\.[dD]$/, '');
+      return `Sample ${index + 1}`;
+    })
+    .filter(Boolean)
+    .join(', ');
+  return sanitizeDownloadFilename(sampleText ? `${mzLabel} ${sampleText}` : mzLabel);
+}
+
+function buildProgressionEicExportPayload(groupIndex) {
+  if (!state.progressionData || !Array.isArray(state.progressionData.eic_progressions)) return null;
+  const eicGroup = state.progressionData.eic_progressions[groupIndex];
+  if (!eicGroup || !Array.isArray(eicGroup.samples)) return null;
+
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  const traces = eicGroup.samples.map((sampleTrace, index) => {
+    const sampleMeta = progressionSamples[index] || {};
+    return {
+      times: Array.isArray(sampleTrace?.times) ? sampleTrace.times : [],
+      intensities: Array.isArray(sampleTrace?.intensities) ? sampleTrace.intensities : [],
+      label: sampleMeta.label || `Sample ${index + 1}`,
+      color: sampleMeta.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+    };
+  });
+
+  return {
+    title: buildProgressionEicTitle(eicGroup),
+    x_label: 'Time (min)',
+    y_label: 'Intensity',
+    x_range: computeProgressionXRange(state.progressionData),
+    style: buildProgressionExportStyle(),
+    filename_base: buildProgressionEicFilename(eicGroup, progressionSamples),
+    traces,
+  };
+}
+
+async function exportProgressionEicPanel(groupIndex) {
+  if (!state.progressionData) {
+    toast('Generate progression first', 'warning');
+    return;
+  }
+
+  readProgressionAssignmentsFromDOM();
+  const payload = buildProgressionEicExportPayload(groupIndex);
+  if (!payload) {
+    toast('Progression panel not available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportProgressionPanel({
+      ...payload,
+      format: 'pdf',
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${payload.filename_base}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function inferUptakeAssayConcentration(fileName) {
+  const match = String(fileName || '').match(/CC\s*([1-6])(?:\b|[^0-9])/i) || String(fileName || '').match(/CC([1-6])/i);
+  if (!match) return '';
+  const concentrationMap = {
+    1: 0,
+    2: 6.25,
+    3: 12.5,
+    4: 25,
+    5: 50,
+    6: 100,
+  };
+  const value = concentrationMap[parseInt(match[1], 10)];
+  return Number.isFinite(value) ? String(value) : '';
+}
+
+function syncUptakeAssayEntriesToSelectedFiles() {
+  const next = {};
+  state.selectedFiles.forEach((file, index) => {
+    const existing = state.uptakeAssayEntries[file.path] || {};
+    next[file.path] = {
+      active: existing.active !== false,
+      concentration: existing.concentration != null && String(existing.concentration).trim() !== ''
+        ? String(existing.concentration)
+        : inferUptakeAssayConcentration(file.name),
+      color: existing.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+    };
+  });
+  state.uptakeAssayEntries = next;
+}
+
+function refreshUptakeAssayInputsIfNeeded() {
+  const tab = document.getElementById('tab-uptake-assay-cc');
+  const container = document.getElementById('uptake-assay-samples');
+  if (!tab || !container) return;
+  const tabIsVisible = !tab.classList.contains('hidden');
+  if (tabIsVisible || container.children.length > 0) {
+    renderUptakeAssayEntries();
+  }
+}
+
+function getUptakeAssaySamples(options = {}) {
+  const activeOnly = options.activeOnly !== false;
+  return state.selectedFiles
+    .map((file, index) => {
+      const entry = state.uptakeAssayEntries[file.path] || {};
+      return {
+        path: file.path,
+        name: String(file.name || file.path.split(/[\\/]/).pop() || '').replace(/\.[dD]$/, ''),
+        active: entry.active !== false,
+        concentration: entry.concentration,
+        color: entry.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+      };
+    })
+    .filter((sample) => (activeOnly ? sample.active : true));
+}
+
+function getUptakeAssaySettings() {
+  return {
+    mz: parseFloat(document.getElementById('uptake-assay-mz')?.value),
+    polarity: document.getElementById('uptake-assay-polarity')?.value === 'negative' ? 'negative' : 'positive',
+    start: parseFloat(document.getElementById('uptake-assay-start')?.value),
+    end: parseFloat(document.getElementById('uptake-assay-end')?.value),
+    mzWindow: parseFloat(document.getElementById('mz-window')?.value || '0.5') || 0.5,
+    smooth: parseInt(document.getElementById('eic-smoothing')?.value, 10) || 0,
+  };
+}
+
+function computeUptakeAssayFit(points) {
+  const usable = (Array.isArray(points) ? points : []).filter((point) =>
+    Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))
+  );
+  if (usable.length < 2) return null;
+  const xVals = usable.map((point) => Number(point.x));
+  const yVals = usable.map((point) => Number(point.y));
+  if (new Set(xVals.map((x) => x.toFixed(9))).size < 2) return null;
+
+  const xMean = xVals.reduce((sum, value) => sum + value, 0) / xVals.length;
+  const yMean = yVals.reduce((sum, value) => sum + value, 0) / yVals.length;
+  let numerator = 0;
+  let denominator = 0;
+  for (let i = 0; i < xVals.length; i++) {
+    numerator += (xVals[i] - xMean) * (yVals[i] - yMean);
+    denominator += (xVals[i] - xMean) ** 2;
+  }
+  if (denominator === 0) return null;
+  const slope = numerator / denominator;
+  const intercept = yMean - slope * xMean;
+  const fitted = xVals.map((x) => (slope * x) + intercept);
+  const ssRes = yVals.reduce((sum, y, index) => sum + ((y - fitted[index]) ** 2), 0);
+  const ssTot = yVals.reduce((sum, y) => sum + ((y - yMean) ** 2), 0);
+  const rSquared = ssTot <= 0 ? 1 : 1 - (ssRes / ssTot);
+  return { slope, intercept, rSquared, r_squared: rSquared };
+}
+
+function getUptakeAssayMzLabel(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  const mz = Number(source?.mz);
+  return Number.isFinite(mz) ? mz.toFixed(2) : '?';
+}
+
+function buildUptakeAssayOverlayTitle(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  return `Uptake Assay CC - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
+}
+
+function buildUptakeAssayCurveTitle(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  return `Calibration Curve - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
+}
+
+function buildUptakeAssayAreaLabel(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  const start = Number(source?.start);
+  const end = Number(source?.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return `Integrated Area (${start.toFixed(3)}-${end.toFixed(3)} min)`;
+  }
+  return 'Integrated Area';
+}
+
+function buildUptakeAssayFilenameBase(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  const mzLabel = getUptakeAssayMzLabel(source);
+  return sanitizeDownloadFilename(`Uptake Assay CC ${mzLabel}`);
+}
+
+function buildUptakeAssayExportStyle() {
+  return {
+    fig_width: 6.0,
+    line_width: 2.0,
+    point_size: 26.0,
+    point_edge_width: 0.8,
+    line_color: '#1f77b4',
+    point_face_color: '#1f77b4',
+    point_edge_color: '#0d4f8a',
+  };
+}
+
+function getUptakeAssayPointsFromData(data) {
+  const samples = Array.isArray(data?.samples) ? data.samples : [];
+  return samples
+    .map((sample) => {
+      const entry = state.uptakeAssayEntries[sample.path] || {};
+      return {
+        x: parseFloat(entry.concentration),
+        y: Number(sample.area),
+        label: sample.name,
+        path: sample.path,
+      };
+    })
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
+}
+
+function renderUptakeAssayEntries() {
+  const container = document.getElementById('uptake-assay-samples');
+  if (!container) return;
+
+  syncUptakeAssayEntriesToSelectedFiles();
+  if (state.selectedFiles.length === 0) {
+    container.innerHTML = '<p class="muted">Select samples in the file browser first.</p>';
+    return;
+  }
+
+  const sampleAreas = new Map(
+    ((state.uptakeAssayData?.samples) || []).map((sample) => [sample.path, sample.area])
+  );
+
+  let html = `<table class="uptake-assay-sample-table"><thead><tr>
+    <th>Use</th>
+    <th>Sample</th>
+    <th>Concentration (uM)</th>
+    <th>Area</th>
+  </tr></thead><tbody>`;
+
+  state.selectedFiles.forEach((file, index) => {
+    const entry = state.uptakeAssayEntries[file.path] || {};
+    const area = sampleAreas.get(file.path);
+    const isActive = entry.active !== false;
+    html += `<tr>
+      <td><input type="checkbox" class="uptake-assay-active" data-path="${escapeAttr(file.path)}" ${isActive ? 'checked' : ''}></td>
+      <td>
+        <div><strong>${escapeHtml(String(file.name || '').replace(/\.[dD]$/, ''))}</strong></div>
+        <div class="uptake-assay-sample-path">${escapeHtml(file.path)}</div>
+      </td>
+      <td><input type="number" class="uptake-assay-concentration" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.concentration ?? '')}" step="0.01" min="0"></td>
+      <td><span class="uptake-assay-area">${Number.isFinite(Number(area)) ? Number(area).toExponential(3) : '-'}</span></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+
+  container.querySelectorAll('.uptake-assay-active').forEach((input) => {
+    input.addEventListener('change', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.active = input.checked;
+      state.uptakeAssayEntries[path] = entry;
+      state.uptakeAssayData = null;
+      resetUptakeAssayView();
+      renderUptakeAssayEntries();
+    });
+  });
+
+  container.querySelectorAll('.uptake-assay-concentration').forEach((input) => {
+    input.addEventListener('input', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.concentration = input.value;
+      state.uptakeAssayEntries[path] = entry;
+    });
+    input.addEventListener('change', () => {
+      if (state.uptakeAssayData) renderUptakeAssayData(state.uptakeAssayData);
+    });
+  });
+}
+
+function renderUptakeAssaySummary(data, fit, pointCount) {
+  const summary = document.getElementById('uptake-assay-summary');
+  if (!summary) return;
+  const sampleCount = Array.isArray(data?.samples) ? data.samples.length : 0;
+  const parts = [
+    `<div class="metric"><span class="dot blue"></span> Samples: ${sampleCount}</div>`,
+    `<div class="metric"><span class="dot green"></span> Points: ${pointCount}</div>`,
+  ];
+  if (fit && Number.isFinite(fit.slope) && Number.isFinite(fit.intercept) && Number.isFinite(fit.rSquared)) {
+    parts.push(`<div class="metric"><span class="dot red"></span> y = ${fit.slope.toFixed(1)}x ${fit.intercept >= 0 ? '+' : '-'} ${Math.abs(fit.intercept).toFixed(1)}</div>`);
+    parts.push(`<div class="metric"><span class="dot yellow"></span> R2 = ${fit.rSquared.toFixed(4)}</div>`);
+  } else {
+    parts.push('<div class="metric"><span class="dot yellow"></span> Enter at least 2 numeric concentrations to fit a line</div>');
+  }
+  summary.innerHTML = parts.join('');
+}
+
+function renderUptakeAssayData(data) {
+  renderUptakeAssayEntries();
+  if (!data || !Array.isArray(data.samples) || data.samples.length === 0) {
+    resetUptakeAssayView();
+    return;
+  }
+
+  setUptakeAssayEmptyState(false);
+  const overlaySamples = data.samples.map((sample, index) => ({
+    times: sample.times || [],
+    intensities: sample.intensities || [],
+    label: sample.name || `Sample ${index + 1}`,
+    color: sample.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+  }));
+  const points = getUptakeAssayPointsFromData(data);
+  const fit = computeUptakeAssayFit(points);
+
+  charts.plotUptakeAssayOverlay('uptake-assay-overlay-plot', overlaySamples, {
+    title: buildUptakeAssayOverlayTitle(data),
+    yLabel: 'Intensity',
+    start: data.start,
+    end: data.end,
+  });
+  charts.plotCalibrationCurve('uptake-assay-curve-plot', points, fit, {
+    title: buildUptakeAssayCurveTitle(data),
+    xLabel: 'Concentration (uM)',
+    yLabel: buildUptakeAssayAreaLabel(data),
+  });
+  renderUptakeAssaySummary(data, fit, points.length);
+  schedulePlotlyResize(['uptake-assay-overlay-plot', 'uptake-assay-curve-plot']);
+}
+
+async function autoDetectUptakeAssayWindow() {
+  const settings = getUptakeAssaySettings();
+  if (!Number.isFinite(settings.mz) || settings.mz <= 0) {
+    toast('Enter a valid target m/z first', 'warning');
+    return;
+  }
+  const sample = getUptakeAssaySamples({ activeOnly: true })[0];
+  if (!sample) {
+    toast('Enable at least 1 sample first', 'warning');
+    return;
+  }
+
+  showLoading('Detecting uptake assay window...');
+  try {
+    const response = await api.findPeaks(sample.path, 'eic', {
+      mz: settings.mz,
+      mzWindow: settings.mzWindow,
+      ionMode: settings.polarity,
+      smooth: settings.smooth,
+      heightThreshold: 0.06,
+      prominence: 0.03,
+    });
+    const peaks = Array.isArray(response?.peaks) ? response.peaks : [];
+    if (peaks.length === 0) {
+      throw new Error('No EIC peaks found');
+    }
+    peaks.sort((a, b) => (Number(b.area) || Number(b.intensity) || 0) - (Number(a.area) || Number(a.intensity) || 0));
+    const bestPeak = peaks[0];
+    document.getElementById('uptake-assay-start').value = Number(bestPeak.start_time).toFixed(3);
+    document.getElementById('uptake-assay-end').value = Number(bestPeak.end_time).toFixed(3);
+    toast(`Window detected: ${Number(bestPeak.start_time).toFixed(3)} - ${Number(bestPeak.end_time).toFixed(3)} min`, 'success');
+  } catch (err) {
+    toast(`Auto window failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function runUptakeAssayCC() {
+  if (state.uptakeAssayLoadInFlight) return;
+  const samples = getUptakeAssaySamples({ activeOnly: true });
+  if (samples.length < 2) {
+    toast('Enable at least 2 samples first', 'warning');
+    return;
+  }
+
+  const settings = getUptakeAssaySettings();
+  if (!Number.isFinite(settings.mz) || settings.mz <= 0) {
+    toast('Enter a valid target m/z', 'warning');
+    return;
+  }
+  if (!Number.isFinite(settings.start) || !Number.isFinite(settings.end) || settings.end <= settings.start) {
+    toast('Enter a valid time window', 'warning');
+    return;
+  }
+
+  state.uptakeAssayLoadInFlight = true;
+  showLoading('Building uptake assay calibration curve...');
+  try {
+    const sampleResults = await Promise.all(samples.map(async (sample) => {
+      const [eicData, areaData] = await Promise.all([
+        api.getEIC(sample.path, settings.mz, settings.mzWindow, settings.smooth, settings.polarity),
+        api.getPeakArea(sample.path, 'eic', settings.start, settings.end, {
+          mz: settings.mz,
+          mzWindow: settings.mzWindow,
+          ionMode: settings.polarity,
+          smooth: settings.smooth,
+        }),
+      ]);
+      return {
+        path: sample.path,
+        name: sample.name,
+        color: sample.color,
+        times: Array.isArray(eicData?.times) ? eicData.times : [],
+        intensities: Array.isArray(eicData?.intensities) ? eicData.intensities : [],
+        area: Number(areaData?.area) || 0,
+      };
+    }));
+
+    state.uptakeAssayData = {
+      mz: settings.mz,
+      polarity: settings.polarity,
+      start: settings.start,
+      end: settings.end,
+      mzWindow: settings.mzWindow,
+      samples: sampleResults,
+    };
+    renderUptakeAssayData(state.uptakeAssayData);
+    toast('Uptake assay calibration curve built', 'success');
+  } catch (err) {
+    toast(`Uptake assay CC failed: ${err.message}`, 'error');
+  } finally {
+    state.uptakeAssayLoadInFlight = false;
+    hideLoading();
+  }
+}
+
+async function exportUptakeAssayCCPdf() {
+  if (!state.uptakeAssayData) {
+    toast('Build the calibration curve first', 'warning');
+    return;
+  }
+  const points = getUptakeAssayPointsFromData(state.uptakeAssayData);
+  if (points.length < 2) {
+    toast('Enter at least 2 numeric concentrations first', 'warning');
+    return;
+  }
+
+  const fit = computeUptakeAssayFit(points);
+  const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+  const filenameBase = buildUptakeAssayFilenameBase(state.uptakeAssayData);
+
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportUptakeAssayCC({
+      points,
+      fit,
+      title: buildUptakeAssayCurveTitle(state.uptakeAssayData),
+      x_label: 'Concentration (uM)',
+      y_label: buildUptakeAssayAreaLabel(state.uptakeAssayData),
+      filename_base: filenameBase,
+      style: buildUptakeAssayExportStyle(),
+      format: 'pdf',
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${filenameBase}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function initUptakeAssayCC() {
+  document.getElementById('btn-uptake-assay-auto-window')?.addEventListener('click', autoDetectUptakeAssayWindow);
+  document.getElementById('btn-uptake-assay-run')?.addEventListener('click', runUptakeAssayCC);
+  document.getElementById('btn-uptake-assay-export-pdf')?.addEventListener('click', exportUptakeAssayCCPdf);
+}
+
 // ===== Time Progression Tab =====
 function initProgression() {
   document.getElementById('btn-load-progression').addEventListener('click', loadProgression);
@@ -3275,6 +3879,7 @@ function renderProgressionAssignments() {
   syncProgressionAssignmentsToSelectedFiles();
 
   const sampleDefs = getProgressionSamples({ activeOnly: false });
+  const autoColors = computeAutoProgressionColorMap();
   state.selectedFiles.forEach((file, i) => {
     const card = document.createElement('div');
     const assignment = state.progressionAssignments[file.path] || {};
@@ -3282,7 +3887,9 @@ function renderProgressionAssignments() {
     card.className = `assignment-card${isActive ? '' : ' is-inactive'}`;
     const defaultRole = sampleDefs[i]?.role || assignment.role || getDefaultProgressionRole(i, state.selectedFiles.length);
     const defaultLabel = sampleDefs[i]?.label || buildAutoProgressionLabel(defaultRole, 1, 1);
-    const defaultColor = assignment.color || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length];
+    const defaultColor = assignment.userColor === true
+      ? (assignment.color || autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length])
+      : (autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length]);
 
     card.innerHTML = `
       <div class="assignment-card-head">
@@ -3441,8 +4048,7 @@ function renderProgression(data, samples) {
     final: document.getElementById('color-final').value,
   };
 
-  const progTitle = document.getElementById('label-prog-title');
-  const baseTitle = (progTitle && progTitle.value) || 'Time Progression';
+  const baseTitle = getProgressionBaseTitle();
   const xRange = computeProgressionXRange(data);
   const progressionPlotIds = [];
 
@@ -3546,12 +4152,18 @@ function renderProgression(data, samples) {
         role: samples[i]?.role || 'mid',
         color: samples[i]?.color,
       }));
-      const polarityLabel = eicGroup.polarity === 'negative' ? ' (−)' : ' (+)';
+      const polarityLabel = formatProgressionPolarityLabel(eicGroup.polarity);
       charts.plotProgression(`prog-eic-plot-${gi}`, eicSamples, colors, {
         title: `${baseTitle} - EIC m/z ${eicGroup.mz.toFixed(2)}${polarityLabel}`,
         yLabel: 'Intensity',
         xRange,
       });
+
+      const downloadRow = document.createElement('div');
+      downloadRow.className = 'single-eic-download-row';
+      downloadRow.innerHTML = '<button class="btn btn-sm">Download PDF</button>';
+      downloadRow.querySelector('button').addEventListener('click', () => exportProgressionEicPanel(gi));
+      container.appendChild(downloadRow);
     });
   }
   schedulePlotlyResize(progressionPlotIds);
@@ -4212,6 +4824,35 @@ function getGlobalDeconvMassRangeParams() {
   return params;
 }
 
+function restoreDefaultDeconvExpertSettings() {
+  const idToValue = {
+    'dp-min-charge': DECONV_EXPERT_DEFAULTS.minCharge,
+    'dp-max-charge': DECONV_EXPERT_DEFAULTS.maxCharge,
+    'dp-min-ions': DECONV_EXPERT_DEFAULTS.minIons,
+    'dp-mw-agree': DECONV_EXPERT_DEFAULTS.mwAgreePct,
+    'dp-contig-min': DECONV_EXPERT_DEFAULTS.contigMin,
+    'dp-abundance': DECONV_EXPERT_DEFAULTS.abundancePct,
+    'dp-r2': DECONV_EXPERT_DEFAULTS.envelopePct,
+    'dp-fwhm': DECONV_EXPERT_DEFAULTS.fwhm,
+    'dp-mass-low': DECONV_EXPERT_DEFAULTS.massLow,
+    'dp-mass-high': DECONV_EXPERT_DEFAULTS.massHigh,
+    'dp-noise': DECONV_EXPERT_DEFAULTS.noiseCutoff,
+  };
+
+  Object.entries(idToValue).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+
+  const monoisotopic = document.getElementById('dp-monoisotopic');
+  if (monoisotopic) monoisotopic.checked = DECONV_EXPERT_DEFAULTS.monoisotopic;
+
+  const axisMin = document.getElementById('mass-axis-min');
+  const axisMax = document.getElementById('mass-axis-max');
+  if (axisMin) axisMin.value = DECONV_EXPERT_DEFAULTS.massLow;
+  if (axisMax) axisMax.value = DECONV_EXPERT_DEFAULTS.massHigh;
+}
+
 function buildDeconvolutionRequest(path, startTime, endTime) {
   const params = {
     path,
@@ -4224,6 +4865,7 @@ function buildDeconvolutionRequest(path, startTime, endTime) {
   if (document.getElementById('expert-mode-toggle')?.checked) {
     params.min_charge = parseInt(document.getElementById('dp-min-charge')?.value, 10);
     params.max_charge = parseInt(document.getElementById('dp-max-charge')?.value, 10);
+    params.min_peaks = parseInt(document.getElementById('dp-min-ions')?.value, 10);
     const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree')?.value);
     const abundancePct = parseFloat(document.getElementById('dp-abundance')?.value);
     const envelopePct = parseFloat(document.getElementById('dp-r2')?.value);
@@ -4249,21 +4891,8 @@ function getDeconvolutionRunSignature() {
   const samplePath = document.getElementById('deconv-sample-select')?.value || '';
   const start = parseFloat(document.getElementById('deconv-start')?.value);
   const end = parseFloat(document.getElementById('deconv-end')?.value);
-  const expert = document.getElementById('expert-mode-toggle')?.checked === true;
-  const minCharge = parseInt(document.getElementById('dp-min-charge')?.value, 10) || 1;
-  const maxCharge = parseInt(document.getElementById('dp-max-charge')?.value, 10) || 50;
-  const massRange = getGlobalDeconvMassRangeParams();
   if (!samplePath || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '';
-  return [
-    samplePath,
-    start.toFixed(4),
-    end.toFixed(4),
-    expert ? 'expert' : 'basic',
-    String(minCharge),
-    String(maxCharge),
-    Number.isFinite(massRange.mass_range_low) ? massRange.mass_range_low.toFixed(1) : '',
-    Number.isFinite(massRange.mass_range_high) ? massRange.mass_range_high.toFixed(1) : '',
-  ].join('|');
+  return JSON.stringify(buildDeconvolutionRequest(samplePath, start, end));
 }
 
 async function autoRunDeconvolutionOnTabOpen() {
@@ -4846,23 +5475,29 @@ function showIonDetail(component) {
   const charges = component.ion_charges || [];
   const mzs = component.ion_mzs || [];
   const intensities = component.ion_intensities || [];
+  const maxIntensity = intensities.reduce((maxVal, value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > maxVal ? n : maxVal;
+  }, 0);
 
   // Also show a small table of ions
   if (charges.length > 0) {
     const PROTON = 1.00784;
     let html = `<div class="data-table-wrapper ion-detail-table-wrapper"><table class="data-table ion-detail-table">
-      <thead><tr><th>z</th><th>m/z Theoretical</th><th>m/z Observed</th><th>Intensity</th><th>&Delta; ppm</th></tr></thead><tbody>`;
+      <thead><tr><th>z</th><th>m/z Theoretical</th><th>m/z Observed</th><th>Intensity</th><th>Rel. %</th><th>&Delta; ppm</th></tr></thead><tbody>`;
 
     charges.forEach((z, i) => {
       const mzObs = mzs[i] || 0;
       const mzTheo = (component.mass + z * PROTON) / z;
       const int_ = intensities[i] || 0;
+      const relPct = maxIntensity > 0 ? (Number(int_) / maxIntensity) * 100 : 0;
       const ppm = mzTheo > 0 ? (Math.abs(mzObs - mzTheo) / mzTheo * 1e6).toFixed(1) : '-';
       html += `<tr>
         <td>${z}</td>
         <td>${mzTheo.toFixed(4)}</td>
         <td>${mzObs.toFixed(4)}</td>
         <td>${int_.toExponential(2)}</td>
+        <td>${relPct.toFixed(1)}</td>
         <td>${ppm}</td>
       </tr>`;
     });
@@ -4916,6 +5551,15 @@ function sanitizeFilename(name) {
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 100) || 'sample';
+}
+
+function sanitizeDownloadFilename(name) {
+  return String(name || 'sample')
+    .replace(/\.[dD]$/, '')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180) || 'sample';
 }
 
 async function exportPlotById(plotId, filenameBase, format, options = {}) {
@@ -6086,6 +6730,7 @@ async function runMassCalculator() {
 function restoreState() {
   normalizeMzTargets();
   syncProgressionAssignmentsToSelectedFiles();
+  syncUptakeAssayEntriesToSelectedFiles();
   renderSelectedFiles();
   updateSampleDropdowns();
   renderMzTargets();
@@ -6102,6 +6747,13 @@ function restoreState() {
   if (progressionTabBtn) {
     progressionTabBtn.addEventListener('click', () => {
       renderProgressionAssignments();
+    });
+  }
+
+  const uptakeAssayTabBtn = document.querySelector('[data-tab="tab-uptake-assay-cc"]');
+  if (uptakeAssayTabBtn) {
+    uptakeAssayTabBtn.addEventListener('click', () => {
+      renderUptakeAssayEntries();
     });
   }
 
