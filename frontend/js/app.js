@@ -19,6 +19,7 @@ const DECONV_EXPERT_DEFAULTS = {
   abundancePct: 5,
   envelopePct: 50,
   fwhm: 0.6,
+  minInputMz: 100,
   massLow: '',
   massHigh: '',
   noiseCutoff: '',
@@ -56,6 +57,7 @@ const state = {
   deconvIonSelectionObjectUrl: null,
   deconvAutoRunSignature: '',
   deconvAutoRunInFlight: false,
+  deconvSelectedComponentIndex: null,
   deconvDragSelectionInFlight: false,
   progressionAssignments: {},
   masscalcData: null,
@@ -4834,6 +4836,7 @@ function restoreDefaultDeconvExpertSettings() {
     'dp-abundance': DECONV_EXPERT_DEFAULTS.abundancePct,
     'dp-r2': DECONV_EXPERT_DEFAULTS.envelopePct,
     'dp-fwhm': DECONV_EXPERT_DEFAULTS.fwhm,
+    'dp-min-input-mz': DECONV_EXPERT_DEFAULTS.minInputMz,
     'dp-mass-low': DECONV_EXPERT_DEFAULTS.massLow,
     'dp-mass-high': DECONV_EXPERT_DEFAULTS.massHigh,
     'dp-noise': DECONV_EXPERT_DEFAULTS.noiseCutoff,
@@ -4859,6 +4862,7 @@ function buildDeconvolutionRequest(path, startTime, endTime) {
     start_time: startTime,
     end_time: endTime,
     ion_mode: document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive',
+    min_input_mz: DECONV_EXPERT_DEFAULTS.minInputMz,
   };
   Object.assign(params, getGlobalDeconvMassRangeParams());
 
@@ -4875,6 +4879,8 @@ function buildDeconvolutionRequest(path, startTime, endTime) {
     params.r2_cutoff = Number.isFinite(envelopePct) ? (envelopePct / 100.0) : undefined;
     params.fwhm = parseFloat(document.getElementById('dp-fwhm')?.value);
     params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
+    const minInputMz = parseFloat(document.getElementById('dp-min-input-mz')?.value);
+    params.min_input_mz = Number.isFinite(minInputMz) ? minInputMz : DECONV_EXPERT_DEFAULTS.minInputMz;
 
     const massLow = document.getElementById('dp-mass-low')?.value;
     const massHigh = document.getElementById('dp-mass-high')?.value;
@@ -5251,6 +5257,12 @@ function renderDeconvResults(data) {
   syncDeconvBottomLayout();
 
   const components = getDeconvDisplayComponents();
+  if (components.length > 0) {
+    const prevIdx = Number.isInteger(state.deconvSelectedComponentIndex) ? state.deconvSelectedComponentIndex : 0;
+    state.deconvSelectedComponentIndex = Math.max(0, Math.min(components.length - 1, prevIdx));
+  } else {
+    state.deconvSelectedComponentIndex = null;
+  }
 
   // Mass spectrum plot with annotations from detected components
   if (data.spectrum) {
@@ -5305,6 +5317,7 @@ function renderDeconvResults(data) {
     tableContainer.querySelectorAll('.deconv-row').forEach(row => {
       row.addEventListener('click', () => {
         const idx = parseInt(row.dataset.idx);
+        state.deconvSelectedComponentIndex = Number.isInteger(idx) ? idx : 0;
         showIonDetail(components[idx]);
       });
     });
@@ -5334,6 +5347,13 @@ function buildCurrentDeconvStyle() {
     deconv_show_title: showTitle,
     deconv_show_subtitle: showSubtitle,
   };
+}
+
+function getSelectedDeconvComponent() {
+  const components = getDeconvDisplayComponents();
+  if (!Array.isArray(components) || components.length === 0) return null;
+  const idx = Number.isInteger(state.deconvSelectedComponentIndex) ? state.deconvSelectedComponentIndex : 0;
+  return components[Math.max(0, Math.min(components.length - 1, idx))] || components[0] || null;
 }
 
 function getDeconvDisplayComponents() {
@@ -5443,19 +5463,38 @@ async function exportDeconvMasses(format) {
 
   const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
   const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
+  const requestedFormat = String(format || '').toLowerCase();
+  const isWidePdf = requestedFormat === 'pdf-wide';
+  const isSideBySidePdf = requestedFormat === 'pdf-side-by-side';
+  const exportFormat = (isWidePdf || isSideBySidePdf) ? 'pdf' : requestedFormat;
+  const style = buildCurrentDeconvStyle();
+  if (isWidePdf || isSideBySidePdf) {
+    style.deconv_export_variant = isSideBySidePdf ? 'side-by-side' : 'wide-inset';
+    style.deconv_selected_component = getSelectedDeconvComponent();
+  }
 
-  showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
+  const exportLabel = isSideBySidePdf
+    ? 'SIDE-BY-SIDE PDF'
+    : (isWidePdf ? 'WIDE PDF' : String(exportFormat || '').toUpperCase());
+  showLoading(`Exporting ${exportLabel}...`);
   try {
     const response = await api.exportDeconvolutedMasses({
       sample_name: sampleName,
       components,
-      format,
+      spectrum: state.deconvResults?.spectrum || null,
+      format: exportFormat,
       dpi,
-      style: buildCurrentDeconvStyle(),
+      variant: isSideBySidePdf ? 'side-by-side' : (isWidePdf ? 'wide-inset' : 'standard'),
+      style,
     });
     const blob = await backendResponseToBlob(response);
-    downloadBlob(blob, `${sanitizeFilename(sampleName)}_deconvoluted_masses.${format}`);
-    toast(`Exported ${String(format || '').toUpperCase()} (deconvoluted masses)`, 'success');
+    const filename = isSideBySidePdf
+      ? `${sanitizeFilename(sampleName)}_deconvoluted_masses_side_by_side.pdf`
+      : isWidePdf
+      ? `${sanitizeFilename(sampleName)}_deconvoluted_masses_wide.pdf`
+      : `${sanitizeFilename(sampleName)}_deconvoluted_masses.${exportFormat}`;
+    downloadBlob(blob, filename);
+    toast(`Exported ${exportLabel} (deconvoluted masses)`, 'success');
   } catch (err) {
     toast(`Export failed: ${err.message}`, 'error');
   } finally {

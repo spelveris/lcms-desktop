@@ -80,6 +80,75 @@ def _normalize_deconvolution_export_results(deconv_results: list) -> list[dict]:
     return normalized
 
 
+def _normalize_deconvolution_component(component: Optional[dict]) -> Optional[dict]:
+    """Normalize one deconvolution component while preserving ion assignments."""
+    if not isinstance(component, dict):
+        return None
+
+    mass = _coerce_finite_float(component.get('mass'), np.nan)
+    intensity = _coerce_finite_float(component.get('intensity'), np.nan)
+    if not np.isfinite(mass) or mass <= 0:
+        return None
+    if not np.isfinite(intensity) or intensity < 0:
+        intensity = 0.0
+
+    raw_mzs = component.get('ion_mzs') or []
+    raw_intensities = component.get('ion_intensities') or []
+    raw_charges = component.get('ion_charges') or []
+    ion_count = min(len(raw_mzs), len(raw_intensities), len(raw_charges))
+
+    ion_rows: list[tuple[float, float, int]] = []
+    for idx in range(ion_count):
+        mz_val = _coerce_finite_float(raw_mzs[idx], np.nan)
+        intensity_val = _coerce_finite_float(raw_intensities[idx], np.nan)
+        try:
+            charge_val = int(round(float(raw_charges[idx])))
+        except Exception:
+            charge_val = 0
+        if not np.isfinite(mz_val) or mz_val <= 0:
+            continue
+        if not np.isfinite(intensity_val) or intensity_val < 0:
+            intensity_val = 0.0
+        ion_rows.append((mz_val, intensity_val, charge_val))
+
+    ion_rows.sort(key=lambda row: row[0])
+    return {
+        'mass': mass,
+        'intensity': intensity,
+        'ion_mzs': [row[0] for row in ion_rows],
+        'ion_intensities': [row[1] for row in ion_rows],
+        'ion_charges': [row[2] for row in ion_rows],
+    }
+
+
+def _normalize_spectrum_payload(spectrum: Optional[dict]) -> Optional[dict]:
+    """Normalize a raw spectrum payload for export rendering."""
+    if not isinstance(spectrum, dict):
+        return None
+
+    raw_mz = spectrum.get('mz') or []
+    raw_intensity = spectrum.get('intensities') or []
+    count = min(len(raw_mz), len(raw_intensity))
+    if count <= 0:
+        return None
+
+    mz_vals = np.asarray(raw_mz[:count], dtype=float)
+    intensity_vals = np.asarray(raw_intensity[:count], dtype=float)
+    finite_mask = np.isfinite(mz_vals) & np.isfinite(intensity_vals)
+    if not np.any(finite_mask):
+        return None
+
+    mz_vals = mz_vals[finite_mask]
+    intensity_vals = intensity_vals[finite_mask]
+    if mz_vals.size == 0:
+        return None
+
+    return {
+        'mz': mz_vals,
+        'intensities': np.clip(intensity_vals, a_min=0.0, a_max=None),
+    }
+
+
 def _get_deconvolution_panel_dimensions(base_fig_width: float = 8.0) -> tuple[float, float]:
     """Return the physical panel size used by the deconvolution mass export."""
     base_fig_width = max(1.0, _coerce_finite_float(base_fig_width, 8.0))
@@ -1393,6 +1462,74 @@ def _plot_deconvoluted_masses_panel(
         ax_deconv.spines['right'].set_visible(False)
 
 
+def _plot_deconvoluted_component_inset(
+    ax,
+    component: Optional[dict],
+    spectrum: Optional[dict] = None,
+) -> None:
+    """Render a selected component's observed ion ladder as a compact inset."""
+    normalized = _normalize_deconvolution_component(component)
+    if not normalized or not normalized.get('ion_mzs'):
+        ax.text(0.5, 0.5, "No ion inset", ha='center', va='center', transform=ax.transAxes, fontsize=6)
+        ax.set_axis_off()
+        return
+
+    mzs = np.asarray(normalized['ion_mzs'], dtype=float)
+    intensities = np.asarray(normalized['ion_intensities'], dtype=float)
+    charges = normalized.get('ion_charges', [])
+    max_intensity = float(np.max(intensities)) if intensities.size > 0 else 0.0
+    if max_intensity <= 0:
+        max_intensity = 1.0
+    relative = (intensities / max_intensity) * 100.0
+
+    bar_color = '#2ca02c'
+    label_color = '#1a6b1a'
+    mz_min = float(np.min(mzs))
+    mz_max = float(np.max(mzs))
+    mz_span = max(1.0, mz_max - mz_min)
+    mz_margin = max(0.6, mz_span * 0.08)
+    x_min = mz_min - mz_margin
+    x_max = mz_max + mz_margin
+
+    normalized_spectrum = _normalize_spectrum_payload(spectrum)
+    if normalized_spectrum is not None:
+        spectrum_mz = normalized_spectrum['mz']
+        spectrum_intensity = normalized_spectrum['intensities']
+        mask = (spectrum_mz >= x_min) & (spectrum_mz <= x_max)
+        if np.any(mask):
+            local_mz = spectrum_mz[mask]
+            local_intensity = spectrum_intensity[mask]
+            local_max = float(np.max(local_intensity)) if local_intensity.size > 0 else 0.0
+            if local_max > 0:
+                local_relative = (local_intensity / local_max) * 100.0
+                ax.plot(local_mz, local_relative, color='#c9c9c9', linewidth=0.8, zorder=1)
+
+    for mz_val, rel_intensity, charge in zip(mzs, relative, charges):
+        ax.vlines(mz_val, 0, rel_intensity, color=bar_color, linewidth=1.3, zorder=2)
+        if charge:
+            ax.annotate(
+                f"z={charge}",
+                xy=(mz_val, rel_intensity),
+                xytext=(0, 2),
+                textcoords='offset points',
+                ha='center',
+                va='bottom',
+                fontsize=5,
+                color=label_color,
+                fontweight='bold',
+                zorder=3,
+            )
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, 105)
+    ax.set_title(f"{normalized['mass']:.1f} Da ions", fontsize=6.5, fontweight='bold', pad=2)
+    ax.set_xlabel("m/z", fontsize=6)
+    ax.tick_params(axis='both', labelsize=5.5, length=3)
+    ax.grid(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+
 def create_deconvolution_figure(sample, start_time: float, end_time: float,
                                  deconv_results: list,
                                  style: dict = None) -> matplotlib.figure.Figure:
@@ -1510,7 +1647,8 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
 def create_deconvoluted_masses_figure(
     sample_name: str,
     deconv_results: list,
-    style: dict = None
+    style: dict = None,
+    spectrum: Optional[dict] = None,
 ) -> matplotlib.figure.Figure:
     """
     Create a standalone deconvoluted masses figure (single panel).
@@ -1533,13 +1671,46 @@ def create_deconvoluted_masses_figure(
     deconv_show_peak_labels = _coerce_bool(style.get('deconv_show_peak_labels', True), True)
     deconv_show_title = _coerce_bool(style.get('deconv_show_title', True), True)
     deconv_show_subtitle = _coerce_bool(style.get('deconv_show_subtitle', True), True)
+    deconv_export_variant = str(style.get('deconv_export_variant', 'standard') or 'standard').lower()
     sample_subtitle = (sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name) if deconv_show_subtitle else None
 
     # Match the physical panel size used by create_deconvolution_figure()
     # for the bottom-right deconvoluted-masses subplot.
     panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
 
-    fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
+    selected_component = _normalize_deconvolution_component(style.get('deconv_selected_component'))
+    if selected_component is None and isinstance(deconv_results, list) and len(deconv_results) > 0:
+        selected_component = _normalize_deconvolution_component(deconv_results[0])
+
+    if deconv_export_variant == 'side-by-side':
+        fig, axes = plt.subplots(
+            1,
+            2,
+            figsize=(panel_width_in * 2.0, panel_height_in),
+            gridspec_kw={'width_ratios': [1.0, 1.0], 'wspace': 0.36},
+        )
+        ax_mass, ax_inset = axes
+        _plot_deconvoluted_masses_panel(
+            ax_mass,
+            deconv_results,
+            show_grid=show_grid,
+            x_min_da=deconv_x_min_da,
+            x_max_da=deconv_x_max_da,
+            subtitle=sample_subtitle,
+            show_title=deconv_show_title,
+            show_obs_calc=deconv_show_obs_calc,
+            calc_mass_da=deconv_calc_mass_da,
+            show_peak_labels=deconv_show_peak_labels,
+        )
+        _plot_deconvoluted_component_inset(ax_inset, selected_component, spectrum=spectrum)
+        plt.tight_layout(pad=0.8)
+        return fig
+
+    fig_width_in = panel_width_in
+    if deconv_export_variant == 'wide-inset':
+        fig_width_in = panel_width_in * max(2.0, _coerce_finite_float(style.get('panel_width_multiplier', 2.0), 2.0))
+
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width_in, panel_height_in))
     _plot_deconvoluted_masses_panel(
         ax,
         deconv_results,
@@ -1553,6 +1724,11 @@ def create_deconvoluted_masses_figure(
         show_peak_labels=deconv_show_peak_labels,
     )
     plt.tight_layout(pad=0.8)
+
+    if deconv_export_variant == 'wide-inset' and selected_component is not None and selected_component.get('ion_mzs'):
+        inset_ax = ax.inset_axes([0.70, 0.47, 0.27, 0.35])
+        _plot_deconvoluted_component_inset(inset_ax, selected_component, spectrum=spectrum)
+
     return fig
 
 

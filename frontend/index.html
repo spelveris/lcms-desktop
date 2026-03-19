@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.22">
+  <link rel="stylesheet" href="css/style.css?v=0.2.23">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -400,6 +400,7 @@
             <label>Abundance Cutoff %<input type="number" id="dp-abundance" value="5" min="1" max="50"></label>
             <label>Envelope R&sup2; %<input type="number" id="dp-r2" value="50" min="10" max="100"></label>
             <label>Peak Width FWHM<input type="number" id="dp-fwhm" value="0.6" min="0.1" max="5.0" step="0.1"></label>
+            <label>Minimum Input m/z<input type="number" id="dp-min-input-mz" value="100" min="0" max="5000" step="10"></label>
             <label>Mass Range Low<input type="number" id="dp-mass-low" placeholder="auto" step="100"></label>
             <label>Mass Range High<input type="number" id="dp-mass-high" placeholder="auto" step="100"></label>
             <label>Noise Cutoff<input type="number" id="dp-noise" placeholder="auto" step="100"></label>
@@ -428,6 +429,8 @@
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="png">Download PNG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="svg">Download SVG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf">Download PDF</button>
+                <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-wide">Download Wide PDF</button>
+                <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-side-by-side">Download Side-by-Side PDF</button>
               </div>
             </div>
           </div>
@@ -624,9 +627,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.22"></script>
-  <script src="js/charts.js?v=0.2.22"></script>
-  <script src="js/quotes.js?v=0.2.22"></script>
-  <script src="js/app.js?v=0.2.22"></script>
+  <script src="js/api.js?v=0.2.23"></script>
+  <script src="js/charts.js?v=0.2.23"></script>
+  <script src="js/quotes.js?v=0.2.23"></script>
+  <script src="js/app.js?v=0.2.23"></script>
 </body>
 </html>

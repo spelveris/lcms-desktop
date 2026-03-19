@@ -1,9 +1,14 @@
-"""Data reading utilities for LC-MS .D folders using rainbow-api."""
+"""Data reading utilities for Agilent LC-MS sample folders."""
 
 import os
+import re
+import struct
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from zipfile import ZipFile
+import xml.etree.ElementTree as ET
 import streamlit as st
 import numpy as np
 
@@ -11,6 +16,73 @@ try:
     import rainbow as rb
 except ImportError:
     rb = None
+
+try:
+    import lzf
+except ImportError:
+    lzf = None
+
+
+SUPPORTED_SAMPLE_SUFFIXES = (".d", ".sirslt")
+_SIRSLT_MSSCAN_FIELDS: list[tuple[str, str]] = [
+    ("ScanID", "i"),
+    ("ScanMethodID", "i"),
+    ("TimeSegmentID", "i"),
+    ("ScanTime", "d"),
+    ("MSLevel", "h"),
+    ("ScanType", "i"),
+    ("TIC", "d"),
+    ("BasePeakMZ", "d"),
+    ("BasePeakValue", "d"),
+    ("CalibrationID", "h"),
+    ("CycleNumber", "i"),
+    ("Status", "i"),
+    ("IonMode", "i"),
+    ("IonPolarity", "h"),
+    ("CompensationField", "f"),
+    ("DispersionField", "f"),
+    ("QuadDetectorGain", "d"),
+    ("QuadEMV", "d"),
+    ("Fragmentor", "f"),
+    ("CollisionEnergy", "f"),
+    ("MzOfInterest", "d"),
+    ("MzIsolationWidth", "f"),
+    ("AbundanceLimit", "d"),
+    ("SamplingPeriod", "d"),
+    ("DwellTime", "i"),
+    ("MeasuredMassRangeMin", "d"),
+    ("MeasuredMassRangeMax", "d"),
+    ("Threshold", "d"),
+    ("ChargeState", "h"),
+    ("FragmentationMode", "h"),
+    ("IsFragmentorDynamic", "h"),
+    ("IsCollisionEnergyDynamic", "h"),
+    ("ChromScaleFactor", "f"),
+    ("MassCalOffset", "q"),
+    ("ActualsOffset", "q"),
+    ("NumOfActualsPerScan", "h"),
+    ("DDScanID", "i"),
+    ("DDScanID2", "i"),
+    ("DDScanID3", "i"),
+    ("SpectrumFormatID", "h"),
+    ("SpectrumOffset", "q"),
+    ("ByteCount", "i"),
+    ("PointCount", "i"),
+    ("UncompressedByteCount", "i"),
+    ("MinX", "d"),
+    ("MaxX", "d"),
+    ("MinY", "d"),
+    ("MaxY", "d"),
+    ("MeasuredNoise", "d"),
+    ("OneDataRangeDeltaYOffset", "i"),
+    ("XOffset", "q"),
+    ("XByteCount", "i"),
+]
+_SIRSLT_MSSCAN_RECORD = struct.Struct("<" + "".join(fmt for _, fmt in _SIRSLT_MSSCAN_FIELDS))
+
+
+def _is_supported_sample_dir_name(name: str) -> bool:
+    return str(name or "").lower().endswith(SUPPORTED_SAMPLE_SUFFIXES)
 
 
 def check_rainbow_available() -> bool:
@@ -20,7 +92,7 @@ def check_rainbow_available() -> bool:
 
 def list_d_folders(base_path: str, search_pattern: str = "") -> list[dict]:
     """
-    Find all .D folders in the given path.
+    Find all supported sample folders in the given path.
 
     Args:
         base_path: Root directory to search
@@ -37,8 +109,8 @@ def list_d_folders(base_path: str, search_pattern: str = "") -> list[dict]:
 
     # Walk through directory tree
     for root, dirs, files in os.walk(base):
-        # Filter for .D directories
-        d_dirs = [d for d in dirs if d.endswith(".D") or d.endswith(".d")]
+        # Filter for supported sample directories
+        d_dirs = [d for d in dirs if _is_supported_sample_dir_name(d)]
 
         for d_dir in d_dirs:
             full_path = Path(root) / d_dir
@@ -61,8 +133,8 @@ def list_d_folders(base_path: str, search_pattern: str = "") -> list[dict]:
             except (OSError, PermissionError):
                 continue
 
-        # Don't recurse into .D folders
-        dirs[:] = [d for d in dirs if not (d.endswith(".D") or d.endswith(".d"))]
+        # Don't recurse into sample folders once we've found them
+        dirs[:] = [d for d in dirs if not _is_supported_sample_dir_name(d)]
 
     # Sort by date, newest first
     folders.sort(key=lambda x: x["date"], reverse=True)
@@ -93,6 +165,7 @@ class SampleData:
     def __init__(self, folder_path: str):
         self.folder_path = folder_path
         self.name = Path(folder_path).name
+        self.sample_format = Path(folder_path).suffix.lower()
         self.uv_times: Optional[np.ndarray] = None
         self.uv_data: Optional[np.ndarray] = None
         self.uv_wavelengths: Optional[np.ndarray] = None
@@ -134,8 +207,70 @@ class SampleData:
         """True if acquisition method starts with C4 (intact protein analysis)."""
         return self.acq_method is not None and self.acq_method.upper().startswith("C4")
 
+    def _parse_sirslt_method(self):
+        """Parse acquisition metadata from Agilent .sirslt bundle files."""
+        bundle = Path(self.folder_path)
+        acaml_files = [path for path in sorted(bundle.glob("*.acaml")) if not path.name.startswith("._")]
+        if not acaml_files:
+            return
+
+        try:
+            root = ET.parse(acaml_files[0]).getroot()
+        except Exception:
+            return
+
+        method_file_name = None
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1]
+            text = str(elem.text or "").strip()
+            if not text:
+                continue
+            if tag == "Path" and text.lower().endswith(".amx"):
+                method_file_name = Path(text).name
+                self.acq_method = Path(text).stem
+                self.acq_info["Acq. Method"] = self.acq_method
+                break
+
+        if not method_file_name:
+            for elem in root.iter():
+                tag = elem.tag.split("}")[-1]
+                text = str(elem.text or "").strip()
+                if tag == "Name" and text.lower().endswith(".amx"):
+                    method_file_name = Path(text).name
+                    self.acq_method = Path(text).stem
+                    self.acq_info["Acq. Method"] = self.acq_method
+                    break
+
+        if not method_file_name:
+            return
+
+        method_path = bundle / method_file_name
+        if not method_path.exists():
+            return
+
+        try:
+            with ZipFile(method_path) as archive:
+                report_path = "Agilent/ReportableInformation"
+                if report_path not in archive.namelist():
+                    return
+                report_text = archive.read(report_path).decode("utf-8", errors="ignore")
+        except Exception:
+            return
+
+        polarity_match = re.search(
+            r"<Name>\s*Signal Polarity\s*</Name>.*?<Value>\s*([^<]+?)\s*</Value>",
+            report_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if polarity_match:
+            self.acq_info["Signal Polarity"] = polarity_match.group(1).strip()
+
     def _parse_acq_method(self):
-        """Parse acquisition method name and other info from acq.txt (UTF-16 encoded)."""
+        """Parse acquisition method name and other info from available metadata files."""
+        if self.sample_format == ".sirslt":
+            self._parse_sirslt_method()
+            return
+
         acq_path = Path(self.folder_path) / "acq.txt"
         if not acq_path.exists():
             return
@@ -228,6 +363,233 @@ class SampleData:
 
         return times, data, labels
 
+    def _load_sirslt_uv(self, extracted_dir: Path):
+        """Load UV/VWD traces from an extracted .dx package."""
+        try:
+            from rainbow.agilent import chemstation
+        except Exception as exc:
+            self._debug_info["sirslt_uv_import_error"] = str(exc)
+            return
+
+        all_uv_data = []
+        all_uv_wavelengths = []
+        uv_times = None
+
+        for entry in sorted(extracted_dir.iterdir()):
+            if not entry.is_file():
+                continue
+
+            try:
+                datafile = chemstation.parse_file(str(entry), prec=1)
+            except Exception as exc:
+                self._debug_info[f"sirslt_uv_parse_error_{entry.name}"] = str(exc)
+                continue
+
+            if datafile is None:
+                continue
+
+            metadata = getattr(datafile, "metadata", {}) or {}
+            signal = str(metadata.get("signal", ""))
+            unit = str(metadata.get("unit", ""))
+            detector = str(getattr(datafile, "detector", "") or "")
+            is_uv_like = (
+                detector.upper() == "UV"
+                or "VWD" in signal.upper()
+                or "WAVELENGTH=" in signal.upper()
+                or unit.upper() == "MAU"
+            )
+            if not is_uv_like:
+                continue
+
+            times, uv_data, wavelengths = self._extract_detector_data(datafile)
+            if times is None or uv_data is None:
+                continue
+
+            uv_arr = np.array(uv_data, dtype=float)
+            if uv_arr.ndim == 1:
+                uv_arr = uv_arr.reshape(-1, 1)
+
+            wl_arr = np.array(wavelengths if wavelengths is not None else [], dtype=object)
+            if wl_arr.size == 0 or all(str(w).strip() in {"", "None"} for w in wl_arr.tolist()):
+                match = re.search(r"WAVELENGTH\s*=\s*([0-9.]+)", signal, flags=re.IGNORECASE)
+                if match:
+                    wl_arr = np.array([float(match.group(1))], dtype=float)
+                else:
+                    wl_arr = np.array([205.0], dtype=float)
+
+            if uv_arr.shape[1] != wl_arr.size:
+                wl_arr = wl_arr[: uv_arr.shape[1]]
+                if wl_arr.size != uv_arr.shape[1]:
+                    wl_arr = np.arange(uv_arr.shape[1], dtype=float)
+
+            if uv_times is None:
+                uv_times = np.array(times, dtype=float)
+
+            all_uv_data.append(uv_arr)
+            all_uv_wavelengths.extend(np.array(wl_arr, dtype=float).tolist())
+            self._debug_info[f"sirslt_uv_{entry.name}"] = {
+                "signal": signal,
+                "shape": list(uv_arr.shape),
+                "wavelengths": np.array(wl_arr, dtype=float).tolist(),
+            }
+
+        if not all_uv_data:
+            return
+
+        try:
+            self.uv_times = uv_times
+            self.uv_data = np.hstack(all_uv_data)
+            self.uv_wavelengths = np.array(all_uv_wavelengths, dtype=float)
+        except Exception as exc:
+            self._debug_info["sirslt_uv_combine_error"] = str(exc)
+            self.uv_times = uv_times
+            self.uv_data = all_uv_data[0]
+            self.uv_wavelengths = np.array(all_uv_wavelengths[: all_uv_data[0].shape[1]], dtype=float)
+
+    def _read_sirslt_ms_records(self, scan_path: Path) -> list[dict]:
+        """Read fixed-width scan records from .sirslt MSScan.bin."""
+        record_names = [name for name, _ in _SIRSLT_MSSCAN_FIELDS]
+        records: list[dict] = []
+
+        with scan_path.open("rb") as handle:
+            handle.seek(0x58)
+            start_offset = struct.unpack("<I", handle.read(4))[0]
+            handle.seek(start_offset)
+            payload_bytes = scan_path.stat().st_size - start_offset
+            if payload_bytes % _SIRSLT_MSSCAN_RECORD.size != 0:
+                raise ValueError("Unsupported .sirslt MSScan.bin record size")
+
+            num_records = payload_bytes // _SIRSLT_MSSCAN_RECORD.size
+            for _ in range(num_records):
+                raw_record = handle.read(_SIRSLT_MSSCAN_RECORD.size)
+                if len(raw_record) != _SIRSLT_MSSCAN_RECORD.size:
+                    raise ValueError("Unexpected end of .sirslt MSScan.bin")
+                records.append(dict(zip(record_names, _SIRSLT_MSSCAN_RECORD.unpack(raw_record))))
+
+        self._debug_info["sirslt_ms_record_count"] = len(records)
+        return records
+
+    def _decode_sirslt_profile_blob(
+        self,
+        blob: bytes,
+        point_count: int,
+        spectrum_format_id: int,
+        uncompressed_byte_count: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Decode one .sirslt profile spectrum into shared-axis intensities."""
+        payload = blob
+        if uncompressed_byte_count and lzf is not None:
+            decompressed = lzf.decompress(blob, uncompressed_byte_count)
+            if decompressed is not None:
+                payload = decompressed
+
+        if len(payload) < 16:
+            raise ValueError("Invalid .sirslt MSProfile.bin payload")
+
+        start_mz, delta_mz = struct.unpack("<dd", payload[:16])
+        mz_axis = start_mz + delta_mz * np.arange(point_count, dtype=float)
+        intensity_bytes = payload[16:]
+
+        if spectrum_format_id == 2 and len(intensity_bytes) >= point_count * 8:
+            intensities = np.frombuffer(intensity_bytes[: point_count * 8], dtype="<f8").astype(float, copy=True)
+            return mz_axis, intensities
+
+        if len(intensity_bytes) >= point_count * 4:
+            intensities = np.frombuffer(intensity_bytes[: point_count * 4], dtype="<u4").astype(float, copy=True)
+            return mz_axis, intensities
+
+        raise ValueError("Unsupported .sirslt MS profile encoding")
+
+    def _load_sirslt_ms(self, bundle: Path):
+        """Load MS profile data from a .sirslt bundle."""
+        scan_path = next((path for path in sorted(bundle.glob("*.MSScan.bin")) if not path.name.startswith("._")), None)
+        profile_path = next((path for path in sorted(bundle.glob("*.MSProfile.bin")) if not path.name.startswith("._")), None)
+        if scan_path is None or profile_path is None:
+            raise FileNotFoundError("Missing .sirslt MS profile files")
+
+        records = self._read_sirslt_ms_records(scan_path)
+        if not records:
+            raise ValueError("No MS scans found in .sirslt bundle")
+
+        times = np.array([float(record["ScanTime"]) for record in records], dtype=float)
+        tic = np.array([float(record["TIC"]) for record in records], dtype=float)
+        intensity_scans: list[np.ndarray] = []
+        axis_descriptors: list[tuple[float, float, int]] = []
+
+        with profile_path.open("rb") as handle:
+            for record in records:
+                handle.seek(int(record["SpectrumOffset"]))
+                blob = handle.read(int(record["ByteCount"]))
+                mz_axis, intensities = self._decode_sirslt_profile_blob(
+                    blob,
+                    int(record["PointCount"]),
+                    int(record["SpectrumFormatID"]),
+                    int(record["UncompressedByteCount"]),
+                )
+                intensity_scans.append(intensities)
+                axis_descriptors.append((float(mz_axis[0]), float(mz_axis[1] - mz_axis[0]) if len(mz_axis) > 1 else 0.0, len(mz_axis)))
+
+        shared_axis = None
+        if axis_descriptors:
+            first_axis = axis_descriptors[0]
+            if all(
+                axis[2] == first_axis[2]
+                and abs(axis[0] - first_axis[0]) <= 1e-9
+                and abs(axis[1] - first_axis[1]) <= 1e-12
+                for axis in axis_descriptors[1:]
+            ):
+                shared_axis = first_axis[0] + first_axis[1] * np.arange(first_axis[2], dtype=float)
+
+        if shared_axis is not None:
+            scans: list = intensity_scans
+            mz_axis = shared_axis
+        else:
+            scans = []
+            for intensities, axis_info in zip(intensity_scans, axis_descriptors):
+                scan_axis = axis_info[0] + axis_info[1] * np.arange(axis_info[2], dtype=float)
+                scans.append(np.column_stack([scan_axis, intensities]))
+            mz_axis = None
+
+        polarity_text = str(self.acq_info.get("Signal Polarity", "")).lower()
+        if "negative" in polarity_text:
+            self.ms_times_neg = times
+            self.ms_scans_neg = scans
+            self.ms_mz_axis_neg = mz_axis
+            self.tic_neg = tic
+        else:
+            self.ms_times_pos = times
+            self.ms_scans_pos = scans
+            self.ms_mz_axis_pos = mz_axis
+            self.tic_pos = tic
+
+    def _load_sirslt(self) -> bool:
+        """Load UV and MS data from an Agilent .sirslt bundle."""
+        bundle = Path(self.folder_path)
+        dx_path = next((path for path in sorted(bundle.glob("*.dx")) if not path.name.startswith("._")), None)
+        if dx_path is None:
+            self._error = "Could not find .dx package inside .sirslt bundle"
+            return False
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="lcms-sirslt-") as temp_dir_name:
+                extracted_dir = Path(temp_dir_name)
+                with ZipFile(dx_path) as archive:
+                    archive.extractall(extracted_dir)
+                self._load_sirslt_uv(extracted_dir)
+
+            self._load_sirslt_ms(bundle)
+            self.ms_times = self.ms_times_pos if self.ms_times_pos is not None else self.ms_times_neg
+            self.ms_scans = self.ms_scans_pos if self.ms_scans_pos is not None else self.ms_scans_neg
+            self.ms_mz_axis = self.ms_mz_axis_pos if self.ms_mz_axis_pos is not None else self.ms_mz_axis_neg
+            self.tic = self.tic_pos if self.tic_pos is not None else self.tic_neg
+            self._debug_info["sirslt_loaded"] = True
+            self._loaded = True
+            return True
+        except Exception as exc:
+            self._error = f"Could not read .sirslt bundle: {exc}"
+            self._debug_info["sirslt_error"] = str(exc)
+            return False
+
     def _fallback_read(self):
         """Fallback: read individual files when rb.read() fails."""
         import importlib
@@ -298,8 +660,11 @@ class SampleData:
         return None
 
     def load(self) -> bool:
-        """Load data from .D folder using rainbow-api."""
+        """Load data from a supported sample bundle."""
         self._parse_acq_method()
+
+        if self.sample_format == ".sirslt":
+            return self._load_sirslt()
 
         if not check_rainbow_available():
             self._error = "rainbow-api not installed"

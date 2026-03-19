@@ -47,7 +47,7 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
         sys.path.append(abs_external)
 
 # Import existing modules
-from data_reader import SampleData, list_d_folders
+from data_reader import SampleData, SUPPORTED_SAMPLE_SUFFIXES, list_d_folders
 import analysis
 import config as lcms_config
 import plotting
@@ -69,6 +69,7 @@ _sample_cache: dict[str, SampleData] = {}
 _sample_cache_state: dict[str, str] = {}
 RUN_SETTLE_SECONDS = 120
 WASH_POSITIONS = {91}
+DEFAULT_DECONV_MIN_INPUT_MZ = 100.0
 _router_log_lock = Lock()
 _router_logged_item_state: dict[str, str] = {}
 _router_last_window_signature = ""
@@ -85,6 +86,19 @@ def _ndarray_to_list(arr):
     if isinstance(arr, np.ndarray):
         return arr.tolist()
     return arr
+
+
+def _is_supported_sample_folder(path: Path) -> bool:
+    return path.is_dir() and path.name.lower().endswith(SUPPORTED_SAMPLE_SUFFIXES)
+
+
+def _strip_sample_suffix(name: str) -> str:
+    value = str(name or "")
+    lowered = value.lower()
+    for suffix in SUPPORTED_SAMPLE_SUFFIXES:
+        if lowered.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
 
 
 def _normalize_filesystem_path(path_str: str) -> str:
@@ -342,8 +356,109 @@ def _run_log_has_method_completed(run_log_text: str) -> bool:
     return bool(re.search(r"\bmethod\s+completed\b", line, flags=re.IGNORECASE))
 
 
+def _find_sirslt_acaml_file(folder: Path) -> Optional[Path]:
+    try:
+        acaml_files = [
+            path for path in sorted(folder.glob("*.acaml"))
+            if path.is_file() and not path.name.startswith("._")
+        ]
+    except Exception:
+        acaml_files = []
+    return acaml_files[0] if acaml_files else None
+
+
+def _extract_sirslt_acaml_state(acaml_text: str) -> dict:
+    text = str(acaml_text or "")
+    status_match = re.search(
+        r"<AcquitionStatus>.*?<Status>\s*([^<]+?)\s*</Status>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    message_match = re.search(
+        r"<AcquitionStatus>.*?<Message>\s*([^<]+?)\s*</Message>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    integrity_match = re.search(
+        r"<ContentIntegrity>\s*([^<]+?)\s*</ContentIntegrity>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    modified_match = re.search(
+        r'LastModifiedDateTime="([^"]+)"',
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    status = " ".join(str(status_match.group(1)).split()) if status_match else ""
+    message = " ".join(str(message_match.group(1)).split()) if message_match else ""
+    integrity = " ".join(str(integrity_match.group(1)).split()) if integrity_match else ""
+    modified = " ".join(str(modified_match.group(1)).split()) if modified_match else ""
+
+    completed = status.lower() == "completed"
+    if not completed and message:
+        completed = bool(re.search(r"\bacquisition\s+completed\b", message, flags=re.IGNORECASE))
+
+    return {
+        "status": status,
+        "message": message,
+        "content_integrity": integrity,
+        "last_modified": modified,
+        "completed": completed,
+    }
+
+
 def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     folder = Path(_normalize_filesystem_path(str(folder_path)))
+    if folder.name.lower().endswith(".sirslt"):
+        latest_mtime = _folder_latest_mtime(folder)
+        now_ts = datetime.datetime.now().timestamp()
+        settled = latest_mtime > 0 and (now_ts - latest_mtime) >= RUN_SETTLE_SECONDS
+        completion_source = "active-write"
+        run_complete = False
+        run_log_last_line = None
+        cacheable = settled
+
+        acaml_path = _find_sirslt_acaml_file(folder)
+        if acaml_path is not None:
+            acaml_state = _extract_sirslt_acaml_state(_decode_text_file(acaml_path))
+            status = str(acaml_state.get("status") or "")
+            message = str(acaml_state.get("message") or "")
+            integrity = str(acaml_state.get("content_integrity") or "")
+            modified = str(acaml_state.get("last_modified") or "")
+
+            if message:
+                run_log_last_line = message
+            elif status:
+                run_log_last_line = f"Status: {status}"
+            elif integrity:
+                run_log_last_line = f"Content integrity: {integrity}"
+            elif modified:
+                run_log_last_line = f"Last modified: {modified}"
+
+            if acaml_state.get("completed"):
+                run_complete = True
+                cacheable = True
+                completion_source = "acaml-status"
+            elif settled:
+                completion_source = "sirslt-settled"
+            else:
+                completion_source = "acaml-pending"
+        elif settled:
+            completion_source = "sirslt-settled"
+
+        return {
+            "folder_path": str(folder),
+            "latest_mtime": latest_mtime,
+            "run_complete": run_complete,
+            "run_in_progress": not cacheable,
+            "cacheable": cacheable,
+            "completion_source": completion_source,
+            "run_log_last_line": run_log_last_line,
+            "sample_location": None,
+            "is_wash_position": False,
+        }
+
     latest_mtime = _folder_latest_mtime(folder)
     now_ts = datetime.datetime.now().timestamp()
     settled = latest_mtime > 0 and (now_ts - latest_mtime) >= RUN_SETTLE_SECONDS
@@ -460,7 +575,7 @@ def _iter_d_folder_paths(base_path: Union[str, Path], recursive: bool = True) ->
             for entry in sorted(root.iterdir()):
                 if entry.name.startswith("."):
                     continue
-                if entry.is_dir() and entry.name.lower().endswith(".d"):
+                if _is_supported_sample_folder(entry):
                     folders.append(entry)
         except PermissionError:
             raise HTTPException(status_code=403, detail="Permission denied")
@@ -472,20 +587,37 @@ def _iter_d_folder_paths(base_path: Union[str, Path], recursive: bool = True) ->
 
     for current_root, dirs, _files in os.walk(root, onerror=_on_walk_error):
         visible_dirs = [d for d in dirs if not d.startswith(".")]
-        d_dirs = [d for d in visible_dirs if d.lower().endswith(".d")]
+        d_dirs = [d for d in visible_dirs if _is_supported_sample_folder(Path(current_root) / d)]
         for dirname in d_dirs:
             folders.append(Path(current_root) / dirname)
-        dirs[:] = [d for d in visible_dirs if not d.lower().endswith(".d")]
+        dirs[:] = [d for d in visible_dirs if not _is_supported_sample_folder(Path(current_root) / d)]
     return folders
 
 
 def _recent_sequence_date_tokens(lookback_days: int) -> list[str]:
     days = max(0, int(lookback_days))
     today = datetime.date.today()
-    return [
-        (today - datetime.timedelta(days=offset)).strftime("%y %m %d")
-        for offset in range(days + 1)
-    ]
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    for offset in range(days + 1):
+        day = today - datetime.timedelta(days=offset)
+        day_tokens = [
+            day.strftime("%y %m %d"),
+            day.strftime("%y%m%d"),
+            day.strftime("%Y %m %d"),
+            day.strftime("%Y%m%d"),
+            day.strftime("%Y-%m-%d"),
+            day.strftime("%Y_%m_%d"),
+        ]
+        for token in day_tokens:
+            normalized = re.sub(r"\s+", " ", token.strip())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            tokens.append(normalized)
+
+    return tokens
 
 
 def _folder_name_matches_sequence_tokens(folder_name: str, tokens: list[str]) -> bool:
@@ -516,7 +648,7 @@ def _resolve_run_router_scan_roots(
     try:
         child_dirs = [
             entry for entry in sorted(root.iterdir())
-            if entry.is_dir() and not entry.name.startswith(".") and not entry.name.lower().endswith(".d")
+            if entry.is_dir() and not entry.name.startswith(".") and not _is_supported_sample_folder(entry)
         ]
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
@@ -552,9 +684,7 @@ def _list_router_initial_dirs(initials_root: Union[str, Path]) -> tuple[Path, li
 
 
 def _match_router_initials(run_name: str, initials_dirs: list[Path]) -> tuple[Optional[str], Optional[Path]]:
-    base_name = Path(str(run_name)).name
-    if base_name.lower().endswith(".d"):
-        base_name = base_name[:-2]
+    base_name = _strip_sample_suffix(Path(str(run_name)).name)
     normalized = re.sub(r"\s+", " ", base_name.strip()).upper()
     if not normalized:
         return None, None
@@ -772,9 +902,143 @@ def _copy_router_folder(source_folder: Path, destination_path: Path) -> None:
     try:
         shutil.copytree(source_folder, temp_destination, copy_function=shutil.copy2)
         temp_destination.replace(destination_path)
+        _preserve_router_tree_timestamps(source_folder, destination_path)
     except Exception:
         shutil.rmtree(temp_destination, ignore_errors=True)
         raise
+
+
+def _source_creation_time_ns(stat_result: os.stat_result) -> Optional[int]:
+    birth_ns = getattr(stat_result, "st_birthtime_ns", None)
+    if birth_ns is not None and int(birth_ns) > 0:
+        return int(birth_ns)
+
+    if sys.platform == "win32":
+        ctime_ns = getattr(stat_result, "st_ctime_ns", None)
+        if ctime_ns is not None and int(ctime_ns) > 0:
+            return int(ctime_ns)
+
+    return None
+
+
+def _set_windows_creation_time(path: Path, created_ns: int) -> None:
+    if sys.platform != "win32" or created_ns <= 0:
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [
+            ("dwLowDateTime", wintypes.DWORD),
+            ("dwHighDateTime", wintypes.DWORD),
+        ]
+
+    filetime_value = int(created_ns // 100) + 116444736000000000
+    creation_time = FILETIME(
+        dwLowDateTime=filetime_value & 0xFFFFFFFF,
+        dwHighDateTime=(filetime_value >> 32) & 0xFFFFFFFF,
+    )
+
+    flags = 0x02000000 if path.is_dir() else 0
+    desired_access = 0x0100
+    share_mode = 0x00000001 | 0x00000002 | 0x00000004
+    open_existing = 3
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.CreateFileW(
+        str(path),
+        desired_access,
+        share_mode,
+        None,
+        open_existing,
+        flags,
+        None,
+    )
+
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        raise OSError(ctypes.get_last_error(), f"CreateFileW failed for {path}")
+
+    try:
+        if not kernel32.SetFileTime(handle, ctypes.byref(creation_time), None, None):
+            raise OSError(ctypes.get_last_error(), f"SetFileTime failed for {path}")
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _set_macos_creation_time(path: Path, created_ns: int) -> None:
+    if sys.platform != "darwin" or created_ns <= 0:
+        return
+
+    setfile_path = shutil.which("SetFile")
+    if not setfile_path:
+        raise FileNotFoundError("SetFile not available")
+
+    created_dt = datetime.datetime.fromtimestamp(created_ns / 1_000_000_000)
+    formatted = created_dt.strftime("%m/%d/%Y %H:%M:%S")
+    subprocess.run(
+        [setfile_path, "-d", formatted, str(path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _copy_path_timestamps(source_path: Path, destination_path: Path) -> None:
+    try:
+        source_stat = source_path.stat(follow_symlinks=False)
+    except OSError:
+        return
+
+    try:
+        os.utime(
+            destination_path,
+            ns=(int(source_stat.st_atime_ns), int(source_stat.st_mtime_ns)),
+            follow_symlinks=False,
+        )
+    except Exception:
+        pass
+
+    created_ns = _source_creation_time_ns(source_stat)
+    if created_ns is None:
+        return
+
+    try:
+        if sys.platform == "win32":
+            _set_windows_creation_time(destination_path, created_ns)
+        elif sys.platform == "darwin":
+            _set_macos_creation_time(destination_path, created_ns)
+    except Exception:
+        pass
+
+
+def _preserve_router_tree_timestamps(source_root: Path, destination_root: Path) -> None:
+    file_pairs: list[tuple[Path, Path]] = []
+    dir_pairs: list[tuple[Path, Path]] = [(source_root, destination_root)]
+
+    for current_root, dirs, files in os.walk(source_root):
+        source_dir = Path(current_root)
+        relative_root = source_dir.relative_to(source_root)
+        destination_dir = destination_root / relative_root if relative_root.parts else destination_root
+
+        for filename in files:
+            source_file = source_dir / filename
+            destination_file = destination_dir / filename
+            if destination_file.exists():
+                file_pairs.append((source_file, destination_file))
+
+        for dirname in dirs:
+            source_subdir = source_dir / dirname
+            destination_subdir = destination_dir / dirname
+            if destination_subdir.exists():
+                dir_pairs.append((source_subdir, destination_subdir))
+
+    for source_file, destination_file in file_pairs:
+        _copy_path_timestamps(source_file, destination_file)
+
+    for source_dir, destination_dir in sorted(dir_pairs, key=lambda pair: len(pair[0].parts), reverse=True):
+        _copy_path_timestamps(source_dir, destination_dir)
 
 
 def _resolve_node_command() -> Optional[str]:
@@ -975,9 +1239,38 @@ def _detect_deconvolution_window_for_sample(sample: SampleData) -> tuple[float, 
     return auto_start, auto_end
 
 
+def _filter_spectrum_by_min_input_mz(
+    mz_arr: np.ndarray,
+    intensity_arr: np.ndarray,
+    min_input_mz: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    if mz_arr is None or intensity_arr is None:
+        return np.array([]), np.array([])
+
+    try:
+        floor = max(0.0, float(min_input_mz))
+    except Exception:
+        floor = DEFAULT_DECONV_MIN_INPUT_MZ
+    mz_values = np.asarray(mz_arr, dtype=float)
+    intensity_values = np.asarray(intensity_arr, dtype=float)
+    if floor <= 0:
+        return mz_values, intensity_values
+
+    mask = mz_values >= floor
+    return mz_values[mask], intensity_values[mask]
+
+
 def _run_default_report_deconvolution(mz_arr: np.ndarray, intensity_arr: np.ndarray) -> list[dict]:
     """Run default deconvolution matching the Deconvolution tab defaults exactly."""
     if mz_arr is None or intensity_arr is None or len(mz_arr) == 0:
+        return []
+
+    mz_arr, intensity_arr = _filter_spectrum_by_min_input_mz(
+        mz_arr,
+        intensity_arr,
+        DEFAULT_DECONV_MIN_INPUT_MZ,
+    )
+    if len(mz_arr) == 0:
         return []
 
     noise_cutoff = 1000.0
@@ -1396,7 +1689,7 @@ def get_config():
 
 @app.get("/api/browse")
 def browse_folder(path: str = Query(..., description="Directory to list")):
-    """List contents of a directory (folders and .D folders)."""
+    """List contents of a directory, including supported sample bundles."""
     p = Path(_normalize_filesystem_path(path))
     if not p.exists():
         raise HTTPException(status_code=404, detail="Path not found")
@@ -1408,7 +1701,7 @@ def browse_folder(path: str = Query(..., description="Directory to list")):
         for entry in sorted(p.iterdir()):
             if entry.name.startswith("."):
                 continue
-            is_d = entry.is_dir() and (entry.name.endswith(".D") or entry.name.endswith(".d"))
+            is_d = _is_supported_sample_folder(entry)
             item = {
                 "name": entry.name,
                 "path": str(entry),
@@ -1429,7 +1722,7 @@ def find_d_folders(
     path: str = Query(...),
     search: str = Query("", description="Optional name filter"),
 ):
-    """Recursively find .D folders under a path."""
+    """Recursively find supported sample folders under a path."""
     folders = list_d_folders(_normalize_filesystem_path(path), search)
     for f in folders:
         f["date"] = f["date"].isoformat()
@@ -1437,7 +1730,7 @@ def find_d_folders(
 
 
 @app.get("/api/load-sample")
-def load_sample(path: str = Query(..., description="Path to .D folder")):
+def load_sample(path: str = Query(..., description="Path to a supported sample folder")):
     """Load a sample and return its metadata."""
     normalized_path = _normalize_filesystem_path(path)
     sample = _get_sample(normalized_path)
@@ -1860,6 +2153,7 @@ def deconvolute(
     max_overlap: float = Query(0.0),
     pwhh: float = Query(0.6),
     noise_cutoff: float = Query(1000.0),
+    min_input_mz: float = Query(DEFAULT_DECONV_MIN_INPUT_MZ),
     low_mw: float = Query(500.0),
     high_mw: float = Query(50000.0),
     mw_assign_cutoff: float = Query(0.40),
@@ -1875,6 +2169,9 @@ def deconvolute(
     mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
+    mz_arr, intensity_arr = _filter_spectrum_by_min_input_mz(mz_arr, intensity_arr, min_input_mz)
+    if mz_arr is None or len(mz_arr) == 0:
+        raise HTTPException(status_code=404, detail="No spectrum data remained above the minimum input m/z")
 
     # Agilent's "start charge maximum" can still yield envelopes above that
     # charge in high-mass windows; expand internal search for high mass limits.
@@ -2113,8 +2410,8 @@ def run_router_copy(payload: dict = Body(...)):
             )
             results.append(result)
             continue
-        if not source_folder.is_dir() or not source_folder.name.lower().endswith(".d"):
-            result["detail"] = "Source path is not a .D folder"
+        if not _is_supported_sample_folder(source_folder):
+            result["detail"] = "Source path is not a supported sample folder"
             skipped_count += 1
             log_path = _append_router_log(
                 event="copy",
@@ -2459,10 +2756,16 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     components = payload.get("components", [])
     if not isinstance(components, list):
         raise HTTPException(status_code=400, detail="components must be a list")
+    spectrum = payload.get("spectrum")
+    if not isinstance(spectrum, dict):
+        spectrum = {}
 
     export_format = str(payload.get("format", "png")).lower()
     if export_format not in {"png", "svg", "pdf"}:
         raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+    variant = str(payload.get("variant", "standard")).lower()
+    if variant not in {"standard", "wide-inset", "side-by-side"}:
+        raise HTTPException(status_code=400, detail="variant must be one of: standard, wide-inset, side-by-side")
 
     try:
         dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
@@ -2473,8 +2776,10 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     style = payload.get("style", {})
     if not isinstance(style, dict):
         style = {}
+    style = dict(style)
+    style["deconv_export_variant"] = variant
 
-    fig = plotting.create_deconvoluted_masses_figure(sample_name, components, style)
+    fig = plotting.create_deconvoluted_masses_figure(sample_name, components, style, spectrum=spectrum)
     try:
         if export_format == "svg":
             content = plotting.export_figure_svg(fig)
@@ -2491,7 +2796,13 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     base_name = sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name
     safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in base_name).strip("_")
     safe_name = safe_name or "sample"
-    filename = f"{safe_name}_batch_deconvoluted_masses.{export_format}"
+    if variant == "wide-inset":
+        filename_suffix = "batch_deconvoluted_masses_wide"
+    elif variant == "side-by-side":
+        filename_suffix = "batch_deconvoluted_masses_side_by_side"
+    else:
+        filename_suffix = "batch_deconvoluted_masses"
+    filename = f"{safe_name}_{filename_suffix}.{export_format}"
 
     return Response(
         content=content,

@@ -126,6 +126,7 @@ const api = {
       max_overlap: params.max_overlap,
       pwhh: params.fwhm || params.pwhh,
       noise_cutoff: params.noise_cutoff,
+      min_input_mz: params.min_input_mz,
       low_mw: params.mass_range_low || params.low_mw,
       high_mw: params.mass_range_high || params.high_mw,
       mw_assign_cutoff: params.mw_assign_cutoff,
