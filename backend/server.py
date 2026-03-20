@@ -70,9 +70,26 @@ _sample_cache_state: dict[str, str] = {}
 RUN_SETTLE_SECONDS = 120
 WASH_POSITIONS = {91}
 DEFAULT_DECONV_MIN_INPUT_MZ = 100.0
+DEFAULT_DECONV_MIN_CHARGE = 1
+DEFAULT_DECONV_MAX_CHARGE = 50
+DEFAULT_DECONV_MIN_PEAKS = 3
+DEFAULT_DECONV_MW_AGREEMENT = 0.0005
+DEFAULT_DECONV_CONTIG_MIN = 3
+DEFAULT_DECONV_ABUNDANCE_CUTOFF = 0.05
+DEFAULT_DECONV_ENVELOPE_CUTOFF = 0.50
+DEFAULT_DECONV_MAX_OVERLAP = 0.0
+DEFAULT_DECONV_PWHH = 0.6
+DEFAULT_DECONV_NOISE_CUTOFF = 1000.0
+DEFAULT_DECONV_LOW_MW = 500.0
+DEFAULT_DECONV_HIGH_MW = 50000.0
+DEFAULT_DECONV_MW_ASSIGN_CUTOFF = 0.40
+DEFAULT_DECONV_USE_MZ_AGREEMENT = False
+DEFAULT_DECONV_USE_MONOISOTOPIC = False
+DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED = True
 _router_log_lock = Lock()
 _router_logged_item_state: dict[str, str] = {}
 _router_last_window_signature = ""
+ROUTER_LOG_RETENTION_DAYS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +191,9 @@ def _append_router_log(
     log_path = _router_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     header = "timestamp\tevent\tstatus\trun_name\tsource_path\tdestination_path\tdetail\n"
+    now_dt = datetime.datetime.now()
     line = "\t".join([
-        datetime.datetime.now().isoformat(),
+        now_dt.isoformat(),
         _sanitize_log_field(event),
         _sanitize_log_field(status),
         _sanitize_log_field(run_name),
@@ -184,10 +202,32 @@ def _append_router_log(
         _sanitize_log_field(detail),
     ]) + "\n"
     with _router_log_lock:
-        needs_header = not log_path.exists()
-        with log_path.open("a", encoding="utf-8") as handle:
-            if needs_header:
-                handle.write(header)
+        cutoff = now_dt - datetime.timedelta(days=max(1, int(ROUTER_LOG_RETENTION_DAYS)))
+        preserved_lines: list[str] = []
+
+        if log_path.exists():
+            try:
+                existing_lines = log_path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                existing_lines = []
+            if existing_lines and existing_lines[0].startswith("timestamp\t"):
+                existing_lines = existing_lines[1:]
+            for existing_line in existing_lines:
+                if not existing_line.strip():
+                    continue
+                timestamp_text = existing_line.split("\t", 1)[0].strip()
+                try:
+                    timestamp_value = datetime.datetime.fromisoformat(timestamp_text)
+                except Exception:
+                    preserved_lines.append(existing_line)
+                    continue
+                if timestamp_value >= cutoff:
+                    preserved_lines.append(existing_line)
+
+        with log_path.open("w", encoding="utf-8") as handle:
+            handle.write(header)
+            for existing_line in preserved_lines:
+                handle.write(existing_line.rstrip("\n") + "\n")
             handle.write(line)
     return str(log_path)
 
@@ -1363,67 +1403,64 @@ def _filter_spectrum_by_min_input_mz(
     return mz_values[mask], intensity_values[mask]
 
 
-def _run_default_report_deconvolution(mz_arr: np.ndarray, intensity_arr: np.ndarray) -> list[dict]:
-    """Run default deconvolution matching the Deconvolution tab defaults exactly."""
-    if mz_arr is None or intensity_arr is None or len(mz_arr) == 0:
-        return []
+def _get_default_deconvolution_parameters() -> dict[str, Union[int, float, bool]]:
+    return {
+        "min_charge": DEFAULT_DECONV_MIN_CHARGE,
+        "max_charge": DEFAULT_DECONV_MAX_CHARGE,
+        "min_peaks": DEFAULT_DECONV_MIN_PEAKS,
+        "mw_agreement": DEFAULT_DECONV_MW_AGREEMENT,
+        "contig_min": DEFAULT_DECONV_CONTIG_MIN,
+        "abundance_cutoff": DEFAULT_DECONV_ABUNDANCE_CUTOFF,
+        "envelope_cutoff": DEFAULT_DECONV_ENVELOPE_CUTOFF,
+        "max_overlap": DEFAULT_DECONV_MAX_OVERLAP,
+        "pwhh": DEFAULT_DECONV_PWHH,
+        "noise_cutoff": DEFAULT_DECONV_NOISE_CUTOFF,
+        "min_input_mz": DEFAULT_DECONV_MIN_INPUT_MZ,
+        "low_mw": DEFAULT_DECONV_LOW_MW,
+        "high_mw": DEFAULT_DECONV_HIGH_MW,
+        "mw_assign_cutoff": DEFAULT_DECONV_MW_ASSIGN_CUTOFF,
+        "use_mz_agreement": DEFAULT_DECONV_USE_MZ_AGREEMENT,
+        "use_monoisotopic": DEFAULT_DECONV_USE_MONOISOTOPIC,
+        "include_singly_charged": DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED,
+    }
 
-    mz_arr, intensity_arr = _filter_spectrum_by_min_input_mz(
-        mz_arr,
-        intensity_arr,
-        DEFAULT_DECONV_MIN_INPUT_MZ,
+
+def _normalize_deconvolution_parameters(raw_params: Optional[dict]) -> dict[str, Union[int, float, bool]]:
+    raw = raw_params if isinstance(raw_params, dict) else {}
+    params = _get_default_deconvolution_parameters()
+
+    params["min_charge"] = max(1, _coerce_int(raw.get("min_charge"), int(params["min_charge"])))
+    params["max_charge"] = max(2, _coerce_int(raw.get("max_charge"), int(params["max_charge"])))
+    params["min_peaks"] = max(2, min(10, _coerce_int(raw.get("min_peaks"), int(params["min_peaks"]))))
+    params["mw_agreement"] = max(0.0, _coerce_float(raw.get("mw_agreement"), float(params["mw_agreement"])))
+    params["contig_min"] = max(2, _coerce_int(raw.get("contig_min"), int(params["contig_min"])))
+    params["abundance_cutoff"] = max(0.0, _coerce_float(raw.get("abundance_cutoff"), float(params["abundance_cutoff"])))
+    params["envelope_cutoff"] = max(
+        0.0,
+        _coerce_float(raw.get("envelope_cutoff", raw.get("r2_cutoff")), float(params["envelope_cutoff"])),
     )
-    if len(mz_arr) == 0:
-        return []
-
-    noise_cutoff = 1000.0
-    low_mw = 500.0
-    high_mw = 50000.0
-    pwhh = 0.6
-
-    # Multi-charge deconvolution (min_charge=2 internally, same as tab endpoint)
-    components = analysis.deconvolute_protein_local_lcms_machine_like(
-        mz_arr,
-        intensity_arr,
-        min_charge=2,
-        max_charge=50,
-        min_peaks=3,
-        noise_cutoff=noise_cutoff,
-        abundance_cutoff=0.05,
-        mw_agreement=0.0002,
-        mw_assign_cutoff=0.40,
-        envelope_cutoff=0.50,
-        max_overlap=0.0,
-        pwhh=pwhh,
-        low_mw=low_mw,
-        high_mw=high_mw,
-        contig_min=3,
-        use_mz_agreement=False,
-        use_monoisotopic_proton=False,
+    params["max_overlap"] = max(0.0, _coerce_float(raw.get("max_overlap"), float(params["max_overlap"])))
+    params["pwhh"] = max(0.05, _coerce_float(raw.get("pwhh", raw.get("fwhm")), float(params["pwhh"])))
+    params["noise_cutoff"] = max(0.0, _coerce_float(raw.get("noise_cutoff"), float(params["noise_cutoff"])))
+    params["min_input_mz"] = max(0.0, _coerce_float(raw.get("min_input_mz"), float(params["min_input_mz"])))
+    params["low_mw"] = max(0.0, _coerce_float(raw.get("low_mw", raw.get("mass_range_low")), float(params["low_mw"])))
+    params["high_mw"] = max(params["low_mw"], _coerce_float(raw.get("high_mw", raw.get("mass_range_high")), float(params["high_mw"])))
+    params["mw_assign_cutoff"] = max(0.0, _coerce_float(raw.get("mw_assign_cutoff"), float(params["mw_assign_cutoff"])))
+    params["use_mz_agreement"] = _coerce_bool(raw.get("use_mz_agreement"), bool(params["use_mz_agreement"]))
+    params["use_monoisotopic"] = _coerce_bool(
+        raw.get("use_monoisotopic", raw.get("monoisotopic")),
+        bool(params["use_monoisotopic"]),
     )
-
-    # Singly-charged detection (matches tab default: include_singly_charged=True, min_charge=1)
-    exclude_ranges = []
-    for comp in components:
-        mzs = comp.get("ion_mzs", [])
-        if mzs:
-            exclude_ranges.append((min(mzs) - 2.0, max(mzs) + 2.0))
-
-    singly = analysis.detect_singly_charged(
-        mz_arr,
-        intensity_arr,
-        noise_cutoff=noise_cutoff,
-        low_mw=low_mw,
-        high_mw=min(high_mw, 2000.0),
-        pwhh=pwhh,
-        exclude_mz_ranges=exclude_ranges,
-        use_monoisotopic_proton=False,
+    params["include_singly_charged"] = _coerce_bool(
+        raw.get("include_singly_charged"),
+        bool(params["include_singly_charged"]),
     )
-    components.extend(singly)
+    return params
 
-    # Serialize to match the /api/deconvolute response format
+
+def _serialize_deconvolution_components(components: list[dict]) -> list[dict]:
     results = []
-    for comp in components:
+    for comp in components or []:
         results.append({
             "mass": float(comp.get("mass", 0)),
             "mass_std": float(comp.get("mass_std", 0)),
@@ -1436,11 +1473,102 @@ def _run_default_report_deconvolution(mz_arr: np.ndarray, intensity_arr: np.ndar
             "ion_charges": comp.get("ion_charges", []),
             "ion_intensities": comp.get("ion_intensities", []),
         })
+    return results
 
-    # Filter and sort by abundance
+
+def _sort_serialized_deconvolution_results(results: list[dict]) -> list[dict]:
+    serialized = _serialize_deconvolution_components(results)
+    serialized.sort(key=lambda comp: float(comp.get("intensity", 0) or 0), reverse=True)
+    return serialized
+
+
+def _run_report_deconvolution(
+    mz_arr: np.ndarray,
+    intensity_arr: np.ndarray,
+    raw_params: Optional[dict] = None,
+) -> list[dict]:
+    """Run report deconvolution using the current deconvolution-tab parameters."""
+    if mz_arr is None or intensity_arr is None or len(mz_arr) == 0:
+        return []
+
+    params = _normalize_deconvolution_parameters(raw_params)
+    mz_arr, intensity_arr = _filter_spectrum_by_min_input_mz(
+        mz_arr,
+        intensity_arr,
+        float(params["min_input_mz"]),
+    )
+    if len(mz_arr) == 0:
+        return []
+
+    low_mw = float(params["low_mw"])
+    high_mw = float(params["high_mw"])
+    effective_max_charge = int(params["max_charge"])
+    if high_mw > DEFAULT_DECONV_HIGH_MW:
+        effective_max_charge = max(effective_max_charge, int(np.ceil(high_mw / 1000.0)))
+    effective_max_charge = max(2, min(100, effective_max_charge))
+
+    components = analysis.deconvolute_protein_local_lcms_machine_like(
+        mz_arr,
+        intensity_arr,
+        min_charge=max(int(params["min_charge"]), 2),
+        max_charge=effective_max_charge,
+        min_peaks=int(params["min_peaks"]),
+        noise_cutoff=float(params["noise_cutoff"]),
+        abundance_cutoff=float(params["abundance_cutoff"]),
+        mw_agreement=float(params["mw_agreement"]),
+        mw_assign_cutoff=float(params["mw_assign_cutoff"]),
+        envelope_cutoff=float(params["envelope_cutoff"]),
+        max_overlap=float(params["max_overlap"]),
+        pwhh=float(params["pwhh"]),
+        low_mw=low_mw,
+        high_mw=high_mw,
+        contig_min=int(params["contig_min"]),
+        use_mz_agreement=bool(params["use_mz_agreement"]),
+        use_monoisotopic_proton=bool(params["use_monoisotopic"]),
+    )
+
+    if bool(params["include_singly_charged"]) and int(params["min_charge"]) <= 1:
+        exclude_ranges = []
+        for comp in components:
+            mzs = comp.get("ion_mzs", [])
+            if mzs:
+                exclude_ranges.append((min(mzs) - 2.0, max(mzs) + 2.0))
+
+        singly = analysis.detect_singly_charged(
+            mz_arr,
+            intensity_arr,
+            noise_cutoff=float(params["noise_cutoff"]),
+            low_mw=low_mw,
+            high_mw=min(high_mw, 2000.0),
+            pwhh=float(params["pwhh"]),
+            exclude_mz_ranges=exclude_ranges,
+            use_monoisotopic_proton=bool(params["use_monoisotopic"]),
+        )
+        components.extend(singly)
+
+    results = _serialize_deconvolution_components(components)
     filtered = [r for r in results if low_mw <= r["mass"] <= high_mw]
     filtered.sort(key=lambda c: c["intensity"], reverse=True)
-    return filtered
+    return _sort_serialized_deconvolution_results(filtered)
+
+
+def _format_deconvolution_parameters_for_report(raw_params: Optional[dict]) -> dict[str, str]:
+    params = _normalize_deconvolution_parameters(raw_params)
+    return {
+        "Mass range": f"{float(params['low_mw']):,.0f} - {float(params['high_mw']):,.0f} Da",
+        "Charge range": f"{int(params['min_charge'])} - {int(params['max_charge'])}",
+        "Minimum ions": str(int(params["min_peaks"])),
+        "MW agreement": f"{float(params['mw_agreement']) * 100:.2f}%",
+        "Contiguity min": str(int(params["contig_min"])),
+        "Abundance cutoff": f"{float(params['abundance_cutoff']) * 100:.1f}%",
+        "Envelope R²": f"{float(params['envelope_cutoff']) * 100:.1f}%",
+        "Peak width FWHM": f"{float(params['pwhh']):.2f}",
+        "Minimum input m/z": f"{float(params['min_input_mz']):.0f}",
+        "Noise cutoff": f"{float(params['noise_cutoff']):,.0f} counts",
+        "Monoisotopic proton": "On" if bool(params["use_monoisotopic"]) else "Off",
+    }
+
+
 
 
 def _subtract_chromatograms(
@@ -1791,7 +1919,10 @@ def get_config():
 
 
 @app.get("/api/browse")
-def browse_folder(path: str = Query(..., description="Directory to list")):
+def browse_folder(
+    path: str = Query(..., description="Directory to list"),
+    include_state: bool = Query(False, description="Include run-state metadata for sample bundles"),
+):
     """List contents of a directory, including supported sample bundles."""
     p = Path(_normalize_filesystem_path(path))
     if not p.exists():
@@ -1811,7 +1942,7 @@ def browse_folder(path: str = Query(..., description="Directory to list")):
                 "is_dir": entry.is_dir(),
                 "is_d_folder": is_d,
             }
-            if is_d:
+            if is_d and include_state:
                 item.update(_inspect_sample_run_state(entry))
             items.append(item)
     except PermissionError:
@@ -2247,23 +2378,23 @@ def deconvolute(
     path: str = Query(...),
     start: float = Query(...),
     end: float = Query(...),
-    min_charge: int = Query(1),
-    max_charge: int = Query(50),
-    min_peaks: int = Query(3),
-    mw_agreement: float = Query(0.0002),
-    contig_min: int = Query(3),
-    abundance_cutoff: float = Query(0.05),
-    envelope_cutoff: float = Query(0.50),
-    max_overlap: float = Query(0.0),
-    pwhh: float = Query(0.6),
-    noise_cutoff: float = Query(1000.0),
+    min_charge: int = Query(DEFAULT_DECONV_MIN_CHARGE),
+    max_charge: int = Query(DEFAULT_DECONV_MAX_CHARGE),
+    min_peaks: int = Query(DEFAULT_DECONV_MIN_PEAKS),
+    mw_agreement: float = Query(DEFAULT_DECONV_MW_AGREEMENT),
+    contig_min: int = Query(DEFAULT_DECONV_CONTIG_MIN),
+    abundance_cutoff: float = Query(DEFAULT_DECONV_ABUNDANCE_CUTOFF),
+    envelope_cutoff: float = Query(DEFAULT_DECONV_ENVELOPE_CUTOFF),
+    max_overlap: float = Query(DEFAULT_DECONV_MAX_OVERLAP),
+    pwhh: float = Query(DEFAULT_DECONV_PWHH),
+    noise_cutoff: float = Query(DEFAULT_DECONV_NOISE_CUTOFF),
     min_input_mz: float = Query(DEFAULT_DECONV_MIN_INPUT_MZ),
-    low_mw: float = Query(500.0),
-    high_mw: float = Query(50000.0),
-    mw_assign_cutoff: float = Query(0.40),
-    use_mz_agreement: bool = Query(False),
-    use_monoisotopic: bool = Query(False),
-    include_singly_charged: bool = Query(True),
+    low_mw: float = Query(DEFAULT_DECONV_LOW_MW),
+    high_mw: float = Query(DEFAULT_DECONV_HIGH_MW),
+    mw_assign_cutoff: float = Query(DEFAULT_DECONV_MW_ASSIGN_CUTOFF),
+    use_mz_agreement: bool = Query(DEFAULT_DECONV_USE_MZ_AGREEMENT),
+    use_monoisotopic: bool = Query(DEFAULT_DECONV_USE_MONOISOTOPIC),
+    include_singly_charged: bool = Query(DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED),
 ):
     """Run deconvolution on summed spectrum and return detected components."""
     sample = _get_sample(path)
@@ -2327,20 +2458,7 @@ def deconvolute(
         components.extend(singly)
 
     # Serialize components
-    results = []
-    for comp in components:
-        results.append({
-            "mass": float(comp.get("mass", 0)),
-            "mass_std": float(comp.get("mass_std", 0)),
-            "intensity": float(comp.get("intensity", 0)),
-            "num_charges": int(comp.get("num_charges", 0)),
-            "charge_states": comp.get("charge_states", []),
-            "peaks_found": int(comp.get("peaks_found", 0)),
-            "r2": float(comp.get("r2", 0)),
-            "ion_mzs": comp.get("ion_mzs", []),
-            "ion_charges": comp.get("ion_charges", []),
-            "ion_intensities": comp.get("ion_intensities", []),
-        })
+    results = _serialize_deconvolution_components(components)
 
     return {
         "components": results,
@@ -3055,6 +3173,9 @@ def export_report_pdf(payload: dict = Body(...)):
     deconv_results = payload.get("deconv_results")
     if not isinstance(deconv_results, list):
         deconv_results = []
+    deconv_results = _sort_serialized_deconvolution_results(deconv_results)
+
+    deconv_parameters = _normalize_deconvolution_parameters(payload.get("deconv_parameters"))
 
     deconv_time_range = payload.get("deconv_time_range")
     if isinstance(deconv_time_range, (list, tuple)) and len(deconv_time_range) == 2:
@@ -3075,7 +3196,7 @@ def export_report_pdf(payload: dict = Body(...)):
         if not deconv_results and deconv_time_range is not None:
             report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
             if report_mz is not None and len(report_mz) > 0:
-                deconv_results = _run_default_report_deconvolution(report_mz, report_intensity)
+                deconv_results = _run_report_deconvolution(report_mz, report_intensity, deconv_parameters)
     else:
         deconv_results = []
         deconv_time_range = None
@@ -3086,11 +3207,7 @@ def export_report_pdf(payload: dict = Body(...)):
     pdf_buffer = io.BytesIO()
     with PdfPages(pdf_buffer) as pdf:
         # Page 1: sample info + deconvolution table
-        params = {
-            "Mass range": "500 - 50,000 Da",
-            "Charge range": "1 - 50",
-            "Noise cutoff": "1,000 counts",
-        }
+        params = _format_deconvolution_parameters_for_report(deconv_parameters)
         fig_info = plotting.create_report_info_page(
             sample_name=sample.name,
             acq_method=sample.acq_method,
@@ -3131,7 +3248,7 @@ def export_report_pdf(payload: dict = Body(...)):
 
         # Page 3/4: deconvolution views
         if deconv_results and deconv_time_range is not None:
-            display_results = deconv_results[:10]
+            display_results = deconv_results
             deconv_style = {
                 "fig_width": A4_W - 0.8,
                 "line_width": line_width,
@@ -3162,18 +3279,24 @@ def export_report_pdf(payload: dict = Body(...)):
                     "line_width": line_width,
                     "show_grid": True,
                 }
-                fig_ions = plotting.create_ion_selection_figure(
-                    report_mz,
-                    report_intensity,
-                    display_results,
-                    ion_style,
-                )
-                fig_ions.set_size_inches(A4_W, A4_H)
-                if fig_ions._suptitle:
-                    fig_ions._suptitle.set_y(0.98)
-                fig_ions.subplots_adjust(top=0.93)
-                pdf.savefig(fig_ions)
-                plt.close(fig_ions)
+                ion_components_per_page = 4
+                global_top_intensity = float(display_results[0].get("intensity", 0) or 0)
+                for offset in range(0, len(display_results), ion_components_per_page):
+                    page_results = display_results[offset:offset + ion_components_per_page]
+                    fig_ions = plotting.create_ion_selection_figure(
+                        report_mz,
+                        report_intensity,
+                        page_results,
+                        ion_style,
+                        panel_slots=ion_components_per_page,
+                        reference_intensity=global_top_intensity,
+                    )
+                    fig_ions.set_size_inches(A4_W, A4_H)
+                    if fig_ions._suptitle:
+                        fig_ions._suptitle.set_y(0.98)
+                    fig_ions.subplots_adjust(top=0.93)
+                    pdf.savefig(fig_ions)
+                    plt.close(fig_ions)
 
     pdf_buffer.seek(0)
     base_name = sample.name[:-2] if sample.name.lower().endswith(".d") else sample.name

@@ -77,7 +77,17 @@ def _normalize_deconvolution_export_results(deconv_results: list) -> list[dict]:
             'mass': mass,
             'intensity': intensity,
         })
+    normalized.sort(key=lambda item: item['intensity'], reverse=True)
     return normalized
+
+
+def _sort_deconvolution_components_by_intensity(deconv_results: list) -> list[dict]:
+    components: list[dict] = []
+    for item in deconv_results or []:
+        if isinstance(item, dict):
+            components.append(item)
+    components.sort(key=lambda item: _coerce_finite_float(item.get('intensity'), 0.0), reverse=True)
+    return components
 
 
 def _normalize_deconvolution_component(component: Optional[dict]) -> Optional[dict]:
@@ -1556,6 +1566,7 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
     deconv_x_max_da = _coerce_finite_float(style.get('deconv_x_max_da', 50000.0), 50000.0)
     deconv_show_obs_calc = _coerce_bool(style.get('deconv_show_obs_calc', False), False)
     deconv_calc_mass_da = style.get('deconv_calc_mass_da')
+    sorted_results = _sort_deconvolution_components_by_intensity(deconv_results)
 
     fig = plt.figure(figsize=(fig_width, 5.5))  # Smaller, less zoomed in
 
@@ -1613,8 +1624,8 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
         # Overlay theoretical charge-state guides for the top result.
         # Snap each guide to a nearby detected spectrum peak to avoid
         # visual mismatch between dashed guides and the blue trace.
-        if deconv_results and len(deconv_results) > 0 and len(peak_mz_values) > 0:
-            top_result = deconv_results[0]
+        if sorted_results and len(sorted_results) > 0 and len(peak_mz_values) > 0:
+            top_result = sorted_results[0]
             theoretical = get_theoretical_mz(top_result['mass'], top_result['charge_states'])
             snap_tolerance_da = 1.5
             used_peak_indices = set()
@@ -1631,7 +1642,7 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
     ax_deconv = fig.add_subplot(gs[1, 1])
     _plot_deconvoluted_masses_panel(
         ax_deconv,
-        deconv_results,
+        sorted_results,
         show_grid=show_grid,
         x_min_da=deconv_x_min_da,
         x_max_da=deconv_x_max_da,
@@ -1673,14 +1684,15 @@ def create_deconvoluted_masses_figure(
     deconv_show_subtitle = _coerce_bool(style.get('deconv_show_subtitle', True), True)
     deconv_export_variant = str(style.get('deconv_export_variant', 'standard') or 'standard').lower()
     sample_subtitle = (sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name) if deconv_show_subtitle else None
+    sorted_results = _sort_deconvolution_components_by_intensity(deconv_results)
 
     # Match the physical panel size used by create_deconvolution_figure()
     # for the bottom-right deconvoluted-masses subplot.
     panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
 
     selected_component = _normalize_deconvolution_component(style.get('deconv_selected_component'))
-    if selected_component is None and isinstance(deconv_results, list) and len(deconv_results) > 0:
-        selected_component = _normalize_deconvolution_component(deconv_results[0])
+    if selected_component is None and len(sorted_results) > 0:
+        selected_component = _normalize_deconvolution_component(sorted_results[0])
 
     if deconv_export_variant == 'side-by-side':
         fig, axes = plt.subplots(
@@ -1692,7 +1704,7 @@ def create_deconvoluted_masses_figure(
         ax_mass, ax_inset = axes
         _plot_deconvoluted_masses_panel(
             ax_mass,
-            deconv_results,
+            sorted_results,
             show_grid=show_grid,
             x_min_da=deconv_x_min_da,
             x_max_da=deconv_x_max_da,
@@ -1713,7 +1725,7 @@ def create_deconvoluted_masses_figure(
     fig, ax = plt.subplots(1, 1, figsize=(fig_width_in, panel_height_in))
     _plot_deconvoluted_masses_panel(
         ax,
-        deconv_results,
+        sorted_results,
         show_grid=show_grid,
         x_min_da=deconv_x_min_da,
         x_max_da=deconv_x_max_da,
@@ -1876,11 +1888,13 @@ def create_calibration_curve_export_figure(
             continue
         x_val = _coerce_finite_float(point.get('x'), np.nan)
         y_val = _coerce_finite_float(point.get('y'), np.nan)
+        y_sd = _coerce_finite_float(point.get('y_sd'), 0.0)
         if not np.isfinite(x_val) or not np.isfinite(y_val):
             continue
         normalized_points.append({
             'x': x_val,
             'y': y_val,
+            'y_sd': max(0.0, y_sd) if np.isfinite(y_sd) else 0.0,
             'label': str(point.get('label') or f"Point {idx + 1}"),
         })
 
@@ -1901,7 +1915,8 @@ def create_calibration_curve_export_figure(
     x_margin = max(2.0, x_span * 0.05)
     x_min = min(0.0, float(np.min(x_vals)) - x_margin)
     x_max = float(np.max(x_vals)) + x_margin
-    y_max = float(np.max(y_vals)) if y_vals.size > 0 else 1.0
+    y_err = np.asarray([point.get('y_sd', 0.0) for point in normalized_points], dtype=float)
+    y_max = float(np.max(y_vals + y_err)) if y_vals.size > 0 else 1.0
     y_max = max(y_max * 1.08, 1.0)
 
     if np.isfinite(slope) and np.isfinite(intercept):
@@ -1925,6 +1940,18 @@ def create_calibration_curve_export_figure(
         clip_on=False,
         zorder=3,
     )
+    if np.any(y_err > 0):
+        ax.errorbar(
+            x_vals,
+            y_vals,
+            yerr=y_err,
+            fmt='none',
+            ecolor=str(style.get('point_edge_color') or "#0d4f8a"),
+            elinewidth=max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8)),
+            capsize=3,
+            capthick=max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8)),
+            zorder=2.5,
+        )
 
     ax.set_title(title, fontweight='bold', y=1.03)
     ax.set_xlabel(x_label)
@@ -1960,6 +1987,8 @@ def create_ion_selection_figure(
     intensity: np.ndarray,
     deconv_results: list,
     style: dict = None,
+    panel_slots: Optional[int] = None,
+    reference_intensity: Optional[float] = None,
 ) -> matplotlib.figure.Figure:
     """Create a figure showing the m/z spectrum with colored markers for each
     deconvoluted component's selected ions (Agilent-style peak assignment).
@@ -1978,22 +2007,29 @@ def create_ion_selection_figure(
     fig_width = style.get('fig_width', 12)
     line_width = style.get('line_width', 0.8)
     show_grid = style.get('show_grid', True)
+    sorted_results = _sort_deconvolution_components_by_intensity(deconv_results)
 
     colors = ['#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
               '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
-    n_results = len(deconv_results)
+    n_results = len(sorted_results)
     if n_results == 0:
         fig, ax = plt.subplots(1, 1, figsize=(fig_width, 3))
         ax.text(0.5, 0.5, 'No results', ha='center', va='center', transform=ax.transAxes)
         return fig
 
-    fig, axes = plt.subplots(n_results, 1, figsize=(fig_width, 2.2 * n_results),
+    n_axes = max(n_results, int(panel_slots or n_results))
+    fig, axes = plt.subplots(n_axes, 1, figsize=(fig_width, 2.2 * n_axes),
                              sharex=True, squeeze=False)
 
     max_int = float(np.max(intensity)) if len(intensity) > 0 else 1.0
+    rel_reference_intensity = _coerce_finite_float(reference_intensity, np.nan)
+    if not np.isfinite(rel_reference_intensity) or rel_reference_intensity <= 0:
+        rel_reference_intensity = _coerce_finite_float(sorted_results[0].get('intensity'), 1.0)
+    if rel_reference_intensity <= 0:
+        rel_reference_intensity = 1.0
 
-    for idx, r in enumerate(deconv_results):
+    for idx, r in enumerate(sorted_results):
         ax = axes[idx, 0]
         color = colors[idx % len(colors)]
 
@@ -2030,7 +2066,7 @@ def create_ion_selection_figure(
         else:
             mass_str = f"{mass_val:.2f}"
         charges = r.get('charge_states', [])
-        rel_pct = r['intensity'] / deconv_results[0]['intensity'] * 100 if deconv_results[0]['intensity'] > 0 else 0
+        rel_pct = r['intensity'] / rel_reference_intensity * 100 if rel_reference_intensity > 0 else 0
         charge_str = f"z={min(charges)}-{max(charges)}" if len(charges) > 1 else f"z={charges[0]}" if charges else ""
         ax.set_title(f"{mass_str} Da  ({charge_str}, {rel_pct:.0f}%)", fontsize=8,
                      fontweight='bold', color=color, loc='left')
@@ -2042,7 +2078,10 @@ def create_ion_selection_figure(
         if show_grid:
             ax.grid(True, alpha=0.2)
 
-    axes[-1, 0].set_xlabel("m/z")
+    for idx in range(n_results, n_axes):
+        axes[idx, 0].set_axis_off()
+
+    axes[n_results - 1, 0].set_xlabel("m/z")
     fig.suptitle("Ion Selection per Component", fontsize=10, fontweight='bold')
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     return fig
@@ -2160,7 +2199,7 @@ def create_report_info_page(
         lines.append(hdr)
         lines.append(hdr2)
         top_int = results[0]['intensity']
-        for i, r in enumerate(results[:15]):
+        for i, r in enumerate(results):
             label = chr(ord('A') + i) if i < 26 else str(i + 1)
             rel = r['intensity'] / top_int * 100
             lines.append(

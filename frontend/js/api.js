@@ -47,8 +47,11 @@ const api = {
     return apiFetch('/api/config');
   },
 
-  browse(path) {
-    return apiFetch(`/api/browse?path=${encodeURIComponent(path)}`);
+  browse(path, options = {}) {
+    return apiFetch(`/api/browse?${qs({
+      path,
+      include_state: options.includeState === true ? 1 : undefined,
+    })}`);
   },
 
   findDFolders(path, search) {

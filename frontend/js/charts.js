@@ -738,16 +738,34 @@ const charts = {
     const traces = [];
 
     if (usablePoints.length > 0) {
+      const errorArray = usablePoints.map((point) => {
+        const value = Number(point?.y_sd);
+        return Number.isFinite(value) && value > 0 ? value : 0;
+      });
+      const hasErrorBars = errorArray.some((value) => value > 0);
       traces.push({
         x: usablePoints.map((point) => Number(point.x)),
         y: usablePoints.map((point) => Number(point.y)),
         text: usablePoints.map((point) => point.label || ''),
-        customdata: usablePoints.map((point) => ({
-          label: point.label || '',
-          concentration: Number(point.x),
-          area: Number(point.y),
-        })),
-        hovertemplate: '%{customdata.label}<br>Concentration: %{customdata.concentration}<br>Area: %{customdata.area:.4e}<extra></extra>',
+        hovertext: usablePoints.map((point) => {
+          const replicateCount = Number(point?.replicate_count) || 1;
+          const sdValue = Number(point?.y_sd);
+          const samples = Array.isArray(point?.sample_names) ? point.sample_names.filter(Boolean).join(', ') : '';
+          const lines = [
+            `<b>${point.label || ''}</b>`,
+            `Concentration: ${Number(point.x)}`,
+            `Mean area: ${Number(point.y).toExponential(4)}`,
+          ];
+          if (replicateCount > 1) {
+            lines.push(`SD: ${Number.isFinite(sdValue) ? sdValue.toExponential(4) : '0.0000e+0'}`);
+            lines.push(`Replicates: ${replicateCount}`);
+          }
+          if (samples) {
+            lines.push(`Samples: ${samples}`);
+          }
+          return lines.join('<br>');
+        }),
+        hovertemplate: '%{hovertext}<extra></extra>',
         type: 'scatter',
         mode: 'markers',
         marker: {
@@ -755,6 +773,14 @@ const charts = {
           line: { color: '#0d4f8a', width: 1 },
           size: 8,
         },
+        error_y: hasErrorBars ? {
+          type: 'data',
+          array: errorArray,
+          visible: true,
+          color: '#0d4f8a',
+          thickness: 1.2,
+          width: 4,
+        } : undefined,
         showlegend: false,
       });
     }

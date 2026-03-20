@@ -10,11 +10,14 @@ const CUSTOM_MOUNTS_STORAGE_KEY = 'lcms-custom-mounts';
 const RUN_ROUTER_STORAGE_KEY = 'lcms-run-router-settings';
 const RUN_ROUTER_LOG_STORAGE_KEY = 'lcms-run-router-recent-log';
 const RUN_ROUTER_DEFAULT_MONITOR_LOOKBACK_DAYS = 7;
+const DEFAULT_DECONV_NOISE_CUTOFF = 1000.0;
+const DEFAULT_DECONV_LOW_MASS_DA = 500.0;
+const DEFAULT_DECONV_HIGH_MASS_DA = 50000.0;
 const DECONV_EXPERT_DEFAULTS = {
   minCharge: 1,
   maxCharge: 50,
   minIons: 3,
-  mwAgreePct: 0.02,
+  mwAgreePct: 0.05,
   contigMin: 3,
   abundancePct: 5,
   envelopePct: 50,
@@ -1249,7 +1252,9 @@ async function browseTo(path, options = {}) {
   const rememberMountCandidate = !!options.rememberMountCandidate;
   const sourcePath = options.sourcePath || targetPath;
   try {
-    const data = await api.browse(targetPath);
+    const data = await api.browse(targetPath, {
+      includeState: options.includeState === true,
+    });
     state.currentPath = data.path;
     state.browseItems = data.items || [];
     document.getElementById('path-input').value = data.path;
@@ -1468,19 +1473,28 @@ function refreshProgressionAssignmentsIfNeeded() {
   }
 }
 
-async function loadSampleMeta(path) {
+async function loadSampleMeta(path, options = {}) {
+  const silent = options.silent === true;
   try {
     const meta = await api.loadSample(path);
     state.loadedSamples[path] = meta;
     updateWavelengthCheckboxes();
     const sampleLabel = meta.name || path.split(/[\\/]/).pop();
+    if (silent) {
+      return meta;
+    }
     if (meta.run_in_progress) {
       toast(`Loaded partial run: ${sampleLabel} (still acquiring, not cached)`, 'warning');
     } else {
       toast(`Loaded: ${sampleLabel}`, 'success');
     }
+    return meta;
   } catch (err) {
-    toast(`Failed to load sample: ${err.message}`, 'error');
+    if (!silent) {
+      toast(`Failed to load sample: ${err.message}`, 'error');
+      return null;
+    }
+    throw err;
   }
 }
 
@@ -3585,7 +3599,7 @@ function buildUptakeAssayExportStyle() {
   };
 }
 
-function getUptakeAssayPointsFromData(data) {
+function getUptakeAssayRawPointsFromData(data) {
   const samples = Array.isArray(data?.samples) ? data.samples : [];
   return samples
     .map((sample) => {
@@ -3598,6 +3612,44 @@ function getUptakeAssayPointsFromData(data) {
       };
     })
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
+}
+
+function getUptakeAssayPointsFromData(data) {
+  const rawPoints = getUptakeAssayRawPointsFromData(data);
+  const grouped = new Map();
+
+  rawPoints.forEach((point) => {
+    const key = Number(point.x).toFixed(9);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        x: Number(point.x),
+        points: [],
+      });
+    }
+    grouped.get(key).points.push(point);
+  });
+
+  return Array.from(grouped.values())
+    .map((group) => {
+      const yValues = group.points.map((point) => Number(point.y));
+      const replicateCount = yValues.length;
+      const meanArea = yValues.reduce((sum, value) => sum + value, 0) / replicateCount;
+      let sdArea = 0;
+      if (replicateCount >= 2) {
+        const variance = yValues.reduce((sum, value) => sum + ((value - meanArea) ** 2), 0) / (replicateCount - 1);
+        sdArea = Math.sqrt(Math.max(variance, 0));
+      }
+      const sampleNames = group.points.map((point) => point.label);
+      return {
+        x: group.x,
+        y: meanArea,
+        y_sd: sdArea,
+        replicate_count: replicateCount,
+        label: replicateCount > 1 ? `${group.x} uM (n=${replicateCount})` : sampleNames[0],
+        sample_names: sampleNames,
+      };
+    })
     .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
 }
 
@@ -3671,10 +3723,15 @@ function renderUptakeAssaySummary(data, fit, pointCount) {
   const summary = document.getElementById('uptake-assay-summary');
   if (!summary) return;
   const sampleCount = Array.isArray(data?.samples) ? data.samples.length : 0;
+  const groupedPoints = getUptakeAssayPointsFromData(data);
+  const replicateGroupCount = groupedPoints.filter((point) => Number(point.replicate_count) > 1).length;
   const parts = [
     `<div class="metric"><span class="dot blue"></span> Samples: ${sampleCount}</div>`,
     `<div class="metric"><span class="dot green"></span> Points: ${pointCount}</div>`,
   ];
+  if (replicateGroupCount > 0) {
+    parts.push(`<div class="metric"><span class="dot yellow"></span> SD bars: ${replicateGroupCount} concentration${replicateGroupCount === 1 ? '' : 's'}</div>`);
+  }
   if (fit && Number.isFinite(fit.slope) && Number.isFinite(fit.intercept) && Number.isFinite(fit.rSquared)) {
     parts.push(`<div class="metric"><span class="dot red"></span> y = ${fit.slope.toFixed(1)}x ${fit.intercept >= 0 ? '+' : '-'} ${Math.abs(fit.intercept).toFixed(1)}</div>`);
     parts.push(`<div class="metric"><span class="dot yellow"></span> R2 = ${fit.rSquared.toFixed(4)}</div>`);
@@ -4826,6 +4883,77 @@ function getGlobalDeconvMassRangeParams() {
   return params;
 }
 
+function getCurrentDeconvolutionParameters() {
+  const globalMassRange = getGlobalDeconvMassRangeParams();
+  const expertMode = document.getElementById('expert-mode-toggle')?.checked === true;
+
+  const params = {
+    min_charge: DECONV_EXPERT_DEFAULTS.minCharge,
+    max_charge: DECONV_EXPERT_DEFAULTS.maxCharge,
+    min_peaks: DECONV_EXPERT_DEFAULTS.minIons,
+    mw_agreement: DECONV_EXPERT_DEFAULTS.mwAgreePct / 100.0,
+    contig_min: DECONV_EXPERT_DEFAULTS.contigMin,
+    abundance_cutoff: DECONV_EXPERT_DEFAULTS.abundancePct / 100.0,
+    r2_cutoff: DECONV_EXPERT_DEFAULTS.envelopePct / 100.0,
+    fwhm: DECONV_EXPERT_DEFAULTS.fwhm,
+    min_input_mz: DECONV_EXPERT_DEFAULTS.minInputMz,
+    mass_range_low: Number.isFinite(globalMassRange.mass_range_low) ? globalMassRange.mass_range_low : DEFAULT_DECONV_LOW_MASS_DA,
+    mass_range_high: Number.isFinite(globalMassRange.mass_range_high) ? globalMassRange.mass_range_high : DEFAULT_DECONV_HIGH_MASS_DA,
+    noise_cutoff: DEFAULT_DECONV_NOISE_CUTOFF,
+    monoisotopic: DECONV_EXPERT_DEFAULTS.monoisotopic,
+    include_singly_charged: true,
+  };
+
+  if (!expertMode) {
+    return params;
+  }
+
+  const minCharge = parseInt(document.getElementById('dp-min-charge')?.value, 10);
+  const maxCharge = parseInt(document.getElementById('dp-max-charge')?.value, 10);
+  const minIons = parseInt(document.getElementById('dp-min-ions')?.value, 10);
+  const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree')?.value);
+  const contigMin = parseInt(document.getElementById('dp-contig-min')?.value, 10);
+  const abundancePct = parseFloat(document.getElementById('dp-abundance')?.value);
+  const envelopePct = parseFloat(document.getElementById('dp-r2')?.value);
+  const fwhm = parseFloat(document.getElementById('dp-fwhm')?.value);
+  const minInputMz = parseFloat(document.getElementById('dp-min-input-mz')?.value);
+  const massLow = parseFloat(document.getElementById('dp-mass-low')?.value);
+  const massHigh = parseFloat(document.getElementById('dp-mass-high')?.value);
+  const noiseCutoff = parseFloat(document.getElementById('dp-noise')?.value);
+
+  if (Number.isFinite(minCharge)) params.min_charge = minCharge;
+  if (Number.isFinite(maxCharge)) params.max_charge = maxCharge;
+  if (Number.isFinite(minIons)) params.min_peaks = minIons;
+  if (Number.isFinite(mwAgreePct)) params.mw_agreement = mwAgreePct / 100.0;
+  if (Number.isFinite(contigMin)) params.contig_min = contigMin;
+  if (Number.isFinite(abundancePct)) params.abundance_cutoff = abundancePct / 100.0;
+  if (Number.isFinite(envelopePct)) params.r2_cutoff = envelopePct / 100.0;
+  if (Number.isFinite(fwhm)) params.fwhm = fwhm;
+  if (Number.isFinite(minInputMz)) params.min_input_mz = minInputMz;
+  if (Number.isFinite(massLow)) params.mass_range_low = massLow;
+  if (Number.isFinite(massHigh)) params.mass_range_high = massHigh;
+  if (Number.isFinite(noiseCutoff)) params.noise_cutoff = noiseCutoff;
+  params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
+
+  return params;
+}
+
+function getCurrentDeconvolutionTimeRange() {
+  const start = parseFloat(document.getElementById('deconv-start')?.value);
+  const end = parseFloat(document.getElementById('deconv-end')?.value);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return [start, end];
+  }
+  if (Array.isArray(state.deconvTimeRange) && state.deconvTimeRange.length === 2) {
+    const fallbackStart = Number(state.deconvTimeRange[0]);
+    const fallbackEnd = Number(state.deconvTimeRange[1]);
+    if (Number.isFinite(fallbackStart) && Number.isFinite(fallbackEnd) && fallbackEnd > fallbackStart) {
+      return [fallbackStart, fallbackEnd];
+    }
+  }
+  return null;
+}
+
 function restoreDefaultDeconvExpertSettings() {
   const idToValue = {
     'dp-min-charge': DECONV_EXPERT_DEFAULTS.minCharge,
@@ -4862,33 +4990,8 @@ function buildDeconvolutionRequest(path, startTime, endTime) {
     start_time: startTime,
     end_time: endTime,
     ion_mode: document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive',
-    min_input_mz: DECONV_EXPERT_DEFAULTS.minInputMz,
+    ...getCurrentDeconvolutionParameters(),
   };
-  Object.assign(params, getGlobalDeconvMassRangeParams());
-
-  if (document.getElementById('expert-mode-toggle')?.checked) {
-    params.min_charge = parseInt(document.getElementById('dp-min-charge')?.value, 10);
-    params.max_charge = parseInt(document.getElementById('dp-max-charge')?.value, 10);
-    params.min_peaks = parseInt(document.getElementById('dp-min-ions')?.value, 10);
-    const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree')?.value);
-    const abundancePct = parseFloat(document.getElementById('dp-abundance')?.value);
-    const envelopePct = parseFloat(document.getElementById('dp-r2')?.value);
-    params.mw_agreement = Number.isFinite(mwAgreePct) ? (mwAgreePct / 100.0) : undefined;
-    params.contig_min = parseInt(document.getElementById('dp-contig-min')?.value, 10);
-    params.abundance_cutoff = Number.isFinite(abundancePct) ? (abundancePct / 100.0) : undefined;
-    params.r2_cutoff = Number.isFinite(envelopePct) ? (envelopePct / 100.0) : undefined;
-    params.fwhm = parseFloat(document.getElementById('dp-fwhm')?.value);
-    params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
-    const minInputMz = parseFloat(document.getElementById('dp-min-input-mz')?.value);
-    params.min_input_mz = Number.isFinite(minInputMz) ? minInputMz : DECONV_EXPERT_DEFAULTS.minInputMz;
-
-    const massLow = document.getElementById('dp-mass-low')?.value;
-    const massHigh = document.getElementById('dp-mass-high')?.value;
-    const noise = document.getElementById('dp-noise')?.value;
-    if (massLow) params.mass_range_low = parseFloat(massLow);
-    if (massHigh) params.mass_range_high = parseFloat(massHigh);
-    if (noise) params.noise_cutoff = parseFloat(noise);
-  }
 
   return params;
 }
@@ -4937,6 +5040,7 @@ async function autoRunDeconvolutionOnTabOpen() {
 function initDeconvolution() {
   document.getElementById('btn-auto-detect-window').addEventListener('click', autoDetectDeconvWindow);
   document.getElementById('btn-run-deconv').addEventListener('click', runDeconvolution);
+  document.getElementById('btn-refresh-deconv')?.addEventListener('click', refreshCurrentDeconvolutionSample);
   document.getElementById('deconv-start').addEventListener('change', () => refreshDeconvWindowContext());
   document.getElementById('deconv-end').addEventListener('change', () => refreshDeconvWindowContext());
   document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
@@ -5110,6 +5214,32 @@ async function autoDetectDeconvWindow() {
     toast(`Window detected: ${data.start.toFixed(2)} - ${data.end.toFixed(2)} min`, 'success');
   } catch (err) {
     toast(`Auto-detect failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function refreshCurrentDeconvolutionSample() {
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) {
+    toast('Select a sample first', 'warning');
+    return;
+  }
+
+  showLoading('Refreshing sample...');
+  try {
+    await loadSampleMeta(samplePath, { silent: true });
+    await refreshDeconvWindowContext(samplePath);
+    state.deconvAutoRunSignature = '';
+
+    if (state.deconvResults && state.deconvSamplePath === samplePath) {
+      await runDeconvolution({ useOverlay: false, silentSuccess: true });
+      toast('Sample refreshed and deconvolution rerun', 'success');
+    } else {
+      toast('Sample refreshed', 'success');
+    }
+  } catch (err) {
+    toast(`Refresh failed: ${err.message || err}`, 'error');
   } finally {
     hideLoading();
   }
@@ -6349,13 +6479,34 @@ async function exportReportPDF() {
     settings: getReportSettingsPayload(),
   };
 
-  if (includeDeconv && state.deconvResults && state.deconvSamplePath === samplePath) {
-    if (Array.isArray(state.deconvResults.components)) {
-      payload.deconv_results = state.deconvResults.components;
+  if (includeDeconv) {
+    payload.deconv_parameters = getCurrentDeconvolutionParameters();
+
+    const deconvSamplePath = document.getElementById('deconv-sample-select')?.value || '';
+    const currentTimeRange = getCurrentDeconvolutionTimeRange();
+    const sameSampleAsDeconv = deconvSamplePath === samplePath;
+    const currentSignature = (sameSampleAsDeconv && currentTimeRange)
+      ? JSON.stringify(buildDeconvolutionRequest(samplePath, currentTimeRange[0], currentTimeRange[1]))
+      : '';
+
+    if (sameSampleAsDeconv && currentTimeRange) {
+      payload.deconv_time_range = currentTimeRange;
     }
-    const tr = state.deconvTimeRange || state.deconvResults.time_range;
-    if (Array.isArray(tr) && tr.length === 2) {
-      payload.deconv_time_range = tr;
+
+    if (
+      sameSampleAsDeconv
+      && currentSignature
+      && currentSignature === state.deconvAutoRunSignature
+      && state.deconvResults
+      && Array.isArray(state.deconvResults.components)
+    ) {
+      payload.deconv_results = state.deconvResults.components;
+      if (!payload.deconv_time_range) {
+        const tr = state.deconvTimeRange || state.deconvResults.time_range;
+        if (Array.isArray(tr) && tr.length === 2) {
+          payload.deconv_time_range = tr;
+        }
+      }
     }
   }
 
@@ -7362,7 +7513,7 @@ async function startWatching(watchPath) {
 
   // Seed known paths (don't auto-select existing .D folders)
   try {
-    const data = await api.browse(sourcePath);
+    const data = await api.browse(sourcePath, { includeState: true });
     const items = Array.isArray(data.items) ? data.items : [];
     resolvedWatchPath = data.path || sourcePath;
     if (pathInput) pathInput.value = resolvedWatchPath;
@@ -7384,7 +7535,7 @@ async function startWatching(watchPath) {
 
   state.watchInterval = setInterval(async () => {
     try {
-      const data = await api.browse(resolvedWatchPath);
+      const data = await api.browse(resolvedWatchPath, { includeState: true });
       const dFolders = (Array.isArray(data.items) ? data.items : []).filter((item) => item.is_d_folder);
       for (const item of dFolders) {
         if (item.run_in_progress) continue;
