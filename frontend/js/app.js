@@ -6932,6 +6932,9 @@ function getRunRouterStatusMeta(status, routeMode = '') {
   if (normalized === 'skipped') {
     return { className: 'router-status router-status-skipped', label: 'Not Transferred' };
   }
+  if (normalized === 'failed') {
+    return { className: 'router-status router-status-error', label: 'Failed' };
+  }
   if (normalized === 'error') {
     return { className: 'router-status router-status-error', label: 'Error' };
   }
@@ -7120,6 +7123,8 @@ async function scanRunRouter(options = {}) {
             ? 'Run still active, will route to Unnamed when finished'
             : (item.initials ? `Run still active, will route to ${item.initials}` : 'Run still active')
         ))
+        : item.status === 'failed'
+          ? (item.run_log_last_line || 'Run was aborted or failed')
         : item.status === 'waiting-completion'
           ? (item.run_log_last_line || (
             item.route_mode === 'unnamed'
@@ -7383,6 +7388,8 @@ async function startWatching(watchPath) {
       const dFolders = (Array.isArray(data.items) ? data.items : []).filter((item) => item.is_d_folder);
       for (const item of dFolders) {
         if (item.run_in_progress) continue;
+        if (item.run_failed) continue;
+        if (!item.run_complete) continue;
         if (item.is_wash_position) continue;
         if (!state.watchKnownPaths.has(item.path)) {
           state.watchKnownPaths.add(item.path);

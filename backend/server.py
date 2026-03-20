@@ -214,6 +214,8 @@ def _router_log_detail_for_item(item: dict) -> str:
         if initials:
             return f"Method completed, matched {initials}"
         return "Method completed"
+    if status in {"failed", "skipped"} and last_line:
+        return last_line
     if route_mode == "unnamed":
         return "No recognizable initials, routing to Unnamed"
     if initials:
@@ -395,15 +397,32 @@ def _extract_sirslt_acaml_state(acaml_text: str) -> dict:
     integrity = " ".join(str(integrity_match.group(1)).split()) if integrity_match else ""
     modified = " ".join(str(modified_match.group(1)).split()) if modified_match else ""
 
-    completed = status.lower() == "completed"
-    if not completed and message:
-        completed = bool(re.search(r"\bacquisition\s+completed\b", message, flags=re.IGNORECASE))
+    aborted = False
+    if status:
+        aborted = status.strip().lower() in {"aborted", "failed", "error", "cancelled", "canceled"}
+    if not aborted and message:
+        aborted = bool(
+            re.search(
+                r"\bacquisition\s+aborted\b|\bhardware\s+error\b|\bby\s+system\b|\bcancelled\b|\bcanceled\b",
+                message,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    completed = False
+    if not aborted:
+        completed = status.lower() == "completed"
+        if not completed and message:
+            completed = bool(re.search(r"\bacquisition\s+completed\b", message, flags=re.IGNORECASE))
+        if not completed and integrity:
+            completed = integrity.strip().lower() == "complete"
 
     return {
         "status": status,
         "message": message,
         "content_integrity": integrity,
         "last_modified": modified,
+        "aborted": aborted,
         "completed": completed,
     }
 
@@ -412,12 +431,11 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
     folder = Path(_normalize_filesystem_path(str(folder_path)))
     if folder.name.lower().endswith(".sirslt"):
         latest_mtime = _folder_latest_mtime(folder)
-        now_ts = datetime.datetime.now().timestamp()
-        settled = latest_mtime > 0 and (now_ts - latest_mtime) >= RUN_SETTLE_SECONDS
-        completion_source = "active-write"
+        completion_source = "acaml-pending"
         run_complete = False
+        run_failed = False
         run_log_last_line = None
-        cacheable = settled
+        cacheable = False
 
         acaml_path = _find_sirslt_acaml_file(folder)
         if acaml_path is not None:
@@ -436,22 +454,23 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
             elif modified:
                 run_log_last_line = f"Last modified: {modified}"
 
-            if acaml_state.get("completed"):
+            if acaml_state.get("aborted"):
+                run_failed = True
+                cacheable = True
+                completion_source = "acaml-aborted"
+            elif acaml_state.get("completed"):
                 run_complete = True
                 cacheable = True
                 completion_source = "acaml-status"
-            elif settled:
-                completion_source = "sirslt-settled"
             else:
                 completion_source = "acaml-pending"
-        elif settled:
-            completion_source = "sirslt-settled"
 
         return {
             "folder_path": str(folder),
             "latest_mtime": latest_mtime,
             "run_complete": run_complete,
-            "run_in_progress": not cacheable,
+            "run_in_progress": not run_complete and not run_failed,
+            "run_failed": run_failed,
             "cacheable": cacheable,
             "completion_source": completion_source,
             "run_log_last_line": run_log_last_line,
@@ -486,6 +505,7 @@ def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
         "latest_mtime": latest_mtime,
         "run_complete": run_complete,
         "run_in_progress": not cacheable,
+        "run_failed": False,
         "cacheable": cacheable,
         "completion_source": completion_source,
         "run_log_last_line": run_log_last_line,
@@ -627,6 +647,12 @@ def _folder_name_matches_sequence_tokens(folder_name: str, tokens: list[str]) ->
     return any(token in normalized for token in tokens)
 
 
+def _is_ignored_router_monitor_folder(folder_name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(folder_name or "").strip().lower())
+    words = {part for part in normalized.split() if part}
+    return "demo" in words or "shutdown" in words
+
+
 def _resolve_run_router_scan_roots(
     source_path: Union[str, Path],
     monitor_recent_days: int = 0,
@@ -648,7 +674,12 @@ def _resolve_run_router_scan_roots(
     try:
         child_dirs = [
             entry for entry in sorted(root.iterdir())
-            if entry.is_dir() and not entry.name.startswith(".") and not _is_supported_sample_folder(entry)
+            if (
+                entry.is_dir()
+                and not entry.name.startswith(".")
+                and not _is_supported_sample_folder(entry)
+                and not _is_ignored_router_monitor_folder(entry.name)
+            )
         ]
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
@@ -815,7 +846,7 @@ def _scan_run_router(
             if run_state.get("is_wash_position"):
                 wash_count += 1
                 continue
-            if not run_state.get("run_complete"):
+            if run_state.get("run_in_progress"):
                 in_progress_count += 1
 
             route = _build_router_destination(
@@ -831,7 +862,9 @@ def _scan_run_router(
                 else None
             )
             status = "unmatched"
-            if not run_state.get("run_complete"):
+            if run_state.get("run_failed"):
+                status = "failed"
+            elif not run_state.get("run_complete"):
                 status = "running"
             elif route["matched"]:
                 status = "already-copied" if route["destination_exists"] else "ready"
@@ -843,6 +876,7 @@ def _scan_run_router(
                 "latest_mtime_iso": latest_iso,
                 "run_in_progress": bool(run_state.get("run_in_progress")),
                 "run_complete": bool(run_state.get("run_complete")),
+                "run_failed": bool(run_state.get("run_failed")),
                 "sample_location": run_state.get("sample_location"),
                 "completion_source": run_state.get("completion_source"),
                 "run_log_last_line": run_state.get("run_log_last_line"),
@@ -1751,6 +1785,7 @@ def load_sample(path: str = Query(..., description="Path to a supported sample f
         "uv_time_range": [float(sample.uv_times[0]), float(sample.uv_times[-1])] if sample.uv_times is not None else None,
         "run_complete": run_state["run_complete"],
         "run_in_progress": run_state["run_in_progress"],
+        "run_failed": run_state.get("run_failed", False),
         "cacheable": run_state["cacheable"],
         "completion_source": run_state["completion_source"],
         "sample_location": run_state["sample_location"],
@@ -2424,6 +2459,18 @@ def run_router_copy(payload: dict = Body(...)):
             continue
 
         run_state = _inspect_sample_run_state(source_folder)
+        if run_state.get("run_failed"):
+            result["detail"] = run_state.get("run_log_last_line") or "Run was aborted or failed"
+            skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
+            results.append(result)
+            continue
         if run_state.get("run_in_progress"):
             result["detail"] = "Run is still in progress"
             skipped_count += 1
@@ -2437,7 +2484,7 @@ def run_router_copy(payload: dict = Body(...)):
             results.append(result)
             continue
         if not run_state.get("run_complete"):
-            result["detail"] = "Run completion was not confirmed in RUN.LOG"
+            result["detail"] = "Run completion was not confirmed"
             skipped_count += 1
             log_path = _append_router_log(
                 event="copy",
