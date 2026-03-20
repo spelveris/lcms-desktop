@@ -197,10 +197,17 @@ def _router_log_detail_for_item(item: dict) -> str:
     route_mode = str(item.get("route_mode") or "")
     initials = str(item.get("initials") or "")
     last_line = str(item.get("run_log_last_line") or "").strip()
+    completion_source = str(item.get("completion_source") or "").strip()
+    route_reason = str(item.get("route_reason") or "").strip()
+    normalized_run_name = str(item.get("normalized_run_name") or "").strip()
+    initials_root = str(item.get("initials_root") or "").strip()
+    unnamed_available = item.get("unnamed_available")
+    available_initials_preview = str(item.get("available_initials_preview") or "").strip()
+    completion_prefix = f"[{completion_source}] " if completion_source else ""
 
     if status == "running":
         if last_line:
-            return last_line
+            return f"{completion_prefix}{last_line}".strip()
         if route_mode == "unnamed":
             return "Run still active, will route to Unnamed when finished"
         if initials:
@@ -208,24 +215,40 @@ def _router_log_detail_for_item(item: dict) -> str:
         return "Run still active"
     if status in {"ready", "already-copied"}:
         if last_line:
-            return last_line
+            return f"{completion_prefix}{last_line}".strip()
         if route_mode == "unnamed":
             return "Method completed, routing to Unnamed"
         if initials:
             return f"Method completed, matched {initials}"
         return "Method completed"
     if status in {"failed", "skipped"} and last_line:
-        return last_line
+        return f"{completion_prefix}{last_line}".strip()
     if route_mode == "unnamed":
         return "No recognizable initials, routing to Unnamed"
     if initials:
         return f"Matched {initials}"
+    if route_reason or normalized_run_name or initials_root or available_initials_preview:
+        detail_bits = []
+        if route_reason:
+            detail_bits.append(f"reason={route_reason}")
+        if normalized_run_name:
+            detail_bits.append(f"normalized={normalized_run_name}")
+        if initials_root:
+            detail_bits.append(f"initials_root={initials_root}")
+        if unnamed_available is not None:
+            detail_bits.append(f"unnamed={'yes' if unnamed_available else 'no'}")
+        if available_initials_preview:
+            detail_bits.append(f"available={available_initials_preview}")
+        return f"No transfer target ({'; '.join(detail_bits)})"
     return "No transfer target"
 
 
 def _maybe_log_router_scan_window(
     source_root: Path,
     scan_roots: list[Path],
+    initials_root: Path,
+    destination_root: Path,
+    recursive: bool,
     monitor_recent_days: int,
     monitor_date_tokens: list[str],
 ) -> str:
@@ -247,6 +270,9 @@ def _maybe_log_router_scan_window(
 
     _router_last_window_signature = signature
     detail = f"scan_roots={roots_text or str(source_root)}"
+    detail += f"; initials_root={initials_root}"
+    detail += f"; destination_root={destination_root}"
+    detail += f"; recursive={'yes' if recursive else 'no'}"
     if monitor_recent_days > 0 and tokens_text:
         detail += f"; date_tokens={tokens_text}"
     return _append_router_log(
@@ -653,6 +679,15 @@ def _is_ignored_router_monitor_folder(folder_name: str) -> bool:
     return "demo" in words or "shutdown" in words
 
 
+def _is_ignored_router_sample_path(path: Union[str, Path]) -> bool:
+    parts = [
+        re.sub(r"[^a-z0-9]+", " ", str(part).strip().lower())
+        for part in Path(str(path)).parts
+    ]
+    words = {word for part in parts for word in part.split() if word}
+    return "shutdown" in words
+
+
 def _resolve_run_router_scan_roots(
     source_path: Union[str, Path],
     monitor_recent_days: int = 0,
@@ -714,6 +749,15 @@ def _list_router_initial_dirs(initials_root: Union[str, Path]) -> tuple[Path, li
     return root, folders
 
 
+def _preview_router_initial_dirs(initials_dirs: list[Path], limit: int = 12) -> str:
+    names = [folder.name for folder in initials_dirs if folder and folder.name]
+    if not names:
+        return "(none)"
+    preview = names[:max(1, int(limit))]
+    suffix = "" if len(names) <= len(preview) else f", ... ({len(names)} total)"
+    return ", ".join(preview) + suffix
+
+
 def _match_router_initials(run_name: str, initials_dirs: list[Path]) -> tuple[Optional[str], Optional[Path]]:
     base_name = _strip_sample_suffix(Path(str(run_name)).name)
     normalized = re.sub(r"\s+", " ", base_name.strip()).upper()
@@ -759,23 +803,28 @@ def _build_router_destination(
     if initial_dirs is None:
         initial_dirs = []
 
+    normalized_run_name = re.sub(r"\s+", " ", _strip_sample_suffix(source_folder.name).strip()).upper()
     matched_initials, matched_initials_dir = _match_router_initials(source_folder.name, initial_dirs)
     destination_root_path = Path(
         _normalize_filesystem_path(str(destination_root or initials_root_path))
     )
     route_mode = "matched"
     recognized_initials = True
+    route_reason = "matched"
+    unnamed_folder = next(
+        (folder for folder in initial_dirs if folder.name.strip().lower() == "unnamed"),
+        None,
+    )
+    unnamed_available = unnamed_folder is not None
+    available_initials_preview = _preview_router_initial_dirs(initial_dirs)
 
     if matched_initials_dir is None:
-        unnamed_folder = next(
-            (folder for folder in initial_dirs if folder.name.strip().lower() == "unnamed"),
-            None,
-        )
         if unnamed_folder is not None:
             matched_initials = unnamed_folder.name
             matched_initials_dir = unnamed_folder
             route_mode = "unnamed"
             recognized_initials = False
+            route_reason = "unnamed-fallback"
 
     if matched_initials_dir is None:
         return {
@@ -783,6 +832,11 @@ def _build_router_destination(
             "initials": None,
             "recognized_initials": False,
             "route_mode": "unmatched",
+            "route_reason": "no-match-no-unnamed",
+            "normalized_run_name": normalized_run_name,
+            "unnamed_available": unnamed_available,
+            "available_initials_preview": available_initials_preview,
+            "initials_root": str(initials_root_path),
             "matched_initials_dir": None,
             "destination_dir": None,
             "destination_path": None,
@@ -798,6 +852,11 @@ def _build_router_destination(
         "initials": matched_initials,
         "recognized_initials": recognized_initials,
         "route_mode": route_mode,
+        "route_reason": route_reason,
+        "normalized_run_name": normalized_run_name,
+        "unnamed_available": unnamed_available,
+        "available_initials_preview": available_initials_preview,
+        "initials_root": str(initials_root_path),
         "matched_initials_dir": str(matched_initials_dir),
         "destination_dir": str(destination_dir),
         "destination_path": str(destination_path),
@@ -822,6 +881,9 @@ def _scan_run_router(
     log_path = _maybe_log_router_scan_window(
         source_root,
         scan_roots,
+        initials_root_path,
+        destination_root_path,
+        recursive=recursive,
         monitor_recent_days=monitor_recent_days,
         monitor_date_tokens=monitor_date_tokens,
     )
@@ -837,6 +899,8 @@ def _scan_run_router(
     seen_paths = set()
     for scan_root in scan_roots:
         for folder in _iter_d_folder_paths(scan_root, recursive=recursive):
+            if _is_ignored_router_sample_path(folder):
+                continue
             normalized_folder = str(folder)
             if normalized_folder in seen_paths:
                 continue
@@ -884,6 +948,11 @@ def _scan_run_router(
                 "matched": route["matched"],
                 "recognized_initials": route.get("recognized_initials", False),
                 "route_mode": route.get("route_mode", "unmatched"),
+                "route_reason": route.get("route_reason"),
+                "normalized_run_name": route.get("normalized_run_name"),
+                "unnamed_available": route.get("unnamed_available"),
+                "available_initials_preview": route.get("available_initials_preview"),
+                "initials_root": route.get("initials_root"),
                 "matched_initials_dir": route["matched_initials_dir"],
                 "destination_dir": route["destination_dir"],
                 "destination_path": route["destination_path"],
@@ -2447,6 +2516,18 @@ def run_router_copy(payload: dict = Body(...)):
             continue
         if not _is_supported_sample_folder(source_folder):
             result["detail"] = "Source path is not a supported sample folder"
+            skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
+            results.append(result)
+            continue
+        if _is_ignored_router_sample_path(source_folder):
+            result["detail"] = "Shutdown runs are ignored"
             skipped_count += 1
             log_path = _append_router_log(
                 event="copy",
