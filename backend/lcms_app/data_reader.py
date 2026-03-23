@@ -24,6 +24,15 @@ except ImportError:
 
 
 SUPPORTED_SAMPLE_SUFFIXES = (".d", ".sirslt")
+RSLT_CONTAINER_SUFFIX = ".rslt"
+VIRTUAL_SAMPLE_SEPARATOR = "::"
+_RSLT_RUN_FILE_SUFFIXES = (
+    ".MSProfile.bin",
+    ".MSPeak.bin",
+    ".MSScan.bin",
+    ".dx",
+    ".rx",
+)
 _SIRSLT_MSSCAN_FIELDS: list[tuple[str, str]] = [
     ("ScanID", "i"),
     ("ScanMethodID", "i"),
@@ -83,6 +92,58 @@ _SIRSLT_MSSCAN_RECORD = struct.Struct("<" + "".join(fmt for _, fmt in _SIRSLT_MS
 
 def _is_supported_sample_dir_name(name: str) -> bool:
     return str(name or "").lower().endswith(SUPPORTED_SAMPLE_SUFFIXES)
+
+
+def split_virtual_sample_path(path_str: str) -> tuple[str, Optional[str]]:
+    raw = str(path_str or "")
+    if VIRTUAL_SAMPLE_SEPARATOR in raw:
+        base_path, selector = raw.rsplit(VIRTUAL_SAMPLE_SEPARATOR, 1)
+        selector = selector.strip()
+        return base_path, selector or None
+    return raw, None
+
+
+def build_virtual_sample_path(container_path: str, run_name: str) -> str:
+    return f"{container_path}{VIRTUAL_SAMPLE_SEPARATOR}{run_name}"
+
+
+def list_rslt_runs(container_path: str) -> list[dict]:
+    container = Path(container_path)
+    if not container.is_dir() or container.suffix.lower() != RSLT_CONTAINER_SUFFIX:
+        return []
+
+    run_files: dict[str, set[str]] = {}
+    for entry in sorted(container.iterdir()):
+        if not entry.is_file() or entry.name.startswith("."):
+            continue
+        matched_suffix = None
+        for suffix in _RSLT_RUN_FILE_SUFFIXES:
+            if entry.name.lower().endswith(suffix.lower()):
+                matched_suffix = suffix
+                break
+        if not matched_suffix:
+            continue
+        prefix = entry.name[: -len(matched_suffix)]
+        if not prefix:
+            continue
+        run_files.setdefault(prefix, set()).add(matched_suffix)
+
+    runs = []
+    for run_name, suffixes in sorted(run_files.items(), key=lambda item: item[0].lower()):
+        has_scan = ".MSScan.bin" in suffixes
+        has_ms = ".MSProfile.bin" in suffixes or ".MSPeak.bin" in suffixes
+        if not has_scan or not has_ms:
+            continue
+        runs.append(
+            {
+                "name": run_name,
+                "path": build_virtual_sample_path(str(container), run_name),
+                "has_profile": ".MSProfile.bin" in suffixes,
+                "has_peak": ".MSPeak.bin" in suffixes,
+                "has_dx": ".dx" in suffixes,
+            }
+        )
+    return runs
 
 
 def check_rainbow_available() -> bool:
@@ -164,8 +225,9 @@ class SampleData:
 
     def __init__(self, folder_path: str):
         self.folder_path = folder_path
-        self.name = Path(folder_path).name
-        self.sample_format = Path(folder_path).suffix.lower()
+        self.base_folder_path, self.run_selector = split_virtual_sample_path(folder_path)
+        self.name = self.run_selector or Path(self.base_folder_path).name
+        self.sample_format = Path(self.base_folder_path).suffix.lower()
         self.uv_times: Optional[np.ndarray] = None
         self.uv_data: Optional[np.ndarray] = None
         self.uv_wavelengths: Optional[np.ndarray] = None
@@ -209,7 +271,7 @@ class SampleData:
 
     def _parse_sirslt_method(self):
         """Parse acquisition metadata from Agilent .sirslt bundle files."""
-        bundle = Path(self.folder_path)
+        bundle = Path(self.base_folder_path)
         acaml_files = [path for path in sorted(bundle.glob("*.acaml")) if not path.name.startswith("._")]
         if not acaml_files:
             return
@@ -267,11 +329,11 @@ class SampleData:
 
     def _parse_acq_method(self):
         """Parse acquisition method name and other info from available metadata files."""
-        if self.sample_format == ".sirslt":
+        if self.sample_format in (".sirslt", RSLT_CONTAINER_SUFFIX):
             self._parse_sirslt_method()
             return
 
-        acq_path = Path(self.folder_path) / "acq.txt"
+        acq_path = Path(self.base_folder_path) / "acq.txt"
         if not acq_path.exists():
             return
         try:
@@ -500,12 +562,37 @@ class SampleData:
 
         raise ValueError("Unsupported .sirslt MS profile encoding")
 
+    def _decode_sirslt_peak_blob(self, blob: bytes, point_count: int) -> tuple[np.ndarray, np.ndarray]:
+        """Decode one .sirslt MSPeak.bin spectrum into centroid mz/intensity arrays."""
+        if point_count <= 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
+
+        expected_bytes = point_count * 16
+        if len(blob) < expected_bytes:
+            raise ValueError("Invalid .sirslt MSPeak.bin payload")
+
+        values = np.frombuffer(blob[:expected_bytes], dtype="<f8").astype(float, copy=True)
+        mz_axis = values[:point_count]
+        intensities = values[point_count : point_count * 2]
+        return mz_axis, intensities
+
     def _load_sirslt_ms(self, bundle: Path):
         """Load MS profile data from a .sirslt bundle."""
         scan_path = next((path for path in sorted(bundle.glob("*.MSScan.bin")) if not path.name.startswith("._")), None)
         profile_path = next((path for path in sorted(bundle.glob("*.MSProfile.bin")) if not path.name.startswith("._")), None)
-        if scan_path is None or profile_path is None:
-            raise FileNotFoundError("Missing .sirslt MS profile files")
+        peak_path = next((path for path in sorted(bundle.glob("*.MSPeak.bin")) if not path.name.startswith("._")), None)
+        return self._load_sirslt_ms_from_paths(bundle, scan_path, profile_path, peak_path)
+
+    def _load_sirslt_ms_from_paths(
+        self,
+        bundle: Path,
+        scan_path: Optional[Path],
+        profile_path: Optional[Path],
+        peak_path: Optional[Path],
+    ):
+        """Load MS data from explicit .sirslt/.rslt run paths."""
+        if scan_path is None or (profile_path is None and peak_path is None):
+            raise FileNotFoundError("Missing .sirslt MS spectrum files")
 
         records = self._read_sirslt_ms_records(scan_path)
         if not records:
@@ -513,42 +600,69 @@ class SampleData:
 
         times = np.array([float(record["ScanTime"]) for record in records], dtype=float)
         tic = np.array([float(record["TIC"]) for record in records], dtype=float)
-        intensity_scans: list[np.ndarray] = []
-        axis_descriptors: list[tuple[float, float, int]] = []
 
-        with profile_path.open("rb") as handle:
-            for record in records:
-                handle.seek(int(record["SpectrumOffset"]))
-                blob = handle.read(int(record["ByteCount"]))
-                mz_axis, intensities = self._decode_sirslt_profile_blob(
-                    blob,
-                    int(record["PointCount"]),
-                    int(record["SpectrumFormatID"]),
-                    int(record["UncompressedByteCount"]),
-                )
-                intensity_scans.append(intensities)
-                axis_descriptors.append((float(mz_axis[0]), float(mz_axis[1] - mz_axis[0]) if len(mz_axis) > 1 else 0.0, len(mz_axis)))
+        if profile_path is not None:
+            intensity_scans: list[np.ndarray] = []
+            axis_descriptors: list[tuple[float, float, int]] = []
 
-        shared_axis = None
-        if axis_descriptors:
-            first_axis = axis_descriptors[0]
-            if all(
-                axis[2] == first_axis[2]
-                and abs(axis[0] - first_axis[0]) <= 1e-9
-                and abs(axis[1] - first_axis[1]) <= 1e-12
-                for axis in axis_descriptors[1:]
-            ):
-                shared_axis = first_axis[0] + first_axis[1] * np.arange(first_axis[2], dtype=float)
+            with profile_path.open("rb") as handle:
+                for record in records:
+                    handle.seek(int(record["SpectrumOffset"]))
+                    blob = handle.read(int(record["ByteCount"]))
+                    mz_axis, intensities = self._decode_sirslt_profile_blob(
+                        blob,
+                        int(record["PointCount"]),
+                        int(record["SpectrumFormatID"]),
+                        int(record["UncompressedByteCount"]),
+                    )
+                    intensity_scans.append(intensities)
+                    axis_descriptors.append(
+                        (
+                            float(mz_axis[0]),
+                            float(mz_axis[1] - mz_axis[0]) if len(mz_axis) > 1 else 0.0,
+                            len(mz_axis),
+                        )
+                    )
 
-        if shared_axis is not None:
-            scans: list = intensity_scans
-            mz_axis = shared_axis
+            shared_axis = None
+            if axis_descriptors:
+                first_axis = axis_descriptors[0]
+                if all(
+                    axis[2] == first_axis[2]
+                    and abs(axis[0] - first_axis[0]) <= 1e-9
+                    and abs(axis[1] - first_axis[1]) <= 1e-12
+                    for axis in axis_descriptors[1:]
+                ):
+                    shared_axis = first_axis[0] + first_axis[1] * np.arange(first_axis[2], dtype=float)
+
+            if shared_axis is not None:
+                scans: list = intensity_scans
+                mz_axis = shared_axis
+            else:
+                scans = []
+                for intensities, axis_info in zip(intensity_scans, axis_descriptors):
+                    scan_axis = axis_info[0] + axis_info[1] * np.arange(axis_info[2], dtype=float)
+                    scans.append(np.column_stack([scan_axis, intensities]))
+                mz_axis = None
+            self._debug_info["sirslt_ms_source"] = "MSProfile.bin"
         else:
             scans = []
-            for intensities, axis_info in zip(intensity_scans, axis_descriptors):
-                scan_axis = axis_info[0] + axis_info[1] * np.arange(axis_info[2], dtype=float)
-                scans.append(np.column_stack([scan_axis, intensities]))
+            with peak_path.open("rb") as handle:
+                for idx, record in enumerate(records):
+                    point_count = int(record["PointCount"])
+                    byte_count = int(record["ByteCount"])
+                    spectrum_offset = int(record["SpectrumOffset"])
+                    if point_count <= 0 or byte_count <= 0:
+                        scans.append(np.empty((0, 2), dtype=float))
+                        continue
+                    handle.seek(spectrum_offset)
+                    blob = handle.read(byte_count)
+                    scan_mz, intensities = self._decode_sirslt_peak_blob(blob, point_count)
+                    scans.append(np.column_stack([scan_mz, intensities]))
+                    if tic[idx] <= 0:
+                        tic[idx] = float(np.sum(intensities))
             mz_axis = None
+            self._debug_info["sirslt_ms_source"] = "MSPeak.bin"
 
         polarity_text = str(self.acq_info.get("Signal Polarity", "")).lower()
         if "negative" in polarity_text:
@@ -562,9 +676,64 @@ class SampleData:
             self.ms_mz_axis_pos = mz_axis
             self.tic_pos = tic
 
+    def _load_rslt(self) -> bool:
+        """Load one run from an Agilent .rslt sequence container."""
+        bundle = Path(self.base_folder_path)
+        run_name = self.run_selector
+        if not run_name:
+            runs = list_rslt_runs(str(bundle))
+            if len(runs) == 1:
+                run_name = runs[0]["name"]
+                self.run_selector = run_name
+                self.name = run_name
+            else:
+                self._error = "Select a run inside the .rslt sequence folder"
+                self._debug_info["rslt_run_count"] = len(runs)
+                return False
+
+        scan_path = bundle / f"{run_name}.MSScan.bin"
+        profile_path = bundle / f"{run_name}.MSProfile.bin"
+        peak_path = bundle / f"{run_name}.MSPeak.bin"
+        dx_path = bundle / f"{run_name}.dx"
+
+        if not scan_path.exists():
+            self._error = f"Missing MSScan.bin for run {run_name}"
+            return False
+        if not profile_path.exists():
+            profile_path = None
+        if not peak_path.exists():
+            peak_path = None
+        if profile_path is None and peak_path is None:
+            self._error = f"Missing MS spectrum file for run {run_name}"
+            return False
+
+        try:
+            if dx_path.exists():
+                with tempfile.TemporaryDirectory(prefix="lcms-rslt-") as temp_dir_name:
+                    extracted_dir = Path(temp_dir_name)
+                    with ZipFile(dx_path) as archive:
+                        archive.extractall(extracted_dir)
+                    self._load_sirslt_uv(extracted_dir)
+
+            self._load_sirslt_ms_from_paths(bundle, scan_path, profile_path, peak_path)
+            self.ms_times = self.ms_times_pos if self.ms_times_pos is not None else self.ms_times_neg
+            self.ms_scans = self.ms_scans_pos if self.ms_scans_pos is not None else self.ms_scans_neg
+            self.ms_mz_axis = self.ms_mz_axis_pos if self.ms_mz_axis_pos is not None else self.ms_mz_axis_neg
+            self.tic = self.tic_pos if self.tic_pos is not None else self.tic_neg
+            self.acq_info["Sequence Run"] = run_name
+            self._debug_info["rslt_run"] = run_name
+            self._debug_info["rslt_container"] = str(bundle)
+            self._debug_info["rslt_loaded"] = True
+            self._loaded = True
+            return True
+        except Exception as exc:
+            self._error = f"Could not read .rslt run: {exc}"
+            self._debug_info["rslt_error"] = str(exc)
+            return False
+
     def _load_sirslt(self) -> bool:
         """Load UV and MS data from an Agilent .sirslt bundle."""
-        bundle = Path(self.folder_path)
+        bundle = Path(self.base_folder_path)
         dx_path = next((path for path in sorted(bundle.glob("*.dx")) if not path.name.startswith("._")), None)
         if dx_path is None:
             self._error = "Could not find .dx package inside .sirslt bundle"
@@ -665,6 +834,8 @@ class SampleData:
 
         if self.sample_format == ".sirslt":
             return self._load_sirslt()
+        if self.sample_format == RSLT_CONTAINER_SUFFIX:
+            return self._load_rslt()
 
         if not check_rainbow_available():
             self._error = "rainbow-api not installed"

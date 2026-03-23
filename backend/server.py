@@ -47,7 +47,14 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
         sys.path.append(abs_external)
 
 # Import existing modules
-from data_reader import SampleData, SUPPORTED_SAMPLE_SUFFIXES, list_d_folders
+from data_reader import (
+    SampleData,
+    SUPPORTED_SAMPLE_SUFFIXES,
+    build_virtual_sample_path,
+    list_d_folders,
+    list_rslt_runs,
+    split_virtual_sample_path,
+)
 import analysis
 import config as lcms_config
 import plotting
@@ -129,28 +136,34 @@ def _normalize_filesystem_path(path_str: str) -> str:
     if not raw:
         return raw
 
-    if raw.lower().startswith("smb://"):
-        smb_path = raw[6:]
+    base_raw, selector = split_virtual_sample_path(raw)
+
+    if base_raw.lower().startswith("smb://"):
+        smb_path = base_raw[6:]
         parts = [part for part in smb_path.split("/") if part]
         if len(parts) >= 2:
             host, share, *rest = parts
             if sys.platform == "darwin":
                 mount_root = Path("/Volumes") / share
                 if mount_root.exists():
-                    return str(mount_root.joinpath(*rest))
-            return "\\\\" + "\\".join([host, share, *rest])
+                    normalized = str(mount_root.joinpath(*rest))
+                    return build_virtual_sample_path(normalized, selector) if selector else normalized
+            normalized = "\\\\" + "\\".join([host, share, *rest])
+            return build_virtual_sample_path(normalized, selector) if selector else normalized
 
-    if raw.startswith("\\\\") or raw.startswith("//"):
-        parts = [part for part in re.split(r"[\\/]+", raw.lstrip("\\/")) if part]
+    if base_raw.startswith("\\\\") or base_raw.startswith("//"):
+        parts = [part for part in re.split(r"[\\/]+", base_raw.lstrip("\\/")) if part]
         if len(parts) >= 2:
             host, share, *rest = parts
             if sys.platform == "darwin":
                 mount_root = Path("/Volumes") / share
                 if mount_root.exists():
-                    return str(mount_root.joinpath(*rest))
-            return "\\\\" + "\\".join([host, share, *rest])
+                    normalized = str(mount_root.joinpath(*rest))
+                    return build_virtual_sample_path(normalized, selector) if selector else normalized
+            normalized = "\\\\" + "\\".join([host, share, *rest])
+            return build_virtual_sample_path(normalized, selector) if selector else normalized
 
-    return raw
+    return build_virtual_sample_path(base_raw, selector) if selector else base_raw
 
 
 def _app_user_data_dir() -> Path:
@@ -494,7 +507,25 @@ def _extract_sirslt_acaml_state(acaml_text: str) -> dict:
 
 
 def _inspect_sample_run_state(folder_path: Union[str, Path]) -> dict:
-    folder = Path(_normalize_filesystem_path(str(folder_path)))
+    normalized = _normalize_filesystem_path(str(folder_path))
+    base_path, selector = split_virtual_sample_path(normalized)
+    if selector:
+        container = Path(base_path)
+        latest_mtime = _folder_latest_mtime(container)
+        return {
+            "folder_path": normalized,
+            "latest_mtime": latest_mtime,
+            "run_complete": True,
+            "run_in_progress": False,
+            "run_failed": False,
+            "cacheable": True,
+            "completion_source": "rslt-sequence",
+            "run_log_last_line": selector,
+            "sample_location": None,
+            "is_wash_position": False,
+        }
+
+    folder = Path(base_path)
     if folder.name.lower().endswith(".sirslt"):
         latest_mtime = _folder_latest_mtime(folder)
         completion_source = "acaml-pending"
@@ -1931,6 +1962,17 @@ def browse_folder(
         raise HTTPException(status_code=400, detail="Not a directory")
 
     items = []
+    if p.suffix.lower() == ".rslt":
+        for run in list_rslt_runs(str(p)):
+            item = {
+                "name": run["name"],
+                "path": run["path"],
+                "is_dir": False,
+                "is_d_folder": True,
+            }
+            items.append(item)
+        return {"path": str(p), "items": items}
+
     try:
         for entry in sorted(p.iterdir()):
             if entry.name.startswith("."):
