@@ -1554,6 +1554,7 @@ function updateSampleDropdowns() {
   });
 
   syncBackgroundSubtractionSelections();
+  syncDeconvBackgroundSelection();
 }
 
 function syncBackgroundSubtractionSelections() {
@@ -1587,6 +1588,32 @@ function syncBackgroundSubtractionSelections() {
     backgroundSelect.value = candidatePaths[1];
   } else {
     backgroundSelect.value = candidatePaths[0];
+  }
+}
+
+function syncDeconvBackgroundSelection() {
+  const sampleSelect = document.getElementById('deconv-sample-select');
+  const backgroundSelect = document.getElementById('deconv-background-select');
+  if (!sampleSelect || !backgroundSelect) return;
+
+  const samplePath = sampleSelect.value || '';
+  const currentBackground = backgroundSelect.value || '';
+  const candidates = state.selectedFiles
+    .map((file) => ({ path: file.path, name: file.name }))
+    .filter((file) => file.path && file.path !== samplePath);
+
+  backgroundSelect.innerHTML = '<option value="">-- No background --</option>';
+  candidates.forEach((file) => {
+    const opt = document.createElement('option');
+    opt.value = file.path;
+    opt.textContent = file.name;
+    backgroundSelect.appendChild(opt);
+  });
+
+  if (candidates.some((file) => file.path === currentBackground)) {
+    backgroundSelect.value = currentBackground;
+  } else {
+    backgroundSelect.value = '';
   }
 }
 
@@ -4996,12 +5023,71 @@ function buildDeconvolutionRequest(path, startTime, endTime) {
   return params;
 }
 
+function getSelectedDeconvBackgroundPath(samplePath) {
+  const selectedSamplePath = String(samplePath || '').trim();
+  const rawBackgroundPath = document.getElementById('deconv-background-select')?.value || '';
+  const backgroundPath = String(rawBackgroundPath).trim();
+  if (!backgroundPath || backgroundPath === selectedSamplePath) return '';
+  return backgroundPath;
+}
+
+function buildActiveDeconvolutionRequest(path, startTime, endTime) {
+  const params = buildDeconvolutionRequest(path, startTime, endTime);
+  const backgroundPath = getSelectedDeconvBackgroundPath(path);
+  if (backgroundPath) {
+    params.background_path = backgroundPath;
+  }
+  return params;
+}
+
+function formatDeconvTimeValue(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return num.toFixed(4);
+}
+
+function getDeconvContextPolarity(meta) {
+  if (meta?.has_ms_pos) return 'positive';
+  if (meta?.has_ms_neg) return 'negative';
+  return 'positive';
+}
+
+function getBgsubDeconvTicChannel(bgsubData, meta) {
+  const tic = bgsubData?.tic;
+  if (!tic) return null;
+  if (tic.has_dual_polarity) {
+    const preferred = getDeconvContextPolarity(meta);
+    if (preferred === 'negative' && Array.isArray(tic.times_neg) && Array.isArray(tic.intensities_neg)) {
+      return { times: tic.times_neg, intensities: tic.intensities_neg, polarity: 'negative' };
+    }
+    if (Array.isArray(tic.times_pos) && Array.isArray(tic.intensities_pos)) {
+      return { times: tic.times_pos, intensities: tic.intensities_pos, polarity: 'positive' };
+    }
+    if (Array.isArray(tic.times_neg) && Array.isArray(tic.intensities_neg)) {
+      return { times: tic.times_neg, intensities: tic.intensities_neg, polarity: 'negative' };
+    }
+    return null;
+  }
+  if (Array.isArray(tic.times) && Array.isArray(tic.intensities)) {
+    return { times: tic.times, intensities: tic.intensities, polarity: null };
+  }
+  return null;
+}
+
+function getBgsubDeconvUvChannel(bgsubData) {
+  const wavelengths = Array.isArray(bgsubData?.uv?.wavelengths) ? bgsubData.uv.wavelengths : [];
+  if (wavelengths.length === 0) return null;
+  const first = wavelengths[0];
+  if (!Array.isArray(first?.times) || !Array.isArray(first?.intensities)) return null;
+  return first;
+}
+
 function getDeconvolutionRunSignature() {
   const samplePath = document.getElementById('deconv-sample-select')?.value || '';
   const start = parseFloat(document.getElementById('deconv-start')?.value);
   const end = parseFloat(document.getElementById('deconv-end')?.value);
   if (!samplePath || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '';
-  return JSON.stringify(buildDeconvolutionRequest(samplePath, start, end));
+  return JSON.stringify(buildActiveDeconvolutionRequest(samplePath, start, end));
 }
 
 async function autoRunDeconvolutionOnTabOpen() {
@@ -5015,8 +5101,8 @@ async function autoRunDeconvolutionOnTabOpen() {
       try {
         const data = await api.autoDetectWindow(samplePath);
         if (Number.isFinite(data.start) && Number.isFinite(data.end) && data.end > data.start) {
-          document.getElementById('deconv-start').value = data.start.toFixed(2);
-          document.getElementById('deconv-end').value = data.end.toFixed(2);
+          document.getElementById('deconv-start').value = formatDeconvTimeValue(data.start);
+          document.getElementById('deconv-end').value = formatDeconvTimeValue(data.end);
         }
       } catch (_) {
         // Keep current range if auto-detect fails.
@@ -5055,12 +5141,25 @@ function initDeconvolution() {
 
   // Auto-detect window when sample is selected
   const select = document.getElementById('deconv-sample-select');
+  const backgroundSelect = document.getElementById('deconv-background-select');
   if (select) {
     select.addEventListener('change', async () => {
+      syncDeconvBackgroundSelection();
       if (select.value) {
         await autoRunDeconvolutionOnTabOpen();
       } else {
         setDeconvEmptyState(true);
+      }
+    });
+  }
+  if (backgroundSelect) {
+    backgroundSelect.addEventListener('change', async () => {
+      state.deconvAutoRunSignature = '';
+      const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+      if (!samplePath) return;
+      await refreshDeconvWindowContext(samplePath);
+      if (state.deconvResults && state.deconvSamplePath === samplePath) {
+        await runDeconvolution({ useOverlay: false, silentSuccess: true });
       }
     });
   }
@@ -5126,8 +5225,8 @@ async function applyDraggedDeconvWindow(start, end) {
 
   state.deconvDragSelectionInFlight = true;
   try {
-    document.getElementById('deconv-start').value = normalizedStart.toFixed(2);
-    document.getElementById('deconv-end').value = normalizedEnd.toFixed(2);
+    document.getElementById('deconv-start').value = formatDeconvTimeValue(normalizedStart);
+    document.getElementById('deconv-end').value = formatDeconvTimeValue(normalizedEnd);
     state.deconvAutoRunSignature = '';
     await refreshDeconvWindowContext(samplePath);
     await runDeconvolution({ useOverlay: false, silentSuccess: true });
@@ -5150,50 +5249,103 @@ async function refreshDeconvWindowContext(samplePath = null) {
   const start = parseFloat(document.getElementById('deconv-start').value);
   const end = parseFloat(document.getElementById('deconv-end').value);
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value) || 0;
+  const backgroundPath = getSelectedDeconvBackgroundPath(path);
+  const loadedMeta = state.loadedSamples[path];
 
   let preferredWavelength = getSelectedWavelengths()[0];
   if (!Number.isFinite(preferredWavelength)) {
-    const loadedMeta = state.loadedSamples[path];
     if (loadedMeta && Array.isArray(loadedMeta.uv_wavelengths) && loadedMeta.uv_wavelengths.length > 0) {
       preferredWavelength = Number(loadedMeta.uv_wavelengths[0]);
     }
   }
   if (!Number.isFinite(preferredWavelength)) preferredWavelength = 280;
 
-  try {
-    const uv = await api.getUVChromatogram(path, preferredWavelength, uvSmoothing);
-    charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
-      title: `UV Chromatogram (${preferredWavelength.toFixed(0)} nm)`,
-      yLabel: `UV ${preferredWavelength.toFixed(0)} nm (mAU)`,
-      color: '#1f77b4',
-      start,
-      end,
-      startAtZero: true,
-      windowColor: 'rgba(255, 215, 0, 0.25)',
-      dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
-      selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
-    });
-    bindDeconvWindowDragSelection('deconv-uv-plot');
-  } catch (_) {
-    uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for this sample</p>';
-  }
+  if (backgroundPath) {
+    try {
+      const bgsub = await api.runBackgroundSubtraction({
+        samplePath: path,
+        backgroundPath,
+        wavelengths: [preferredWavelength],
+        mzTargets: [],
+        uvSmoothing,
+      });
+      const uv = getBgsubDeconvUvChannel(bgsub);
+      if (uv) {
+        const uvWave = Number.isFinite(Number(uv.nm)) ? Number(uv.nm) : preferredWavelength;
+        charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
+          title: `Background-Subtracted UV (${uvWave.toFixed(0)} nm)`,
+          yLabel: `UV ${uvWave.toFixed(0)} nm (mAU)`,
+          color: '#1f77b4',
+          start,
+          end,
+          startAtZero: true,
+          windowColor: 'rgba(255, 215, 0, 0.25)',
+          dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+          selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+        });
+        bindDeconvWindowDragSelection('deconv-uv-plot');
+      } else {
+        uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for background-subtracted view</p>';
+      }
 
-  try {
-    const tic = await api.getTIC(path);
-    charts.plotChromatogramWithWindow('deconv-tic-plot', tic.times, tic.intensities, {
-      title: 'Total Ion Chromatogram (TIC)',
-      yLabel: 'TIC Intensity',
-      color: '#ff7f0e',
-      start,
-      end,
-      startAtZero: true,
-      windowColor: 'rgba(255, 215, 0, 0.25)',
-      dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
-      selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
-    });
-    bindDeconvWindowDragSelection('deconv-tic-plot');
-  } catch (_) {
-    ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for this sample</p>';
+      const tic = getBgsubDeconvTicChannel(bgsub, loadedMeta);
+      if (tic) {
+        const ticPolarityLabel = tic.polarity === 'negative' ? ' (-)' : tic.polarity === 'positive' ? ' (+)' : '';
+        charts.plotChromatogramWithWindow('deconv-tic-plot', tic.times, tic.intensities, {
+          title: `Background-Subtracted TIC${ticPolarityLabel}`,
+          yLabel: 'TIC Intensity',
+          color: '#ff7f0e',
+          start,
+          end,
+          startAtZero: true,
+          windowColor: 'rgba(255, 215, 0, 0.25)',
+          dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+          selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+        });
+        bindDeconvWindowDragSelection('deconv-tic-plot');
+      } else {
+        ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for background-subtracted view</p>';
+      }
+    } catch (_) {
+      uvDiv.innerHTML = '<p class="placeholder-msg">Background-subtracted context failed to load</p>';
+      ticDiv.innerHTML = '<p class="placeholder-msg">Background-subtracted context failed to load</p>';
+    }
+  } else {
+    try {
+      const uv = await api.getUVChromatogram(path, preferredWavelength, uvSmoothing);
+      charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
+        title: `UV Chromatogram (${preferredWavelength.toFixed(0)} nm)`,
+        yLabel: `UV ${preferredWavelength.toFixed(0)} nm (mAU)`,
+        color: '#1f77b4',
+        start,
+        end,
+        startAtZero: true,
+        windowColor: 'rgba(255, 215, 0, 0.25)',
+        dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+        selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+      });
+      bindDeconvWindowDragSelection('deconv-uv-plot');
+    } catch (_) {
+      uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for this sample</p>';
+    }
+
+    try {
+      const tic = await api.getTIC(path);
+      charts.plotChromatogramWithWindow('deconv-tic-plot', tic.times, tic.intensities, {
+        title: 'Total Ion Chromatogram (TIC)',
+        yLabel: 'TIC Intensity',
+        color: '#ff7f0e',
+        start,
+        end,
+        startAtZero: true,
+        windowColor: 'rgba(255, 215, 0, 0.25)',
+        dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+        selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+      });
+      bindDeconvWindowDragSelection('deconv-tic-plot');
+    } catch (_) {
+      ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for this sample</p>';
+    }
   }
   schedulePlotlyResize(['deconv-uv-plot', 'deconv-tic-plot']);
 }
@@ -5208,10 +5360,10 @@ async function autoDetectDeconvWindow() {
   showLoading('Auto-detecting time window...');
   try {
     const data = await api.autoDetectWindow(samplePath);
-    document.getElementById('deconv-start').value = data.start.toFixed(2);
-    document.getElementById('deconv-end').value = data.end.toFixed(2);
+    document.getElementById('deconv-start').value = formatDeconvTimeValue(data.start);
+    document.getElementById('deconv-end').value = formatDeconvTimeValue(data.end);
     await refreshDeconvWindowContext(samplePath);
-    toast(`Window detected: ${data.start.toFixed(2)} - ${data.end.toFixed(2)} min`, 'success');
+    toast(`Window detected: ${formatDeconvTimeValue(data.start)} - ${formatDeconvTimeValue(data.end)} min`, 'success');
   } catch (err) {
     toast(`Auto-detect failed: ${err.message}`, 'error');
   } finally {
@@ -5252,7 +5404,7 @@ async function runDeconvolution(options = {}) {
     return;
   }
 
-  const params = buildDeconvolutionRequest(
+  const params = buildActiveDeconvolutionRequest(
     samplePath,
     parseFloat(document.getElementById('deconv-start').value),
     parseFloat(document.getElementById('deconv-end').value),
@@ -5400,7 +5552,31 @@ function renderDeconvResults(data) {
     const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, components);
     const spectrumPlotEl = document.getElementById('deconv-spectrum-plot');
     const spectrumHeight = Number(spectrumPlotEl?.dataset?.plotHeight || 0);
+    const hasBackground = Boolean(data.background_path);
+    const overlaySpectra = [];
+    if (hasBackground && data.raw_spectrum && Array.isArray(data.raw_spectrum.mz) && data.raw_spectrum.mz.length > 0) {
+      overlaySpectra.push({
+        mz: data.raw_spectrum.mz,
+        intensities: data.raw_spectrum.intensities || [],
+        label: 'Raw',
+        color: '#9aa0a6',
+        opacity: 0.42,
+      });
+    }
+    if (hasBackground && data.background_spectrum && Array.isArray(data.background_spectrum.mz) && data.background_spectrum.mz.length > 0) {
+      overlaySpectra.push({
+        mz: data.background_spectrum.mz,
+        intensities: data.background_spectrum.intensities || [],
+        label: 'Background',
+        color: '#f0ad4e',
+        opacity: 0.32,
+      });
+    }
     charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {
+      title: hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum',
+      primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
+      primaryColor: '#1f77b4',
+      overlaySpectra,
       guideMzs,
       heightPx: Number.isFinite(spectrumHeight) && spectrumHeight > 0 ? spectrumHeight : undefined,
     });
@@ -5784,29 +5960,57 @@ async function fetchBatchDeconvPreviewBlob(sample, displayComponents, dpi = 180)
   return backendResponseToBlob(response);
 }
 
-async function renderBatchDeconvExportPreview(sample, displayComponents, previewId) {
+function clearBatchDeconvPreviewUrl(previewId) {
+  const existingUrl = state.batchDeconvPreviewUrls[previewId];
+  if (existingUrl) {
+    URL.revokeObjectURL(existingUrl);
+    delete state.batchDeconvPreviewUrls[previewId];
+  }
+}
+
+function setBatchDeconvPreviewImage(previewId, sampleName, blob) {
+  const previewEl = document.getElementById(previewId);
+  if (!previewEl) return;
+
+  clearBatchDeconvPreviewUrl(previewId);
+  const url = URL.createObjectURL(blob);
+  state.batchDeconvPreviewUrls[previewId] = url;
+
+  previewEl.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = `${sampleName} export preview`;
+  previewEl.appendChild(img);
+}
+
+async function buildBatchDeconvPreviewFallbackBlob(plotId, dpi = 180) {
+  const plotDiv = document.getElementById(plotId);
+  if (!plotDiv || !plotDiv.classList.contains('js-plotly-plot')) return null;
+  const scale = dpi / 96;
+  const dims = getExportDimensions(plotDiv, scale);
+  const imageDataUrl = await buildExportImage(plotDiv, 'png', dims.width, dims.height);
+  return dataUrlToBlob(imageDataUrl);
+}
+
+async function renderBatchDeconvExportPreview(sample, displayComponents, previewId, plotId) {
   const previewEl = document.getElementById(previewId);
   if (!previewEl) return;
   previewEl.innerHTML = '<p class="muted" style="padding:10px 0;">Rendering export preview...</p>';
 
   try {
     const blob = await fetchBatchDeconvPreviewBlob(sample, displayComponents, 180);
-    const url = URL.createObjectURL(blob);
-    state.batchDeconvPreviewUrls[previewId] = url;
-
-    const currentPreviewEl = document.getElementById(previewId);
-    if (!currentPreviewEl) {
-      URL.revokeObjectURL(url);
-      delete state.batchDeconvPreviewUrls[previewId];
-      return;
-    }
-
-    currentPreviewEl.innerHTML = '';
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = `${sample.name} export preview`;
-    currentPreviewEl.appendChild(img);
+    setBatchDeconvPreviewImage(previewId, sample.name, blob);
   } catch (err) {
+    console.error('Batch deconvolution preview backend render failed:', err);
+    try {
+      const fallbackBlob = await buildBatchDeconvPreviewFallbackBlob(plotId, 180);
+      if (fallbackBlob) {
+        setBatchDeconvPreviewImage(previewId, sample.name, fallbackBlob);
+        return;
+      }
+    } catch (fallbackErr) {
+      console.error('Batch deconvolution preview fallback render failed:', fallbackErr);
+    }
     previewEl.innerHTML = `<p class="placeholder-msg" style="padding:14px 8px;">Preview failed: ${escapeHtml(err.message || String(err))}</p>`;
   }
 }
@@ -6066,7 +6270,7 @@ function renderBatchDeconvolution(data) {
     samplesContainer.appendChild(section);
     charts.plotDeconvMasses(plotId, components, { height: 320 });
     renderBatchDeconvTicWindow(sample, ticPlotId);
-    renderBatchDeconvExportPreview(sample, components, previewId);
+    renderBatchDeconvExportPreview(sample, components, previewId, plotId);
 
     section.querySelectorAll('button[data-format]').forEach((btn) => {
       btn.addEventListener('click', async () => {

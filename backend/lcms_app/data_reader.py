@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from urllib.parse import unquote
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 import streamlit as st
@@ -25,7 +26,10 @@ except ImportError:
 
 SUPPORTED_SAMPLE_SUFFIXES = (".d", ".sirslt")
 RSLT_CONTAINER_SUFFIX = ".rslt"
+OLAX_CONTAINER_SUFFIX = ".olax"
 VIRTUAL_SAMPLE_SEPARATOR = "::"
+_YYYYMMDD_TOKEN_RE = re.compile(r"(?<!\d)(20\d{6})(?!\d)")
+_YY_MM_DD_TOKEN_RE = re.compile(r"(?<!\d)(\d{2})[ _-](\d{2})[ _-](\d{2})(?!\d)")
 _RSLT_RUN_FILE_SUFFIXES = (
     ".MSProfile.bin",
     ".MSPeak.bin",
@@ -94,6 +98,183 @@ def _is_supported_sample_dir_name(name: str) -> bool:
     return str(name or "").lower().endswith(SUPPORTED_SAMPLE_SUFFIXES)
 
 
+def _normalize_iso_datetime_text(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    match = re.match(r"^(.*?\.\d{6})\d+([+-]\d{2}:\d{2})$", value)
+    if match:
+        value = f"{match.group(1)}{match.group(2)}"
+    return value
+
+
+def _parse_datetime_text(text: str) -> Optional[datetime]:
+    value = _normalize_iso_datetime_text(text)
+    if not value:
+        return None
+
+    for candidate in (
+        value,
+        value.replace("/", "-"),
+    ):
+        try:
+            return datetime.fromisoformat(candidate)
+        except Exception:
+            pass
+
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%d.%m.%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d.%m.%Y",
+        "%m/%d/%Y",
+        "%d/%m/%Y",
+    ):
+        try:
+            return datetime.strptime(value, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _datetime_to_date_folder_name(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    try:
+        return dt.strftime("%Y%m%d")
+    except Exception:
+        return None
+
+
+def _extract_date_token_from_name(name: str) -> Optional[str]:
+    value = str(name or "").strip()
+    if not value:
+        return None
+
+    direct = _YYYYMMDD_TOKEN_RE.search(value)
+    if direct:
+        return direct.group(1)
+
+    compact = _YY_MM_DD_TOKEN_RE.search(value)
+    if compact:
+        yy, mm, dd = compact.groups()
+        try:
+            dt = datetime.strptime(f"20{yy}-{mm}-{dd}", "%Y-%m-%d")
+            return dt.strftime("%Y%m%d")
+        except Exception:
+            return None
+    return None
+
+
+def _infer_sirslt_date_info(bundle: Path) -> tuple[Optional[str], str]:
+    try:
+        acaml_files = [path for path in sorted(bundle.glob("*.acaml")) if path.is_file() and not path.name.startswith("._")]
+    except Exception:
+        acaml_files = []
+    if acaml_files:
+        try:
+            text = acaml_files[0].read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        for pattern, source in (
+            (r'InjectionAcqDateTime="([^"]+)"', "acaml-injection"),
+            (r'LastModifiedDateTime="([^"]+)"', "acaml-modified"),
+        ):
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            token = _datetime_to_date_folder_name(_parse_datetime_text(match.group(1)))
+            if token:
+                return token, source
+
+    token = _extract_date_token_from_name(bundle.name)
+    if token:
+        return token, "name-token"
+
+    try:
+        return datetime.fromtimestamp(bundle.stat().st_mtime).strftime("%Y%m%d"), "mtime"
+    except Exception:
+        return None, "unknown"
+
+
+def _infer_d_folder_date_info(folder: Path) -> tuple[Optional[str], str]:
+    acq_path = folder / "acq.txt"
+    if acq_path.exists():
+        try:
+            text = acq_path.read_text(encoding="utf-16", errors="ignore")
+        except Exception:
+            text = ""
+        for line in text.splitlines():
+            if ":" not in line:
+                continue
+            key, raw_value = line.split(":", 1)
+            key = key.strip().lower()
+            if "date" not in key and "time" not in key:
+                continue
+            token = _datetime_to_date_folder_name(_parse_datetime_text(raw_value))
+            if token:
+                return token, f"acq-txt:{key}"
+
+    token = _extract_date_token_from_name(folder.name)
+    if token:
+        return token, "name-token"
+
+    try:
+        latest_mtime = None
+        for entry in folder.rglob("*"):
+            try:
+                if not entry.is_file():
+                    continue
+                entry_mtime = float(entry.stat().st_mtime)
+                latest_mtime = entry_mtime if latest_mtime is None else max(latest_mtime, entry_mtime)
+            except Exception:
+                continue
+        if latest_mtime is None:
+            latest_mtime = float(folder.stat().st_mtime)
+        return datetime.fromtimestamp(latest_mtime).strftime("%Y%m%d"), "mtime"
+    except Exception:
+        return None, "unknown"
+
+
+def infer_sample_date_info(path_str: str) -> tuple[Optional[str], str]:
+    """Infer a sample's acquisition-date folder name as YYYYMMDD."""
+    raw_path, selector = split_virtual_sample_path(path_str)
+    path = Path(str(raw_path or ""))
+    suffix = path.suffix.lower()
+    parent_token = _extract_date_token_from_name(path.parent.name)
+    if parent_token:
+        return parent_token, "parent-folder"
+
+    if suffix == ".sirslt":
+        return _infer_sirslt_date_info(path)
+    if suffix == ".d":
+        return _infer_d_folder_date_info(path)
+    if suffix in {RSLT_CONTAINER_SUFFIX, OLAX_CONTAINER_SUFFIX}:
+        token = _extract_date_token_from_name(path.name)
+        if token:
+            return token, "name-token"
+        try:
+            return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y%m%d"), "mtime"
+        except Exception:
+            return None, "unknown"
+    if selector:
+        token = _extract_date_token_from_name(selector)
+        if token:
+            return token, "selector-token"
+    return None, "unknown"
+
+
+def infer_sample_date_folder_name(path_str: str, fallback: str = "undated") -> str:
+    token, _source = infer_sample_date_info(path_str)
+    return token or str(fallback or "undated")
+
+
 def split_virtual_sample_path(path_str: str) -> tuple[str, Optional[str]]:
     raw = str(path_str or "")
     if VIRTUAL_SAMPLE_SEPARATOR in raw:
@@ -141,6 +322,53 @@ def list_rslt_runs(container_path: str) -> list[dict]:
                 "has_profile": ".MSProfile.bin" in suffixes,
                 "has_peak": ".MSPeak.bin" in suffixes,
                 "has_dx": ".dx" in suffixes,
+            }
+        )
+    return runs
+
+
+def _strip_virtual_bundle_suffix(name: str) -> str:
+    value = str(name or "")
+    lowered = value.lower()
+    if lowered.endswith(".sirslt"):
+        return value[:-7]
+    return value
+
+
+def list_olax_runs(container_path: str) -> list[dict]:
+    container = Path(container_path)
+    if not container.is_file() or container.suffix.lower() != OLAX_CONTAINER_SUFFIX:
+        return []
+
+    run_files: dict[str, set[str]] = {}
+    try:
+        with ZipFile(container) as archive:
+            for entry_name in archive.namelist():
+                if "%5c" not in entry_name:
+                    continue
+                bundle_name, inner_name = entry_name.split("%5c", 1)
+                if not bundle_name.lower().endswith(".sirslt") or not inner_name:
+                    continue
+                run_files.setdefault(bundle_name, set()).add(inner_name)
+    except Exception:
+        return []
+
+    runs = []
+    for bundle_name, inner_names in sorted(run_files.items(), key=lambda item: item[0].lower()):
+        has_scan = any(name.lower().endswith(".msscan.bin") for name in inner_names)
+        has_ms = any(name.lower().endswith(".msprofile.bin") for name in inner_names) or any(
+            name.lower().endswith(".mspeak.bin") for name in inner_names
+        )
+        if not has_scan or not has_ms:
+            continue
+        runs.append(
+            {
+                "name": _strip_virtual_bundle_suffix(bundle_name),
+                "bundle_name": bundle_name,
+                "path": build_virtual_sample_path(str(container), bundle_name),
+                "has_profile": any(name.lower().endswith(".msprofile.bin") for name in inner_names),
+                "has_peak": any(name.lower().endswith(".mspeak.bin") for name in inner_names),
+                "has_dx": any(name.lower().endswith(".dx") for name in inner_names),
             }
         )
     return runs
@@ -271,7 +499,10 @@ class SampleData:
 
     def _parse_sirslt_method(self):
         """Parse acquisition metadata from Agilent .sirslt bundle files."""
-        bundle = Path(self.base_folder_path)
+        self._parse_sirslt_method_from_bundle(Path(self.base_folder_path))
+
+    def _parse_sirslt_method_from_bundle(self, bundle: Path):
+        """Parse acquisition metadata from a bundle directory holding .sirslt-style files."""
         acaml_files = [path for path in sorted(bundle.glob("*.acaml")) if not path.name.startswith("._")]
         if not acaml_files:
             return
@@ -331,6 +562,8 @@ class SampleData:
         """Parse acquisition method name and other info from available metadata files."""
         if self.sample_format in (".sirslt", RSLT_CONTAINER_SUFFIX):
             self._parse_sirslt_method()
+            return
+        if self.sample_format == OLAX_CONTAINER_SUFFIX:
             return
 
         acq_path = Path(self.base_folder_path) / "acq.txt"
@@ -731,6 +964,80 @@ class SampleData:
             self._debug_info["rslt_error"] = str(exc)
             return False
 
+    def _extract_olax_bundle(self, container: Path, bundle_name: str, target_bundle: Path) -> None:
+        """Extract one embedded .sirslt-style bundle from an .olax archive."""
+        prefix = f"{bundle_name}%5c"
+        extracted = 0
+
+        with ZipFile(container) as archive:
+            for entry_name in archive.namelist():
+                if not entry_name.startswith(prefix):
+                    continue
+                relative_name = entry_name[len(prefix) :]
+                if not relative_name:
+                    continue
+                parts = [unquote(part) for part in relative_name.split("%5c") if part]
+                if not parts:
+                    continue
+                target_path = target_bundle.joinpath(*parts)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(entry_name) as src, target_path.open("wb") as dst:
+                    dst.write(src.read())
+                extracted += 1
+
+        if extracted == 0:
+            raise FileNotFoundError(f"Embedded bundle not found: {bundle_name}")
+
+    def _load_olax(self) -> bool:
+        """Load one embedded .sirslt-style run from an .olax archive."""
+        container = Path(self.base_folder_path)
+        run_name = self.run_selector
+        if not run_name:
+            runs = list_olax_runs(str(container))
+            if len(runs) == 1:
+                run_name = runs[0]["bundle_name"]
+                self.run_selector = run_name
+            else:
+                self._error = "Select a run inside the .olax archive"
+                self._debug_info["olax_run_count"] = len(runs)
+                return False
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="lcms-olax-") as temp_dir_name:
+                extracted_bundle = Path(temp_dir_name) / run_name
+                extracted_bundle.mkdir(parents=True, exist_ok=True)
+                self._extract_olax_bundle(container, run_name, extracted_bundle)
+                self._parse_sirslt_method_from_bundle(extracted_bundle)
+
+                dx_path = next(
+                    (path for path in sorted(extracted_bundle.glob("*.dx")) if not path.name.startswith("._")),
+                    None,
+                )
+                if dx_path is not None:
+                    with tempfile.TemporaryDirectory(prefix="lcms-olax-uv-") as uv_dir_name:
+                        extracted_dir = Path(uv_dir_name)
+                        with ZipFile(dx_path) as archive:
+                            archive.extractall(extracted_dir)
+                        self._load_sirslt_uv(extracted_dir)
+
+                self._load_sirslt_ms(extracted_bundle)
+
+            self.ms_times = self.ms_times_pos if self.ms_times_pos is not None else self.ms_times_neg
+            self.ms_scans = self.ms_scans_pos if self.ms_scans_pos is not None else self.ms_scans_neg
+            self.ms_mz_axis = self.ms_mz_axis_pos if self.ms_mz_axis_pos is not None else self.ms_mz_axis_neg
+            self.tic = self.tic_pos if self.tic_pos is not None else self.tic_neg
+            self.name = _strip_virtual_bundle_suffix(run_name)
+            self.acq_info["OLAX Run"] = self.name
+            self._debug_info["olax_run"] = run_name
+            self._debug_info["olax_container"] = str(container)
+            self._debug_info["olax_loaded"] = True
+            self._loaded = True
+            return True
+        except Exception as exc:
+            self._error = f"Could not read .olax run: {exc}"
+            self._debug_info["olax_error"] = str(exc)
+            return False
+
     def _load_sirslt(self) -> bool:
         """Load UV and MS data from an Agilent .sirslt bundle."""
         bundle = Path(self.base_folder_path)
@@ -836,6 +1143,8 @@ class SampleData:
             return self._load_sirslt()
         if self.sample_format == RSLT_CONTAINER_SUFFIX:
             return self._load_rslt()
+        if self.sample_format == OLAX_CONTAINER_SUFFIX:
+            return self._load_olax()
 
         if not check_rainbow_available():
             self._error = "rainbow-api not installed"

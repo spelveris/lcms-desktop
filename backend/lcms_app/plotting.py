@@ -44,6 +44,26 @@ def _shift_sci_offset_left(ax: plt.Axes, x: float = -0.08) -> None:
         pass
 
 
+def _apply_safe_scientific_y_format(ax: plt.Axes, scilimits: tuple[int, int] = (-2, 3)) -> None:
+    """Apply scientific notation on the y-axis, falling back if mathtext parsing breaks."""
+    try:
+        ax.ticklabel_format(axis='y', style='scientific', scilimits=scilimits, useMathText=True)
+        _shift_sci_offset_left(ax)
+        canvas = getattr(getattr(ax, 'figure', None), 'canvas', None)
+        if canvas is not None:
+            try:
+                canvas.draw()
+            except Exception:
+                ax.ticklabel_format(axis='y', style='scientific', scilimits=scilimits, useMathText=False)
+                _shift_sci_offset_left(ax)
+    except Exception:
+        try:
+            ax.ticklabel_format(axis='y', style='scientific', scilimits=scilimits, useMathText=False)
+            _shift_sci_offset_left(ax)
+        except Exception:
+            pass
+
+
 def _coerce_finite_float(value, default: float) -> float:
     """Return a finite float or a fallback default."""
     try:
@@ -227,8 +247,7 @@ def create_single_panel(
     if y_scale == 'log':
         ax.set_yscale('log')
     else:
-        ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
-        _shift_sci_offset_left(ax)
+        _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
 
     ax.set_xlim(times[0], times[-1])
 
@@ -297,8 +316,7 @@ def create_overlay_panel(
     if y_scale == 'log':
         ax.set_yscale('log')
     else:
-        ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
-        _shift_sci_offset_left(ax)
+        _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
 
 
 def create_time_progression_figure(
@@ -606,7 +624,10 @@ def create_single_sample_figure(
         )
         axes[tic_idx + 1 + j].set_title(panel_title_eic)
 
-    plt.tight_layout()
+    try:
+        plt.tight_layout()
+    except Exception:
+        fig.subplots_adjust(top=0.95, bottom=0.08, hspace=0.34)
     return fig
 
 
@@ -787,7 +808,10 @@ def create_single_sample_export_figure(
             ax.tick_params(axis='x', labelbottom=False)
             ax.set_xlabel("")
 
-    plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.982))
+    try:
+        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.982))
+    except Exception:
+        fig.subplots_adjust(top=0.95, bottom=0.06, hspace=0.34)
     return fig
 
 
@@ -915,8 +939,7 @@ def create_eic_comparison_figure(
                 y_upper = max(1.12, y_upper)
             ax.set_ylim(0, y_upper)
         if not normalize:
-            ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
-            _shift_sci_offset_left(ax)
+            _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
         if show_grid:
             ax.grid(True, alpha=0.3)
     else:
@@ -960,8 +983,7 @@ def create_eic_comparison_figure(
                         y_upper = max(1.12, y_upper)
                     axes[i].set_ylim(0, y_upper)
                 if not normalize:
-                    axes[i].ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
-                    _shift_sci_offset_left(axes[i])
+                    _apply_safe_scientific_y_format(axes[i], scilimits=(-2, 3))
                 if show_grid:
                     axes[i].grid(True, alpha=0.3)
 
@@ -1128,8 +1150,7 @@ def create_mass_spectrum_figure(mz: np.ndarray, intensity: np.ndarray,
     if show_grid:
         ax1.grid(True, alpha=0.3)
 
-    ax1.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0), useMathText=True)
-    _shift_sci_offset_left(ax1)
+    _apply_safe_scientific_y_format(ax1, scilimits=(0, 0))
 
     # Highlight peaks if provided
     if highlight_peaks:
@@ -1585,8 +1606,7 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
         ax_tic.legend()
         if show_grid:
             ax_tic.grid(True, alpha=0.3)
-        ax_tic.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0), useMathText=True)
-        _shift_sci_offset_left(ax_tic)
+        _apply_safe_scientific_y_format(ax_tic, scilimits=(0, 0))
 
     # Bottom left: Summed mass spectrum
     ax_spec = fig.add_subplot(gs[1, 0])
@@ -1600,8 +1620,7 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
         ax_spec.set_title("Summed Mass Spectrum", fontweight='bold', y=1.03)
         if show_grid:
             ax_spec.grid(True, alpha=0.3)
-        ax_spec.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0), useMathText=True)
-        _shift_sci_offset_left(ax_spec)
+        _apply_safe_scientific_y_format(ax_spec, scilimits=(0, 0))
 
         # Add peak labels (only significant peaks > 20% of max)
         from analysis import find_spectrum_peaks
@@ -1821,8 +1840,7 @@ def create_chromatogram_overlay_export_figure(
     if show_grid:
         ax.grid(True, alpha=0.3)
 
-    ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
-    _shift_sci_offset_left(ax)
+    _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
     # Match the deconvolution export framing: only left and bottom axes visible.
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -1962,8 +1980,7 @@ def create_calibration_curve_export_figure(
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.tick_params(top=False, right=False)
-    ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=True)
-    _shift_sci_offset_left(ax)
+    _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
 
     if np.isfinite(slope) and np.isfinite(intercept) and np.isfinite(r_squared):
         fit_text = f"y = {slope:.1f}x {intercept:+.1f}\nR$^2$ = {r_squared:.4f}"
@@ -2073,8 +2090,7 @@ def create_ion_selection_figure(
 
         ax.set_ylabel("Intensity", fontsize=7)
         ax.set_ylim(0, max_int * 1.15)
-        ax.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0), useMathText=True)
-        _shift_sci_offset_left(ax)
+        _apply_safe_scientific_y_format(ax, scilimits=(0, 0))
         if show_grid:
             ax.grid(True, alpha=0.2)
 
@@ -2110,8 +2126,6 @@ def create_report_info_page(
     Returns:
         Matplotlib Figure (A4 portrait)
     """
-    import datetime as _dt
-
     A4_W, A4_H = 8.27, 11.69  # inches
     fig = plt.figure(figsize=(A4_W, A4_H))
     fig.patch.set_facecolor('white')
@@ -2219,14 +2233,44 @@ def create_report_info_page(
             break
         fig.text(x0, y_pos, line, **mono, va='top')
 
-    # Footer
-    now_str = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    return fig
+
+
+def add_report_footer(
+    fig: matplotlib.figure.Figure,
+    app_version: str,
+    page_number: int,
+    total_pages: Optional[int] = None,
+    generated_at: Optional[str] = None,
+    app_name: str = "CATrupole",
+) -> None:
+    """Apply a consistent report footer across all generated PDF pages."""
     version_label = str(app_version or "").strip() or "dev"
     if not version_label.lower().startswith("v"):
         version_label = f"v{version_label}"
-    fig.text(0.06, 0.02, f"LCMS Desktop {version_label}  {now_str}",
-             fontsize=8, family='monospace', color='#666666')
-    fig.text(0.94, 0.02, "Page  1",
-             fontsize=8, family='monospace', color='#666666', ha='right')
 
-    return fig
+    timestamp = str(generated_at or "").strip()
+    if not timestamp:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    page_label = f"Page {int(page_number)}"
+    if total_pages is not None and int(total_pages) > 0:
+        page_label = f"{page_label} / {int(total_pages)}"
+
+    fig.text(
+        0.06,
+        0.02,
+        f"{app_name} {version_label}  {timestamp}",
+        fontsize=8,
+        family='monospace',
+        color='#666666',
+    )
+    fig.text(
+        0.94,
+        0.02,
+        page_label,
+        fontsize=8,
+        family='monospace',
+        color='#666666',
+        ha='right',
+    )

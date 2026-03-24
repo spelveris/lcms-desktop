@@ -834,9 +834,25 @@ const charts = {
   plotMassSpectrum(divId, mzValues, intensities, annotations, options = {}) {
     const traces = [{
       x: mzValues, y: intensities,
-      type: 'scatter', mode: 'lines', name: 'Spectrum',
-      line: { color: '#1f77b4', width: getLineWidth() },
+      type: 'scatter', mode: 'lines', name: options.primaryLabel || 'Spectrum',
+      line: { color: options.primaryColor || '#1f77b4', width: getLineWidth() },
     }];
+    (Array.isArray(options.overlaySpectra) ? options.overlaySpectra : []).forEach((overlay) => {
+      if (!overlay || !Array.isArray(overlay.mz) || !Array.isArray(overlay.intensities) || overlay.mz.length === 0) return;
+      traces.unshift({
+        x: overlay.mz,
+        y: overlay.intensities,
+        type: 'scatter',
+        mode: 'lines',
+        name: overlay.label || 'Overlay',
+        opacity: Number.isFinite(Number(overlay.opacity)) ? Number(overlay.opacity) : 0.35,
+        line: {
+          color: overlay.color || '#999999',
+          width: Number.isFinite(Number(overlay.width)) ? Number(overlay.width) : Math.max(1, getLineWidth() - 0.2),
+          dash: overlay.dash || 'solid',
+        },
+      });
+    });
     const plotAnnotations = (annotations || []).map(a => ({
       x: a.mz, y: a.intensity,
       text: a.label, showarrow: true, arrowhead: 2, arrowsize: 0.8,
@@ -876,7 +892,7 @@ const charts = {
       title: { text: options.title || 'Mass Spectrum', font: { size: 14 } },
       xaxis,
       yaxis: { title: 'Intensity', automargin: true },
-      showlegend: false,
+      showlegend: traces.length > 1,
       height: plotHeight,
       margin: { l: 64, r: 44, t: 40, b: 96 },
       annotations: plotAnnotations,

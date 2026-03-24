@@ -48,10 +48,13 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
 
 # Import existing modules
 from data_reader import (
+    OLAX_CONTAINER_SUFFIX,
     SampleData,
     SUPPORTED_SAMPLE_SUFFIXES,
     build_virtual_sample_path,
+    infer_sample_date_info,
     list_d_folders,
+    list_olax_runs,
     list_rslt_runs,
     split_virtual_sample_path,
 )
@@ -114,6 +117,10 @@ def _ndarray_to_list(arr):
 
 def _is_supported_sample_folder(path: Path) -> bool:
     return path.is_dir() and path.name.lower().endswith(SUPPORTED_SAMPLE_SUFFIXES)
+
+
+def _is_supported_sample_container(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() == OLAX_CONTAINER_SUFFIX
 
 
 def _strip_sample_suffix(name: str) -> str:
@@ -876,6 +883,8 @@ def _build_router_destination(
 
     normalized_run_name = re.sub(r"\s+", " ", _strip_sample_suffix(source_folder.name).strip()).upper()
     matched_initials, matched_initials_dir = _match_router_initials(source_folder.name, initial_dirs)
+    sample_date_folder, sample_date_source = infer_sample_date_info(str(source_folder))
+    sample_date_folder = str(sample_date_folder or "undated").strip() or "undated"
     destination_root_path = Path(
         _normalize_filesystem_path(str(destination_root or initials_root_path))
     )
@@ -909,13 +918,15 @@ def _build_router_destination(
             "available_initials_preview": available_initials_preview,
             "initials_root": str(initials_root_path),
             "matched_initials_dir": None,
+            "sample_date_folder": sample_date_folder,
+            "sample_date_source": sample_date_source,
             "destination_dir": None,
             "destination_path": None,
             "destination_exists": False,
         }
 
     relative_dir = matched_initials_dir.relative_to(initials_root_path)
-    destination_dir = destination_root_path.joinpath(*relative_dir.parts)
+    destination_dir = destination_root_path.joinpath(*relative_dir.parts, sample_date_folder)
     destination_path = destination_dir / source_folder.name
 
     return {
@@ -929,6 +940,8 @@ def _build_router_destination(
         "available_initials_preview": available_initials_preview,
         "initials_root": str(initials_root_path),
         "matched_initials_dir": str(matched_initials_dir),
+        "sample_date_folder": sample_date_folder,
+        "sample_date_source": sample_date_source,
         "destination_dir": str(destination_dir),
         "destination_path": str(destination_path),
         "destination_exists": destination_path.exists(),
@@ -1025,6 +1038,8 @@ def _scan_run_router(
                 "available_initials_preview": route.get("available_initials_preview"),
                 "initials_root": route.get("initials_root"),
                 "matched_initials_dir": route["matched_initials_dir"],
+                "sample_date_folder": route.get("sample_date_folder"),
+                "sample_date_source": route.get("sample_date_source"),
                 "destination_dir": route["destination_dir"],
                 "destination_path": route["destination_path"],
                 "destination_exists": route["destination_exists"],
@@ -1187,6 +1202,54 @@ def _copy_path_timestamps(source_path: Path, destination_path: Path) -> None:
         pass
 
 
+def _set_directory_mtime_from_contents(path: Path) -> None:
+    if not path.exists() or not path.is_dir():
+        return
+
+    latest_mtime_ns: Optional[int] = None
+    try:
+        for child in path.iterdir():
+            try:
+                child_mtime_ns = int(child.stat(follow_symlinks=False).st_mtime_ns)
+            except Exception:
+                continue
+            latest_mtime_ns = child_mtime_ns if latest_mtime_ns is None else max(latest_mtime_ns, child_mtime_ns)
+    except Exception:
+        return
+
+    if latest_mtime_ns is None:
+        return
+
+    try:
+        stat_result = path.stat(follow_symlinks=False)
+        os.utime(
+            path,
+            ns=(int(stat_result.st_atime_ns), int(latest_mtime_ns)),
+            follow_symlinks=False,
+        )
+    except Exception:
+        pass
+
+
+def _normalize_directory_tree_mtimes(root: Path) -> None:
+    if not root.exists() or not root.is_dir():
+        return
+
+    dir_paths: list[Path] = []
+    for current_root, dirs, _files in os.walk(root):
+        current_dir = Path(current_root)
+        dir_paths.append(current_dir)
+        for dirname in dirs:
+            dir_paths.append(current_dir / dirname)
+
+    seen: set[Path] = set()
+    for directory in sorted(dir_paths, key=lambda p: len(p.parts), reverse=True):
+        if directory in seen:
+            continue
+        seen.add(directory)
+        _set_directory_mtime_from_contents(directory)
+
+
 def _preserve_router_tree_timestamps(source_root: Path, destination_root: Path) -> None:
     file_pairs: list[tuple[Path, Path]] = []
     dir_pairs: list[tuple[Path, Path]] = [(source_root, destination_root)]
@@ -1213,6 +1276,8 @@ def _preserve_router_tree_timestamps(source_root: Path, destination_root: Path) 
 
     for source_dir, destination_dir in sorted(dir_pairs, key=lambda pair: len(pair[0].parts), reverse=True):
         _copy_path_timestamps(source_dir, destination_dir)
+
+    _normalize_directory_tree_mtimes(destination_root)
 
 
 def _resolve_node_command() -> Optional[str]:
@@ -1958,6 +2023,17 @@ def browse_folder(
     p = Path(_normalize_filesystem_path(path))
     if not p.exists():
         raise HTTPException(status_code=404, detail="Path not found")
+    if p.is_file() and p.suffix.lower() == OLAX_CONTAINER_SUFFIX:
+        items = []
+        for run in list_olax_runs(str(p)):
+            item = {
+                "name": run["name"],
+                "path": run["path"],
+                "is_dir": False,
+                "is_d_folder": True,
+            }
+            items.append(item)
+        return {"path": str(p), "items": items}
     if not p.is_dir():
         raise HTTPException(status_code=400, detail="Not a directory")
 
@@ -1978,10 +2054,11 @@ def browse_folder(
             if entry.name.startswith("."):
                 continue
             is_d = _is_supported_sample_folder(entry)
+            is_container = _is_supported_sample_container(entry)
             item = {
                 "name": entry.name,
                 "path": str(entry),
-                "is_dir": entry.is_dir(),
+                "is_dir": entry.is_dir() or is_container,
                 "is_d_folder": is_d,
             }
             if is_d and include_state:
@@ -2418,6 +2495,7 @@ def smiles_mz(payload: dict = Body(...)):
 @app.post("/api/deconvolute")
 def deconvolute(
     path: str = Query(...),
+    background_path: Optional[str] = Query(None),
     start: float = Query(...),
     end: float = Query(...),
     min_charge: int = Query(DEFAULT_DECONV_MIN_CHARGE),
@@ -2442,13 +2520,48 @@ def deconvolute(
     sample = _get_sample(path)
     if sample.ms_scans is None:
         raise HTTPException(status_code=404, detail="No MS data")
+    background = None
+    normalized_background_path = ""
+    raw_mz_arr = None
+    raw_intensity_arr = None
+    bg_plot_mz_arr = None
+    bg_plot_intensity_arr = None
+    if background_path:
+        normalized_background_path = _normalize_filesystem_path(background_path)
+        if normalized_background_path == _normalize_filesystem_path(path):
+            raise HTTPException(status_code=400, detail="Choose a different background sample")
+        background = _get_sample(normalized_background_path)
+        if background.ms_scans is None:
+            raise HTTPException(status_code=404, detail="No MS data in background sample")
 
     mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
+    raw_mz_arr = np.asarray(mz_arr, dtype=float)
+    raw_intensity_arr = np.asarray(intensity_arr, dtype=float)
+    if background is not None:
+        bg_mz_arr, bg_intensity_arr = analysis.sum_spectra_in_range(background, start, end)
+        bg_plot_mz_arr = np.asarray(bg_mz_arr if bg_mz_arr is not None else [], dtype=float)
+        bg_plot_intensity_arr = np.asarray(bg_intensity_arr if bg_intensity_arr is not None else [], dtype=float)
+        mz_arr, intensity_arr = _subtract_spectra(
+            mz_arr,
+            intensity_arr,
+            bg_mz_arr,
+            bg_intensity_arr,
+        )
+        mz_arr = np.asarray(mz_arr, dtype=float)
+        intensity_arr = np.maximum(np.asarray(intensity_arr, dtype=float), 0.0)
+        positive_mask = intensity_arr > 0
+        if np.any(positive_mask):
+            mz_arr = mz_arr[positive_mask]
+            intensity_arr = intensity_arr[positive_mask]
     mz_arr, intensity_arr = _filter_spectrum_by_min_input_mz(mz_arr, intensity_arr, min_input_mz)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="No spectrum data remained above the minimum input m/z")
+    if raw_mz_arr is not None and raw_intensity_arr is not None:
+        raw_mz_arr, raw_intensity_arr = _filter_spectrum_by_min_input_mz(raw_mz_arr, raw_intensity_arr, min_input_mz)
+    if bg_plot_mz_arr is not None and bg_plot_intensity_arr is not None and len(bg_plot_mz_arr) > 0:
+        bg_plot_mz_arr, bg_plot_intensity_arr = _filter_spectrum_by_min_input_mz(bg_plot_mz_arr, bg_plot_intensity_arr, min_input_mz)
 
     # Agilent's "start charge maximum" can still yield envelopes above that
     # charge in high-mass windows; expand internal search for high mass limits.
@@ -2508,7 +2621,16 @@ def deconvolute(
             "mz": _ndarray_to_list(mz_arr),
             "intensities": _ndarray_to_list(intensity_arr),
         },
+        "raw_spectrum": {
+            "mz": _ndarray_to_list(raw_mz_arr),
+            "intensities": _ndarray_to_list(raw_intensity_arr),
+        } if raw_mz_arr is not None and raw_intensity_arr is not None else None,
+        "background_spectrum": {
+            "mz": _ndarray_to_list(bg_plot_mz_arr),
+            "intensities": _ndarray_to_list(bg_plot_intensity_arr),
+        } if bg_plot_mz_arr is not None and bg_plot_intensity_arr is not None else None,
         "time_range": [start, end],
+        "background_path": normalized_background_path or None,
         "effective_max_charge": effective_max_charge,
     }
 
@@ -3246,6 +3368,16 @@ def export_report_pdf(payload: dict = Body(...)):
     A4_W, A4_H = 8.27, 11.69
     from matplotlib.backends.backend_pdf import PdfPages
 
+    ion_components_per_page = 4
+    total_pages = 1
+    if sample.tic is not None or (include_uv and sample.uv_data is not None):
+        total_pages += 1
+    if deconv_results and deconv_time_range is not None:
+        total_pages += 1
+        total_pages += max(1, int(np.ceil(len(deconv_results) / ion_components_per_page)))
+    generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    current_page = 1
+
     pdf_buffer = io.BytesIO()
     with PdfPages(pdf_buffer) as pdf:
         # Page 1: sample info + deconvolution table
@@ -3259,8 +3391,10 @@ def export_report_pdf(payload: dict = Body(...)):
             results=deconv_results if deconv_results else None,
             acq_info=getattr(sample, "acq_info", None),
         )
+        plotting.add_report_footer(fig_info, app_version, current_page, total_pages, generated_at)
         pdf.savefig(fig_info)
         plt.close(fig_info)
+        current_page += 1
 
         # Page 2: UV/TIC chromatograms
         if sample.tic is not None or (include_uv and sample.uv_data is not None):
@@ -3285,8 +3419,10 @@ def export_report_pdf(payload: dict = Body(...)):
             if fig_chrom._suptitle:
                 fig_chrom._suptitle.set_y(0.98)
             fig_chrom.subplots_adjust(top=0.93)
+            plotting.add_report_footer(fig_chrom, app_version, current_page, total_pages, generated_at)
             pdf.savefig(fig_chrom)
             plt.close(fig_chrom)
+            current_page += 1
 
         # Page 3/4: deconvolution views
         if deconv_results and deconv_time_range is not None:
@@ -3311,8 +3447,10 @@ def export_report_pdf(payload: dict = Body(...)):
             if fig_deconv._suptitle:
                 fig_deconv._suptitle.set_y(0.98)
             fig_deconv.subplots_adjust(top=0.93)
+            plotting.add_report_footer(fig_deconv, app_version, current_page, total_pages, generated_at)
             pdf.savefig(fig_deconv)
             plt.close(fig_deconv)
+            current_page += 1
 
             report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
             if report_mz is not None and len(report_mz) > 0:
@@ -3321,7 +3459,6 @@ def export_report_pdf(payload: dict = Body(...)):
                     "line_width": line_width,
                     "show_grid": True,
                 }
-                ion_components_per_page = 4
                 global_top_intensity = float(display_results[0].get("intensity", 0) or 0)
                 for offset in range(0, len(display_results), ion_components_per_page):
                     page_results = display_results[offset:offset + ion_components_per_page]
@@ -3337,8 +3474,10 @@ def export_report_pdf(payload: dict = Body(...)):
                     if fig_ions._suptitle:
                         fig_ions._suptitle.set_y(0.98)
                     fig_ions.subplots_adjust(top=0.93)
+                    plotting.add_report_footer(fig_ions, app_version, current_page, total_pages, generated_at)
                     pdf.savefig(fig_ions)
                     plt.close(fig_ions)
+                    current_page += 1
 
     pdf_buffer.seek(0)
     base_name = sample.name[:-2] if sample.name.lower().endswith(".d") else sample.name

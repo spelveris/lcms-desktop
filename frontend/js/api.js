@@ -117,6 +117,7 @@ const api = {
   runDeconvolution(params) {
     const q = qs({
       path: params.path,
+      background_path: params.background_path,
       start: params.start_time || params.start,
       end: params.end_time || params.end,
       min_charge: params.min_charge,
