@@ -62,6 +62,7 @@ jobs:
 
       - name: Report Windows Trusted Signing configuration
         if: runner.os == 'Windows'
+        id: trusted_signing_config
         shell: pwsh
         env:
           TS_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -85,8 +86,10 @@ jobs:
             Write-Warning "Trusted Signing is not configured. Windows installers will be published unsigned and may be blocked by Smart App Control."
           }
 
+          "configured=$($configured.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Sign Windows installer with Trusted Signing
-        if: runner.os == 'Windows' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && vars.WINDOWS_TRUSTED_SIGNING_ENDPOINT != '' && vars.WINDOWS_TRUSTED_SIGNING_ACCOUNT_NAME != '' && vars.WINDOWS_TRUSTED_SIGNING_CERT_PROFILE_NAME != ''
+        if: runner.os == 'Windows' && steps.trusted_signing_config.outputs.configured == 'true'
         uses: azure/trusted-signing-action@v0.5.11
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -103,7 +106,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Verify Windows installer signature
-        if: runner.os == 'Windows' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && vars.WINDOWS_TRUSTED_SIGNING_ENDPOINT != '' && vars.WINDOWS_TRUSTED_SIGNING_ACCOUNT_NAME != '' && vars.WINDOWS_TRUSTED_SIGNING_CERT_PROFILE_NAME != ''
+        if: runner.os == 'Windows' && steps.trusted_signing_config.outputs.configured == 'true'
         shell: pwsh
         run: |
           $setupFiles = Get-ChildItem -Path release -Filter '*Setup*.exe' -Recurse
