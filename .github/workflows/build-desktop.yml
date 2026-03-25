@@ -60,6 +60,65 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run ${{ matrix.npm_script }}
 
+      - name: Report Windows Trusted Signing configuration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TS_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          TS_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          TS_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          TS_ENDPOINT: ${{ vars.WINDOWS_TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT: ${{ vars.WINDOWS_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          TS_PROFILE: ${{ vars.WINDOWS_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
+        run: |
+          $configured = `
+            -not [string]::IsNullOrWhiteSpace($env:TS_TENANT_ID) `
+            -and -not [string]::IsNullOrWhiteSpace($env:TS_CLIENT_ID) `
+            -and -not [string]::IsNullOrWhiteSpace($env:TS_CLIENT_SECRET) `
+            -and -not [string]::IsNullOrWhiteSpace($env:TS_ENDPOINT) `
+            -and -not [string]::IsNullOrWhiteSpace($env:TS_ACCOUNT) `
+            -and -not [string]::IsNullOrWhiteSpace($env:TS_PROFILE)
+
+          if ($configured) {
+            Write-Host "Trusted Signing is configured for this Windows build."
+          } else {
+            Write-Warning "Trusted Signing is not configured. Windows installers will be published unsigned and may be blocked by Smart App Control."
+          }
+
+      - name: Sign Windows installer with Trusted Signing
+        if: runner.os == 'Windows' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && vars.WINDOWS_TRUSTED_SIGNING_ENDPOINT != '' && vars.WINDOWS_TRUSTED_SIGNING_ACCOUNT_NAME != '' && vars.WINDOWS_TRUSTED_SIGNING_CERT_PROFILE_NAME != ''
+        uses: azure/trusted-signing-action@v0.5.11
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.WINDOWS_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.WINDOWS_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.WINDOWS_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\release
+          files-folder-filter: '*Setup*.exe'
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Windows installer signature
+        if: runner.os == 'Windows' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && vars.WINDOWS_TRUSTED_SIGNING_ENDPOINT != '' && vars.WINDOWS_TRUSTED_SIGNING_ACCOUNT_NAME != '' && vars.WINDOWS_TRUSTED_SIGNING_CERT_PROFILE_NAME != ''
+        shell: pwsh
+        run: |
+          $setupFiles = Get-ChildItem -Path release -Filter '*Setup*.exe' -Recurse
+          if (-not $setupFiles) {
+            throw "Could not find Windows setup executable to verify."
+          }
+
+          foreach ($file in $setupFiles) {
+            $sig = Get-AuthenticodeSignature -FilePath $file.FullName
+            Write-Host "$($file.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature on $($file.FullName)"
+            }
+          }
+
       - name: Smoke test macOS package
         if: runner.os == 'macOS'
         shell: bash
@@ -255,6 +314,7 @@ jobs:
             Notes for users:
             - macOS builds are ad-hoc signed in CI (no notarization).
             - If Gatekeeper warns on first open, use macOS override flow (Open Anyway / right-click Open).
+            - Windows installer is Trusted Signed when CI signing secrets are configured.
           generate_release_notes: true
           files: |
             release-assets/*.dmg
