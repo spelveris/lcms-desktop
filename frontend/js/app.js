@@ -762,9 +762,11 @@ function resetProgressionView() {
 function resetUptakeAssayView() {
   const overlay = document.getElementById('uptake-assay-overlay-plot');
   const curve = document.getElementById('uptake-assay-curve-plot');
+  const bar = document.getElementById('uptake-assay-bar-plot');
   const summary = document.getElementById('uptake-assay-summary');
   if (overlay) overlay.innerHTML = '';
   if (curve) curve.innerHTML = '';
+  if (bar) bar.innerHTML = '';
   if (summary) summary.innerHTML = '';
   setUptakeAssayEmptyState(true);
 }
@@ -842,9 +844,12 @@ function resizePlotlyById(plotId) {
   try {
     const width = Math.floor(el.clientWidth || 0);
     const fixedHeight = Number(el.dataset.fixedPlotHeight || 0);
+    const layoutHeight = Number(el.layout?.height || el._fullLayout?.height || 0);
     const height = Number.isFinite(fixedHeight) && fixedHeight > 0
       ? Math.floor(fixedHeight)
-      : Math.floor(el.clientHeight || 0);
+      : Number.isFinite(layoutHeight) && layoutHeight > 120
+        ? Math.floor(layoutHeight)
+        : Math.floor(el.clientHeight || 0);
     if (Number.isFinite(fixedHeight) && fixedHeight > 0) {
       el.style.height = `${Math.floor(fixedHeight)}px`;
       el.style.minHeight = `${Math.floor(fixedHeight)}px`;
@@ -3374,14 +3379,16 @@ function computeProgressionXRange(data) {
   let maxX = Number.NEGATIVE_INFINITY;
 
   (data.uv_progression || []).forEach((s) => {
-    [minX, maxX] = updateRangeWithTimes([minX, maxX], s.times);
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times);
   });
   (data.tic_progression || []).forEach((s) => {
-    [minX, maxX] = updateRangeWithTimes([minX, maxX], s.times);
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times);
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times_pos);
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times_neg);
   });
   (data.eic_progressions || []).forEach((group) => {
     (group.samples || []).forEach((s) => {
-      [minX, maxX] = updateRangeWithTimes([minX, maxX], s.times);
+      [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times);
     });
   });
 
@@ -3414,10 +3421,8 @@ function buildProgressionExportStyle() {
   };
 }
 
-function buildProgressionEicFilename(eicGroup, progressionSamples) {
-  const mz = Number(eicGroup?.mz);
-  const mzLabel = Number.isFinite(mz) ? mz.toFixed(1) : 'EIC';
-  const sampleText = (progressionSamples || [])
+function buildProgressionSampleNameText(progressionSamples) {
+  return (progressionSamples || [])
     .map((sample, index) => {
       const explicitName = String(sample?.name || '').trim();
       if (explicitName) return explicitName.replace(/\.[dD]$/, '');
@@ -3427,7 +3432,139 @@ function buildProgressionEicFilename(eicGroup, progressionSamples) {
     })
     .filter(Boolean)
     .join(', ');
+}
+
+function buildProgressionPdfFilename(progressionSamples) {
+  const baseTitle = sanitizeDownloadFilename(getProgressionBaseTitle());
+  const sampleText = buildProgressionSampleNameText(progressionSamples);
+  return sanitizeDownloadFilename(sampleText ? `${baseTitle} ${sampleText}` : baseTitle);
+}
+
+function buildProgressionPanelFilename(panelLabel, progressionSamples) {
+  const sampleText = buildProgressionSampleNameText(progressionSamples);
+  return sanitizeDownloadFilename(sampleText ? `${panelLabel} ${sampleText}` : panelLabel);
+}
+
+function buildProgressionEicFilename(eicGroup, progressionSamples) {
+  const mz = Number(eicGroup?.mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(1) : 'EIC';
+  const sampleText = buildProgressionSampleNameText(progressionSamples);
   return sanitizeDownloadFilename(sampleText ? `${mzLabel} ${sampleText}` : mzLabel);
+}
+
+function buildProgressionPanelTraces(sampleSeries, progressionSamples, options = {}) {
+  const getTimes = typeof options.getTimes === 'function'
+    ? options.getTimes
+    : (series) => series?.times;
+  const getIntensities = typeof options.getIntensities === 'function'
+    ? options.getIntensities
+    : (series) => series?.intensities;
+
+  return (progressionSamples || []).map((sampleMeta, index) => {
+    const series = Array.isArray(sampleSeries) ? sampleSeries[index] : null;
+    const times = getTimes(series);
+    const intensities = getIntensities(series);
+    return {
+      times: Array.isArray(times) ? times : [],
+      intensities: Array.isArray(intensities) ? intensities : [],
+      label: sampleMeta?.label || `Sample ${index + 1}`,
+      color: sampleMeta?.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+    };
+  });
+}
+
+function buildProgressionPanelExportPayloads() {
+  if (!state.progressionData) return [];
+
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  if (progressionSamples.length === 0) return [];
+
+  const baseTitle = getProgressionBaseTitle();
+  const xRange = computeProgressionXRange(state.progressionData);
+  const style = buildProgressionExportStyle();
+  const panels = [];
+
+  if (Array.isArray(state.progressionData.uv_progression) && state.progressionData.uv_progression.length > 0) {
+    panels.push({
+      title: `${baseTitle} - UV`,
+      x_label: 'Time (min)',
+      y_label: 'Absorbance (mAU)',
+      x_range: xRange,
+      style,
+      traces: buildProgressionPanelTraces(state.progressionData.uv_progression, progressionSamples),
+    });
+  }
+
+  if (Array.isArray(state.progressionData.tic_progression) && state.progressionData.tic_progression.length > 0) {
+    const hasDual = state.progressionData.tic_progression.some((sample) => sample?.has_dual_polarity);
+    if (hasDual) {
+      panels.push({
+        title: `${baseTitle} - TIC (+)`,
+        x_label: 'Time (min)',
+        y_label: 'Intensity',
+        x_range: xRange,
+        style,
+        traces: buildProgressionPanelTraces(
+          state.progressionData.tic_progression,
+          progressionSamples,
+          {
+            getTimes: (series) => series?.times_pos || series?.times,
+            getIntensities: (series) => series?.intensities_pos || series?.intensities,
+          }
+        ),
+      });
+      panels.push({
+        title: `${baseTitle} - TIC (−)`,
+        x_label: 'Time (min)',
+        y_label: 'Intensity',
+        x_range: xRange,
+        style,
+        traces: buildProgressionPanelTraces(
+          state.progressionData.tic_progression,
+          progressionSamples,
+          {
+            getTimes: (series) => series?.times_neg || series?.times,
+            getIntensities: (series) => series?.intensities_neg || series?.intensities,
+          }
+        ),
+      });
+    } else {
+      panels.push({
+        title: `${baseTitle} - TIC`,
+        x_label: 'Time (min)',
+        y_label: 'Intensity',
+        x_range: xRange,
+        style,
+        traces: buildProgressionPanelTraces(state.progressionData.tic_progression, progressionSamples),
+      });
+    }
+  }
+
+  (state.progressionData.eic_progressions || []).forEach((eicGroup) => {
+    const polarityLabel = formatProgressionPolarityLabel(eicGroup?.polarity);
+    const mz = Number(eicGroup?.mz);
+    const mzLabel = Number.isFinite(mz) ? mz.toFixed(2) : '?';
+    panels.push({
+      title: `${baseTitle} - EIC m/z ${mzLabel}${polarityLabel}`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      traces: buildProgressionPanelTraces(eicGroup?.samples, progressionSamples),
+    });
+  });
+
+  return panels.filter((panel) => Array.isArray(panel.traces) && panel.traces.some((trace) => trace.times.length > 0 && trace.intensities.length > 0));
+}
+
+function buildProgressionPdfExportPayload() {
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  const panels = buildProgressionPanelExportPayloads();
+  if (panels.length === 0) return null;
+  return {
+    filename_base: buildProgressionPdfFilename(progressionSamples),
+    panels,
+  };
 }
 
 function buildProgressionEicExportPayload(groupIndex) {
@@ -3436,15 +3573,7 @@ function buildProgressionEicExportPayload(groupIndex) {
   if (!eicGroup || !Array.isArray(eicGroup.samples)) return null;
 
   const progressionSamples = getProgressionSamples({ activeOnly: true });
-  const traces = eicGroup.samples.map((sampleTrace, index) => {
-    const sampleMeta = progressionSamples[index] || {};
-    return {
-      times: Array.isArray(sampleTrace?.times) ? sampleTrace.times : [],
-      intensities: Array.isArray(sampleTrace?.intensities) ? sampleTrace.intensities : [],
-      label: sampleMeta.label || `Sample ${index + 1}`,
-      color: sampleMeta.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
-    };
-  });
+  const traces = buildProgressionPanelTraces(eicGroup.samples, progressionSamples);
 
   return {
     title: buildProgressionEicTitle(eicGroup),
@@ -3455,6 +3584,94 @@ function buildProgressionEicExportPayload(groupIndex) {
     filename_base: buildProgressionEicFilename(eicGroup, progressionSamples),
     traces,
   };
+}
+
+function buildProgressionStandardPanelExportPayload(panelKey) {
+  if (!state.progressionData) return null;
+
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  if (progressionSamples.length === 0) return null;
+
+  const baseTitle = getProgressionBaseTitle();
+  const xRange = computeProgressionXRange(state.progressionData);
+  const style = buildProgressionExportStyle();
+
+  if (panelKey === 'uv') {
+    if (!Array.isArray(state.progressionData.uv_progression) || state.progressionData.uv_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - UV`,
+      x_label: 'Time (min)',
+      y_label: 'Absorbance (mAU)',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('UV', progressionSamples),
+      traces: buildProgressionPanelTraces(state.progressionData.uv_progression, progressionSamples),
+    };
+  }
+
+  if (panelKey === 'tic') {
+    if (!Array.isArray(state.progressionData.tic_progression) || state.progressionData.tic_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - TIC`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('TIC', progressionSamples),
+      traces: buildProgressionPanelTraces(state.progressionData.tic_progression, progressionSamples),
+    };
+  }
+
+  if (panelKey === 'tic-pos') {
+    if (!Array.isArray(state.progressionData.tic_progression) || state.progressionData.tic_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - TIC (+)`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('TIC positive', progressionSamples),
+      traces: buildProgressionPanelTraces(
+        state.progressionData.tic_progression,
+        progressionSamples,
+        {
+          getTimes: (series) => series?.times_pos || series?.times,
+          getIntensities: (series) => series?.intensities_pos || series?.intensities,
+        }
+      ),
+    };
+  }
+
+  if (panelKey === 'tic-neg') {
+    if (!Array.isArray(state.progressionData.tic_progression) || state.progressionData.tic_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - TIC (−)`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('TIC negative', progressionSamples),
+      traces: buildProgressionPanelTraces(
+        state.progressionData.tic_progression,
+        progressionSamples,
+        {
+          getTimes: (series) => series?.times_neg || series?.times,
+          getIntensities: (series) => series?.intensities_neg || series?.intensities,
+        }
+      ),
+    };
+  }
+
+  return null;
+}
+
+function appendProgressionDownloadRow(container, onClick) {
+  if (!container || typeof onClick !== 'function') return;
+  const downloadRow = document.createElement('div');
+  downloadRow.className = 'single-eic-download-row';
+  downloadRow.innerHTML = '<button class="btn btn-sm">Download PDF</button>';
+  downloadRow.querySelector('button')?.addEventListener('click', onClick);
+  container.appendChild(downloadRow);
 }
 
 async function exportProgressionEicPanel(groupIndex) {
@@ -3488,6 +3705,41 @@ async function exportProgressionEicPanel(groupIndex) {
   }
 }
 
+async function exportProgressionStandardPanel(panelKey) {
+  if (!state.progressionData) {
+    toast('Generate progression first', 'warning');
+    return;
+  }
+
+  readProgressionAssignmentsFromDOM();
+  const payload = buildProgressionStandardPanelExportPayload(panelKey);
+  if (!payload) {
+    toast('Progression panel not available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportProgressionPanel({
+      ...payload,
+      format: 'pdf',
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${payload.filename_base}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function stripUptakeAssayBundleSuffix(fileName) {
+  return String(fileName || '').replace(/\.(?:d|sirslt|rslt|olax)$/i, '');
+}
+
 function inferUptakeAssayConcentration(fileName) {
   const match = String(fileName || '').match(/CC\s*([1-6])(?:\b|[^0-9])/i) || String(fileName || '').match(/CC([1-6])/i);
   if (!match) return '';
@@ -3503,15 +3755,30 @@ function inferUptakeAssayConcentration(fileName) {
   return Number.isFinite(value) ? String(value) : '';
 }
 
+function inferUptakeAssayRole(fileName) {
+  return inferUptakeAssayConcentration(fileName) !== '' ? 'calibration' : 'sample';
+}
+
+function inferUptakeAssaySampleLabel(fileName) {
+  return stripUptakeAssayBundleSuffix(fileName);
+}
+
 function syncUptakeAssayEntriesToSelectedFiles() {
   const next = {};
   state.selectedFiles.forEach((file, index) => {
     const existing = state.uptakeAssayEntries[file.path] || {};
+    const inferredConcentration = inferUptakeAssayConcentration(file.name);
+    const inferredRole = inferUptakeAssayRole(file.name);
+    const inferredLabel = inferUptakeAssaySampleLabel(file.name);
     next[file.path] = {
       active: existing.active !== false,
+      role: existing.role === 'calibration' || existing.role === 'sample' ? existing.role : inferredRole,
       concentration: existing.concentration != null && String(existing.concentration).trim() !== ''
         ? String(existing.concentration)
-        : inferUptakeAssayConcentration(file.name),
+        : inferredConcentration,
+      assayLabel: existing.assayLabel != null && String(existing.assayLabel).trim() !== ''
+        ? String(existing.assayLabel)
+        : inferredLabel,
       color: existing.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
     };
   });
@@ -3533,11 +3800,14 @@ function getUptakeAssaySamples(options = {}) {
   return state.selectedFiles
     .map((file, index) => {
       const entry = state.uptakeAssayEntries[file.path] || {};
+      const sampleName = stripUptakeAssayBundleSuffix(file.name || file.path.split(/[\\/]/).pop() || '');
       return {
         path: file.path,
-        name: String(file.name || file.path.split(/[\\/]/).pop() || '').replace(/\.[dD]$/, ''),
+        name: sampleName,
         active: entry.active !== false,
+        role: entry.role === 'calibration' ? 'calibration' : 'sample',
         concentration: entry.concentration,
+        assayLabel: String(entry.assayLabel || sampleName).trim() || sampleName,
         color: entry.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
       };
     })
@@ -3598,6 +3868,11 @@ function buildUptakeAssayCurveTitle(dataOrSettings = null) {
   return `Calibration Curve - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
 }
 
+function buildUptakeAssayBarTitle(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  return `Uptake Assay - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
+}
+
 function buildUptakeAssayAreaLabel(dataOrSettings = null) {
   const source = dataOrSettings || getUptakeAssaySettings();
   const start = Number(source?.start);
@@ -3626,11 +3901,12 @@ function buildUptakeAssayExportStyle() {
   };
 }
 
-function getUptakeAssayRawPointsFromData(data) {
+function getUptakeAssayCalibrationRawPointsFromData(data) {
   const samples = Array.isArray(data?.samples) ? data.samples : [];
   return samples
     .map((sample) => {
       const entry = state.uptakeAssayEntries[sample.path] || {};
+      if ((entry.role || 'sample') !== 'calibration') return null;
       return {
         x: parseFloat(entry.concentration),
         y: Number(sample.area),
@@ -3638,12 +3914,13 @@ function getUptakeAssayRawPointsFromData(data) {
         path: sample.path,
       };
     })
+    .filter(Boolean)
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
 }
 
 function getUptakeAssayPointsFromData(data) {
-  const rawPoints = getUptakeAssayRawPointsFromData(data);
+  const rawPoints = getUptakeAssayCalibrationRawPointsFromData(data);
   const grouped = new Map();
 
   rawPoints.forEach((point) => {
@@ -3673,11 +3950,94 @@ function getUptakeAssayPointsFromData(data) {
         y: meanArea,
         y_sd: sdArea,
         replicate_count: replicateCount,
-        label: replicateCount > 1 ? `${group.x} uM (n=${replicateCount})` : sampleNames[0],
+        label: replicateCount > 1 ? `${group.x} µM (n=${replicateCount})` : sampleNames[0],
         sample_names: sampleNames,
       };
     })
     .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
+}
+
+function calculateUptakeAssayConcentrationFromArea(area, fit) {
+  const slope = Number(fit?.slope);
+  const intercept = Number(fit?.intercept);
+  const numericArea = Number(area);
+  if (!Number.isFinite(numericArea) || !Number.isFinite(slope) || Math.abs(slope) < 1e-12 || !Number.isFinite(intercept)) {
+    return null;
+  }
+  return (numericArea - intercept) / slope;
+}
+
+function getUptakeAssayAssayRawPointsFromData(data, fit) {
+  const samples = Array.isArray(data?.samples) ? data.samples : [];
+  return samples
+    .map((sample) => {
+      const entry = state.uptakeAssayEntries[sample.path] || {};
+      if ((entry.role || 'sample') !== 'sample') return null;
+      const label = String(entry.assayLabel || sample.name || '').trim() || sample.name;
+      const concentration = calculateUptakeAssayConcentrationFromArea(sample.area, fit);
+      if (!Number.isFinite(concentration)) return null;
+      return {
+        x: label,
+        y: concentration,
+        label,
+        sample_name: sample.name,
+        path: sample.path,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getUptakeAssayAssayPointsFromData(data, fit) {
+  const rawPoints = getUptakeAssayAssayRawPointsFromData(data, fit);
+  const grouped = new Map();
+
+  rawPoints.forEach((point) => {
+    const key = String(point.label || '').trim();
+    if (!key) return;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        label: key,
+        points: [],
+      });
+    }
+    grouped.get(key).points.push(point);
+  });
+
+  return Array.from(grouped.values())
+    .map((group) => {
+      const yValues = group.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
+      if (yValues.length === 0) return null;
+      const replicateCount = yValues.length;
+      const meanConcentration = yValues.reduce((sum, value) => sum + value, 0) / replicateCount;
+      let sdConcentration = 0;
+      if (replicateCount >= 2) {
+        const variance = yValues.reduce((sum, value) => sum + ((value - meanConcentration) ** 2), 0) / (replicateCount - 1);
+        sdConcentration = Math.sqrt(Math.max(variance, 0));
+      }
+      return {
+        label: group.label,
+        x: group.label,
+        y: meanConcentration,
+        y_sd: sdConcentration,
+        replicate_count: replicateCount,
+        sample_names: group.points.map((point) => point.sample_name || point.label),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function getUptakeAssayPerSampleConcentrationMap(data, fit) {
+  const map = new Map();
+  (Array.isArray(data?.samples) ? data.samples : []).forEach((sample) => {
+    const entry = state.uptakeAssayEntries[sample.path] || {};
+    if ((entry.role || 'sample') !== 'sample') return;
+    const concentration = calculateUptakeAssayConcentrationFromArea(sample.area, fit);
+    if (Number.isFinite(concentration)) {
+      map.set(sample.path, concentration);
+    }
+  });
+  return map;
 }
 
 function renderUptakeAssayEntries() {
@@ -3693,26 +4053,42 @@ function renderUptakeAssayEntries() {
   const sampleAreas = new Map(
     ((state.uptakeAssayData?.samples) || []).map((sample) => [sample.path, sample.area])
   );
+  const calibrationPoints = state.uptakeAssayData ? getUptakeAssayPointsFromData(state.uptakeAssayData) : [];
+  const fit = computeUptakeAssayFit(calibrationPoints);
+  const sampleConcentrations = state.uptakeAssayData ? getUptakeAssayPerSampleConcentrationMap(state.uptakeAssayData, fit) : new Map();
 
   let html = `<table class="uptake-assay-sample-table"><thead><tr>
     <th>Use</th>
     <th>Sample</th>
-    <th>Concentration (uM)</th>
+    <th>Role</th>
+    <th>Concentration (µM)</th>
+    <th>Sample Name</th>
     <th>Area</th>
+    <th>Calculated Conc. (µM)</th>
   </tr></thead><tbody>`;
 
   state.selectedFiles.forEach((file, index) => {
     const entry = state.uptakeAssayEntries[file.path] || {};
     const area = sampleAreas.get(file.path);
     const isActive = entry.active !== false;
+    const role = entry.role === 'calibration' ? 'calibration' : 'sample';
+    const calculated = sampleConcentrations.get(file.path);
     html += `<tr>
       <td><input type="checkbox" class="uptake-assay-active" data-path="${escapeAttr(file.path)}" ${isActive ? 'checked' : ''}></td>
       <td>
-        <div><strong>${escapeHtml(String(file.name || '').replace(/\.[dD]$/, ''))}</strong></div>
+        <div><strong>${escapeHtml(stripUptakeAssayBundleSuffix(String(file.name || '')))}</strong></div>
         <div class="uptake-assay-sample-path">${escapeHtml(file.path)}</div>
       </td>
-      <td><input type="number" class="uptake-assay-concentration" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.concentration ?? '')}" step="0.01" min="0"></td>
+      <td>
+        <select class="uptake-assay-role uptake-assay-role-select" data-path="${escapeAttr(file.path)}">
+          <option value="calibration" ${role === 'calibration' ? 'selected' : ''}>Calibration</option>
+          <option value="sample" ${role === 'sample' ? 'selected' : ''}>Assay Sample</option>
+        </select>
+      </td>
+      <td class="uptake-assay-concentration-cell"><input type="number" class="uptake-assay-concentration" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.concentration ?? '')}" step="0.01" min="0" ${role === 'calibration' ? '' : 'disabled'}></td>
+      <td class="uptake-assay-label-cell"><input type="text" class="uptake-assay-label" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.assayLabel ?? stripUptakeAssayBundleSuffix(String(file.name || '')))}" ${role === 'sample' ? '' : 'disabled'}></td>
       <td><span class="uptake-assay-area">${Number.isFinite(Number(area)) ? Number(area).toExponential(3) : '-'}</span></td>
+      <td><span class="uptake-assay-calc">${role === 'sample' && Number.isFinite(Number(calculated)) ? Number(calculated).toFixed(2) : '-'}</span></td>
     </tr>`;
   });
 
@@ -3732,6 +4108,29 @@ function renderUptakeAssayEntries() {
     });
   });
 
+  container.querySelectorAll('.uptake-assay-role').forEach((input) => {
+    input.addEventListener('change', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.role = input.value === 'calibration' ? 'calibration' : 'sample';
+      if (entry.role === 'calibration' && String(entry.concentration || '').trim() === '') {
+        const file = state.selectedFiles.find((item) => item.path === path);
+        if (file) entry.concentration = inferUptakeAssayConcentration(file.name);
+      }
+      if (entry.role === 'sample' && String(entry.assayLabel || '').trim() === '') {
+        const file = state.selectedFiles.find((item) => item.path === path);
+        if (file) entry.assayLabel = inferUptakeAssaySampleLabel(file.name);
+      }
+      state.uptakeAssayEntries[path] = entry;
+      if (state.uptakeAssayData) {
+        renderUptakeAssayData(state.uptakeAssayData);
+      } else {
+        renderUptakeAssayEntries();
+      }
+    });
+  });
+
   container.querySelectorAll('.uptake-assay-concentration').forEach((input) => {
     input.addEventListener('input', () => {
       const path = input.dataset.path;
@@ -3744,26 +4143,52 @@ function renderUptakeAssayEntries() {
       if (state.uptakeAssayData) renderUptakeAssayData(state.uptakeAssayData);
     });
   });
+
+  container.querySelectorAll('.uptake-assay-label').forEach((input) => {
+    input.addEventListener('input', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.assayLabel = input.value;
+      state.uptakeAssayEntries[path] = entry;
+    });
+    input.addEventListener('change', () => {
+      if (state.uptakeAssayData) renderUptakeAssayData(state.uptakeAssayData);
+    });
+  });
 }
 
-function renderUptakeAssaySummary(data, fit, pointCount) {
+function renderUptakeAssaySummary(data, fit, pointCount, assayPoints = []) {
   const summary = document.getElementById('uptake-assay-summary');
   if (!summary) return;
   const sampleCount = Array.isArray(data?.samples) ? data.samples.length : 0;
-  const groupedPoints = getUptakeAssayPointsFromData(data);
-  const replicateGroupCount = groupedPoints.filter((point) => Number(point.replicate_count) > 1).length;
+  const calibrationSampleCount = (Array.isArray(data?.samples) ? data.samples : []).filter((sample) => {
+    const entry = state.uptakeAssayEntries[sample.path] || {};
+    return (entry.role || 'sample') === 'calibration';
+  }).length;
+  const assaySampleCount = (Array.isArray(data?.samples) ? data.samples : []).filter((sample) => {
+    const entry = state.uptakeAssayEntries[sample.path] || {};
+    return (entry.role || 'sample') === 'sample';
+  }).length;
+  const calibrationReplicateGroupCount = getUptakeAssayPointsFromData(data).filter((point) => Number(point.replicate_count) > 1).length;
+  const assayReplicateGroupCount = (Array.isArray(assayPoints) ? assayPoints : []).filter((point) => Number(point.replicate_count) > 1).length;
   const parts = [
     `<div class="metric"><span class="dot blue"></span> Samples: ${sampleCount}</div>`,
-    `<div class="metric"><span class="dot green"></span> Points: ${pointCount}</div>`,
+    `<div class="metric"><span class="dot green"></span> Calibration: ${calibrationSampleCount}</div>`,
+    `<div class="metric"><span class="dot red"></span> Assay: ${assaySampleCount}</div>`,
+    `<div class="metric"><span class="dot yellow"></span> Curve points: ${pointCount}</div>`,
   ];
-  if (replicateGroupCount > 0) {
-    parts.push(`<div class="metric"><span class="dot yellow"></span> SD bars: ${replicateGroupCount} concentration${replicateGroupCount === 1 ? '' : 's'}</div>`);
+  if (calibrationReplicateGroupCount > 0) {
+    parts.push(`<div class="metric"><span class="dot yellow"></span> Curve SD bars: ${calibrationReplicateGroupCount}</div>`);
+  }
+  if (assayReplicateGroupCount > 0) {
+    parts.push(`<div class="metric"><span class="dot blue"></span> Uptake SD bars: ${assayReplicateGroupCount}</div>`);
   }
   if (fit && Number.isFinite(fit.slope) && Number.isFinite(fit.intercept) && Number.isFinite(fit.rSquared)) {
     parts.push(`<div class="metric"><span class="dot red"></span> y = ${fit.slope.toFixed(1)}x ${fit.intercept >= 0 ? '+' : '-'} ${Math.abs(fit.intercept).toFixed(1)}</div>`);
     parts.push(`<div class="metric"><span class="dot yellow"></span> R2 = ${fit.rSquared.toFixed(4)}</div>`);
   } else {
-    parts.push('<div class="metric"><span class="dot yellow"></span> Enter at least 2 numeric concentrations to fit a line</div>');
+    parts.push('<div class="metric"><span class="dot yellow"></span> Enter at least 2 calibration controls with numeric concentrations</div>');
   }
   summary.innerHTML = parts.join('');
 }
@@ -3784,6 +4209,7 @@ function renderUptakeAssayData(data) {
   }));
   const points = getUptakeAssayPointsFromData(data);
   const fit = computeUptakeAssayFit(points);
+  const assayPoints = getUptakeAssayAssayPointsFromData(data, fit);
 
   charts.plotUptakeAssayOverlay('uptake-assay-overlay-plot', overlaySamples, {
     title: buildUptakeAssayOverlayTitle(data),
@@ -3793,11 +4219,16 @@ function renderUptakeAssayData(data) {
   });
   charts.plotCalibrationCurve('uptake-assay-curve-plot', points, fit, {
     title: buildUptakeAssayCurveTitle(data),
-    xLabel: 'Concentration (uM)',
+    xLabel: 'Concentration (µM)',
     yLabel: buildUptakeAssayAreaLabel(data),
   });
-  renderUptakeAssaySummary(data, fit, points.length);
-  schedulePlotlyResize(['uptake-assay-overlay-plot', 'uptake-assay-curve-plot']);
+  charts.plotUptakeAssayBarChart('uptake-assay-bar-plot', assayPoints, {
+    title: buildUptakeAssayBarTitle(data),
+    xLabel: 'Sample Name',
+    yLabel: 'Calculated Concentration (µM)',
+  });
+  renderUptakeAssaySummary(data, fit, points.length, assayPoints);
+  schedulePlotlyResize(['uptake-assay-overlay-plot', 'uptake-assay-curve-plot', 'uptake-assay-bar-plot']);
 }
 
 async function autoDetectUptakeAssayWindow() {
@@ -3845,6 +4276,13 @@ async function runUptakeAssayCC() {
     toast('Enable at least 2 samples first', 'warning');
     return;
   }
+  const calibrationSamples = samples.filter((sample) =>
+    sample.role === 'calibration' && Number.isFinite(parseFloat(sample.concentration))
+  );
+  if (calibrationSamples.length < 2) {
+    toast('Enable at least 2 calibration controls with numeric concentrations', 'warning');
+    return;
+  }
 
   const settings = getUptakeAssaySettings();
   if (!Number.isFinite(settings.mz) || settings.mz <= 0) {
@@ -3857,7 +4295,7 @@ async function runUptakeAssayCC() {
   }
 
   state.uptakeAssayLoadInFlight = true;
-  showLoading('Building uptake assay calibration curve...');
+  showLoading('Building uptake assay graphs...');
   try {
     const sampleResults = await Promise.all(samples.map(async (sample) => {
       const [eicData, areaData] = await Promise.all([
@@ -3888,7 +4326,7 @@ async function runUptakeAssayCC() {
       samples: sampleResults,
     };
     renderUptakeAssayData(state.uptakeAssayData);
-    toast('Uptake assay calibration curve built', 'success');
+    toast('Uptake assay graphs built', 'success');
   } catch (err) {
     toast(`Uptake assay CC failed: ${err.message}`, 'error');
   } finally {
@@ -3899,7 +4337,7 @@ async function runUptakeAssayCC() {
 
 async function exportUptakeAssayCCPdf() {
   if (!state.uptakeAssayData) {
-    toast('Build the calibration curve first', 'warning');
+    toast('Build the uptake assay graphs first', 'warning');
     return;
   }
   const points = getUptakeAssayPointsFromData(state.uptakeAssayData);
@@ -3909,6 +4347,7 @@ async function exportUptakeAssayCCPdf() {
   }
 
   const fit = computeUptakeAssayFit(points);
+  const assayPoints = getUptakeAssayAssayPointsFromData(state.uptakeAssayData, fit);
   const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
   const filenameBase = buildUptakeAssayFilenameBase(state.uptakeAssayData);
 
@@ -3918,8 +4357,11 @@ async function exportUptakeAssayCCPdf() {
       points,
       fit,
       title: buildUptakeAssayCurveTitle(state.uptakeAssayData),
-      x_label: 'Concentration (uM)',
+      x_label: 'Concentration (µM)',
       y_label: buildUptakeAssayAreaLabel(state.uptakeAssayData),
+      assay_points: assayPoints,
+      assay_title: buildUptakeAssayBarTitle(state.uptakeAssayData),
+      assay_y_label: 'Calculated Concentration (µM)',
       filename_base: filenameBase,
       style: buildUptakeAssayExportStyle(),
       format: 'pdf',
@@ -4079,14 +4521,14 @@ async function loadProgression() {
     const data = {};
 
     // UV progression
-    const uvData = perSample.filter(s => s.uv).map(s => s.uv);
-    if (uvData.length > 0) {
+    const uvData = perSample.map((s) => s.uv || null);
+    if (uvData.some(Boolean)) {
       data.uv_progression = uvData;
     }
 
     // TIC progression
-    const ticData = perSample.filter(s => s.tic).map(s => s.tic);
-    if (ticData.length > 0) {
+    const ticData = perSample.map((s) => s.tic || null);
+    if (ticData.some(Boolean)) {
       data.tic_progression = ticData;
     }
 
@@ -4147,8 +4589,8 @@ function renderProgression(data, samples) {
     progressionPlotIds.push(div.id);
 
     const uvSamples = data.uv_progression.map((s, i) => ({
-      times: s.times,
-      intensities: s.intensities,
+      times: s?.times || [],
+      intensities: s?.intensities || [],
       label: samples[i]?.label || `Sample ${i + 1}`,
       role: samples[i]?.role || 'mid',
       color: samples[i]?.color,
@@ -4158,11 +4600,12 @@ function renderProgression(data, samples) {
       yLabel: 'Absorbance (mAU)',
       xRange,
     });
+    appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('uv'));
   }
 
   // TIC progression
   if (data.tic_progression) {
-    const hasDual = data.tic_progression.some(s => s.has_dual_polarity);
+    const hasDual = data.tic_progression.some((s) => s?.has_dual_polarity);
     if (hasDual) {
       // Positive panel
       const posDiv = document.createElement('div');
@@ -4171,8 +4614,8 @@ function renderProgression(data, samples) {
       container.appendChild(posDiv);
       progressionPlotIds.push(posDiv.id);
       const ticPosSamples = data.tic_progression.map((s, i) => ({
-        times: s.times_pos || s.times,
-        intensities: s.intensities_pos || s.intensities,
+        times: s?.times_pos || s?.times || [],
+        intensities: s?.intensities_pos || s?.intensities || [],
         label: samples[i]?.label || `Sample ${i + 1}`,
         role: samples[i]?.role || 'mid',
         color: samples[i]?.color,
@@ -4182,6 +4625,7 @@ function renderProgression(data, samples) {
         yLabel: 'Intensity',
         xRange,
       });
+      appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('tic-pos'));
 
       // Negative panel
       const negDiv = document.createElement('div');
@@ -4190,8 +4634,8 @@ function renderProgression(data, samples) {
       container.appendChild(negDiv);
       progressionPlotIds.push(negDiv.id);
       const ticNegSamples = data.tic_progression.map((s, i) => ({
-        times: s.times_neg || s.times,
-        intensities: s.intensities_neg || s.intensities,
+        times: s?.times_neg || s?.times || [],
+        intensities: s?.intensities_neg || s?.intensities || [],
         label: samples[i]?.label || `Sample ${i + 1}`,
         role: samples[i]?.role || 'mid',
         color: samples[i]?.color,
@@ -4201,6 +4645,7 @@ function renderProgression(data, samples) {
         yLabel: 'Intensity',
         xRange,
       });
+      appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('tic-neg'));
     } else {
       const div = document.createElement('div');
       div.className = 'plot-container';
@@ -4208,8 +4653,8 @@ function renderProgression(data, samples) {
       container.appendChild(div);
       progressionPlotIds.push(div.id);
       const ticSamples = data.tic_progression.map((s, i) => ({
-        times: s.times,
-        intensities: s.intensities,
+        times: s?.times || [],
+        intensities: s?.intensities || [],
         label: samples[i]?.label || `Sample ${i + 1}`,
         role: samples[i]?.role || 'mid',
         color: samples[i]?.color,
@@ -4219,6 +4664,7 @@ function renderProgression(data, samples) {
         yLabel: 'Intensity',
         xRange,
       });
+      appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('tic'));
     }
   }
 
@@ -4232,8 +4678,8 @@ function renderProgression(data, samples) {
       progressionPlotIds.push(div.id);
 
       const eicSamples = eicGroup.samples.map((s, i) => ({
-        times: s.times,
-        intensities: s.intensities,
+        times: s?.times || [],
+        intensities: s?.intensities || [],
         label: samples[i]?.label || `Sample ${i + 1}`,
         role: samples[i]?.role || 'mid',
         color: samples[i]?.color,
@@ -4245,11 +4691,7 @@ function renderProgression(data, samples) {
         xRange,
       });
 
-      const downloadRow = document.createElement('div');
-      downloadRow.className = 'single-eic-download-row';
-      downloadRow.innerHTML = '<button class="btn btn-sm">Download PDF</button>';
-      downloadRow.querySelector('button').addEventListener('click', () => exportProgressionEicPanel(gi));
-      container.appendChild(downloadRow);
+      appendProgressionDownloadRow(container, () => exportProgressionEicPanel(gi));
     });
   }
   schedulePlotlyResize(progressionPlotIds);
@@ -4260,7 +4702,33 @@ async function exportProgression(format) {
     toast('Generate progression first', 'warning');
     return;
   }
-  await exportAllPlots('tab-progression', 'progression', format);
+  if (String(format).toLowerCase() !== 'pdf') {
+    await exportAllPlots('tab-progression', 'progression', format);
+    return;
+  }
+
+  readProgressionAssignmentsFromDOM();
+  const payload = buildProgressionPdfExportPayload();
+  if (!payload) {
+    toast('No progression panels available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportProgressionPdf({
+      ...payload,
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${payload.filename_base}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
 }
 
 // ===== EIC Batch Tab =====

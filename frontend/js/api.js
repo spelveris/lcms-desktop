@@ -178,6 +178,14 @@ const api = {
     });
   },
 
+  exportProgressionPdf(payload) {
+    return apiFetch('/api/export-progression-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   exportUptakeAssayCC(payload) {
     return apiFetch('/api/export-uptake-assay-cc', {
       method: 'POST',

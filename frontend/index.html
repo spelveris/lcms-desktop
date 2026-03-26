@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.28">
+  <link rel="stylesheet" href="css/style.css?v=0.2.29">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -321,20 +321,23 @@
           <input type="number" id="uptake-assay-end" value="2.685" step="0.001" min="0">
         </label>
         <button id="btn-uptake-assay-auto-window" class="btn btn-sm">Auto Window</button>
-        <button id="btn-uptake-assay-run" class="btn btn-primary">Build Curve</button>
+        <button id="btn-uptake-assay-run" class="btn btn-primary">Build Graphs</button>
         <button id="btn-uptake-assay-export-pdf" class="btn btn-sm">Export PDF</button>
       </div>
-      <div class="toolbar-note" style="margin-bottom:12px;">Uses the currently selected files. Edit concentrations in uM, then build an EIC-based calibration curve for the chosen time window. Duplicate concentrations are combined as mean area, with sample SD error bars when 2 or more files share the same concentration.</div>
+      <div class="toolbar-note" style="margin-bottom:12px;">Uses the currently selected files. Mark rows as calibration controls or assay samples. Calibration controls are fit from the selected EIC and time window. Assay samples use that same window to calculate intracellular concentration. Matching sample names are grouped as replicates and shown with mean plus SD error bars.</div>
       <div id="uptake-assay-samples" class="uptake-assay-samples"></div>
       <div id="uptake-assay-empty-state" class="quote-empty-stack"></div>
-      <div id="uptake-assay-content" class="two-col hidden">
-        <div class="col">
+      <div id="uptake-assay-content" class="uptake-assay-layout hidden">
+        <div class="col uptake-assay-span-2">
           <div id="uptake-assay-overlay-plot" class="plot-container"></div>
         </div>
         <div class="col">
           <div id="uptake-assay-curve-plot" class="plot-container"></div>
-          <div id="uptake-assay-summary" class="metrics-bar"></div>
         </div>
+        <div class="col">
+          <div id="uptake-assay-bar-plot" class="plot-container"></div>
+        </div>
+        <div id="uptake-assay-summary" class="metrics-bar uptake-assay-span-2"></div>
       </div>
     </div>
 
@@ -631,9 +634,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.28"></script>
-  <script src="js/charts.js?v=0.2.28"></script>
-  <script src="js/quotes.js?v=0.2.27"></script>
-  <script src="js/app.js?v=0.2.28"></script>
+  <script src="js/api.js?v=0.2.29"></script>
+  <script src="js/charts.js?v=0.2.29"></script>
+  <script src="js/quotes.js?v=0.2.29"></script>
+  <script src="js/app.js?v=0.2.29"></script>
 </body>
 </html>

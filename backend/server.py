@@ -3098,9 +3098,39 @@ def export_progression_panel(payload: dict = Body(...)):
     )
 
 
+@app.post("/api/export-progression-pdf")
+def export_progression_pdf(payload: dict = Body(...)):
+    """Export Time Progression panels as a single stacked PDF page."""
+    panels = payload.get("panels", [])
+    if not isinstance(panels, list) or len(panels) == 0:
+        raise HTTPException(status_code=400, detail="panels must be a non-empty list")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    filename_base = str(payload.get("filename_base", "progression"))
+    fig = plotting.create_stacked_chromatogram_overlay_export_figure(panels)
+    try:
+        content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+    finally:
+        plt.close(fig)
+
+    safe_name = _sanitize_filename(filename_base, fallback="progression")
+    filename = f"{safe_name}.pdf"
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/api/export-uptake-assay-cc")
 def export_uptake_assay_cc(payload: dict = Body(...)):
-    """Export an uptake assay calibration curve through the backend renderer."""
+    """Export an uptake assay calibration curve, optionally with uptake bars."""
     points = payload.get("points", [])
     if not isinstance(points, list) or len(points) == 0:
         raise HTTPException(status_code=400, detail="points must be a non-empty list")
@@ -3116,8 +3146,10 @@ def export_uptake_assay_cc(payload: dict = Body(...)):
     dpi = max(72, min(600, dpi))
 
     title = str(payload.get("title", "Uptake Assay Calibration Curve"))
-    x_label = str(payload.get("x_label", "Concentration (uM)"))
+    x_label = str(payload.get("x_label", "Concentration (µM)"))
     y_label = str(payload.get("y_label", "Integrated Area"))
+    assay_title = str(payload.get("assay_title", "Uptake Assay"))
+    assay_y_label = str(payload.get("assay_y_label", "Calculated Concentration (µM)"))
     filename_base = str(payload.get("filename_base", "uptake_assay_cc"))
 
     style = payload.get("style", {})
@@ -3127,14 +3159,20 @@ def export_uptake_assay_cc(payload: dict = Body(...)):
     fit = payload.get("fit")
     if not isinstance(fit, dict):
         fit = None
+    assay_points = payload.get("assay_points")
+    if not isinstance(assay_points, list):
+        assay_points = []
 
-    fig = plotting.create_calibration_curve_export_figure(
+    fig = plotting.create_uptake_assay_export_figure(
         points=points,
         title=title,
         x_label=x_label,
         y_label=y_label,
         style=style,
         fit=fit,
+        assay_points=assay_points,
+        assay_title=assay_title,
+        assay_y_label=assay_y_label,
     )
     try:
         if export_format == "svg":

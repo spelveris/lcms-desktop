@@ -1083,6 +1083,14 @@ input[type="radio"] {
 .uptake-assay-samples {
   margin-bottom: 12px;
 }
+.uptake-assay-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.uptake-assay-span-2 {
+  grid-column: 1 / -1;
+}
 .uptake-assay-sample-table {
   width: 100%;
   border-collapse: collapse;
@@ -1111,6 +1119,10 @@ input[type="radio"] {
 .uptake-assay-sample-table input[type="number"] {
   width: 110px;
 }
+.uptake-assay-sample-table input[type="text"],
+.uptake-assay-sample-table select {
+  width: 100%;
+}
 .uptake-assay-sample-path {
   color: var(--text-muted);
   font-size: 11px;
@@ -1121,8 +1133,34 @@ input[type="radio"] {
   font-family: var(--font-mono);
   font-size: 12px;
 }
+.uptake-assay-concentration-cell input[disabled],
+.uptake-assay-label-cell input[disabled] {
+  opacity: 0.5;
+}
+.uptake-assay-role-select {
+  min-width: 130px;
+}
+.uptake-assay-calc {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 .uptake-assay-summary {
   margin-top: 12px;
+}
+#uptake-assay-bar-plot {
+  overflow-x: auto;
+}
+#uptake-assay-bar-plot.js-plotly-plot {
+  max-width: none !important;
+}
+
+@media (max-width: 1200px) {
+  .uptake-assay-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .uptake-assay-span-2 {
+    grid-column: auto;
+  }
 }
 
 /* ===== EIC Batch ===== */

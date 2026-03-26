@@ -1763,6 +1763,86 @@ def create_deconvoluted_masses_figure(
     return fig
 
 
+def _normalize_chromatogram_overlay_traces(
+    traces: list[dict],
+) -> list[tuple[str, np.ndarray, np.ndarray, str]]:
+    normalized_traces: list[tuple[str, np.ndarray, np.ndarray, str]] = []
+    fallback_colors = config.EIC_COLORS or ["#1f77b4"]
+    for idx, trace in enumerate(traces or []):
+        if not isinstance(trace, dict):
+            continue
+        raw_times = np.asarray(trace.get('times') or [], dtype=float)
+        raw_intensities = np.asarray(trace.get('intensities') or [], dtype=float)
+        count = min(raw_times.size, raw_intensities.size)
+        if count <= 0:
+            continue
+        times = raw_times[:count]
+        intensities = raw_intensities[:count]
+        finite_mask = np.isfinite(times) & np.isfinite(intensities)
+        if not np.any(finite_mask):
+            continue
+        label = str(trace.get('label') or f"Sample {idx + 1}")
+        color = str(trace.get('color') or fallback_colors[idx % len(fallback_colors)])
+        normalized_traces.append((label, times[finite_mask], intensities[finite_mask], color))
+    return normalized_traces
+
+
+def _render_chromatogram_overlay_axis(
+    ax: plt.Axes,
+    normalized_traces: list[tuple[str, np.ndarray, np.ndarray, str]],
+    title: str,
+    y_label: str,
+    x_label: str,
+    *,
+    line_width: float = 0.8,
+    show_grid: bool = False,
+    x_range: Optional[tuple[float, float]] = None,
+    title_y: float = 1.08,
+    x_label_pad: float = 4.0,
+    tick_pad: Optional[float] = None,
+) -> None:
+    if not normalized_traces:
+        ax.text(0.5, 0.5, "No data available", ha='center', va='center', transform=ax.transAxes)
+        ax.set_axis_off()
+        return
+
+    x_min = float('inf')
+    x_max = float('-inf')
+    for label, times, intensities, color in normalized_traces:
+        ax.plot(times, intensities, color=color, label=label, linewidth=line_width)
+        x_min = min(x_min, float(np.min(times)))
+        x_max = max(x_max, float(np.max(times)))
+
+    ax.set_title(title, fontweight='bold', y=title_y)
+    ax.set_xlabel(x_label)
+    ax.xaxis.labelpad = x_label_pad
+    ax.set_ylabel(y_label)
+    ax.legend(loc='upper right', fontsize='small', frameon=False)
+
+    if (
+        x_range is not None
+        and len(x_range) == 2
+        and np.isfinite(x_range[0])
+        and np.isfinite(x_range[1])
+        and float(x_range[1]) > float(x_range[0])
+    ):
+        ax.set_xlim(float(x_range[0]), float(x_range[1]))
+    elif np.isfinite(x_min) and np.isfinite(x_max) and x_max > x_min:
+        ax.set_xlim(x_min, x_max)
+
+    if show_grid:
+        ax.grid(True, alpha=0.3)
+
+    _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
+    # Match the deconvolution export framing: only left and bottom axes visible.
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    if tick_pad is None:
+        ax.tick_params(top=False, right=False)
+    else:
+        ax.tick_params(top=False, right=False, pad=tick_pad)
+
+
 def create_chromatogram_overlay_export_figure(
     traces: list[dict],
     title: str,
@@ -1789,62 +1869,22 @@ def create_chromatogram_overlay_export_figure(
     fig_height_in = panel_height_in * panel_height_multiplier * deconv_page_height_scale
     fig, ax = plt.subplots(1, 1, figsize=(fig_width_in, fig_height_in))
 
-    normalized_traces: list[tuple[str, np.ndarray, np.ndarray, str]] = []
-    fallback_colors = config.EIC_COLORS or ["#1f77b4"]
-    for idx, trace in enumerate(traces or []):
-        if not isinstance(trace, dict):
-            continue
-        raw_times = np.asarray(trace.get('times') or [], dtype=float)
-        raw_intensities = np.asarray(trace.get('intensities') or [], dtype=float)
-        count = min(raw_times.size, raw_intensities.size)
-        if count <= 0:
-            continue
-        times = raw_times[:count]
-        intensities = raw_intensities[:count]
-        finite_mask = np.isfinite(times) & np.isfinite(intensities)
-        if not np.any(finite_mask):
-            continue
-        label = str(trace.get('label') or f"Sample {idx + 1}")
-        color = str(trace.get('color') or fallback_colors[idx % len(fallback_colors)])
-        normalized_traces.append((label, times[finite_mask], intensities[finite_mask], color))
+    normalized_traces = _normalize_chromatogram_overlay_traces(traces)
+    _render_chromatogram_overlay_axis(
+        ax,
+        normalized_traces,
+        title,
+        y_label,
+        x_label,
+        line_width=line_width,
+        show_grid=show_grid,
+        x_range=x_range,
+    )
 
     if not normalized_traces:
-        ax.text(0.5, 0.5, "No data available", ha='center', va='center', transform=ax.transAxes)
-        ax.set_axis_off()
         plt.tight_layout(pad=0.8)
         return fig
 
-    x_min = float('inf')
-    x_max = float('-inf')
-    for label, times, intensities, color in normalized_traces:
-        ax.plot(times, intensities, color=color, label=label, linewidth=line_width)
-        x_min = min(x_min, float(np.min(times)))
-        x_max = max(x_max, float(np.max(times)))
-
-    ax.set_title(title, fontweight='bold', y=1.08)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
-    ax.legend(loc='upper right', fontsize='small', frameon=False)
-
-    if (
-        x_range is not None
-        and len(x_range) == 2
-        and np.isfinite(x_range[0])
-        and np.isfinite(x_range[1])
-        and float(x_range[1]) > float(x_range[0])
-    ):
-        ax.set_xlim(float(x_range[0]), float(x_range[1]))
-    elif np.isfinite(x_min) and np.isfinite(x_max) and x_max > x_min:
-        ax.set_xlim(x_min, x_max)
-
-    if show_grid:
-        ax.grid(True, alpha=0.3)
-
-    _apply_safe_scientific_y_format(ax, scilimits=(-2, 3))
-    # Match the deconvolution export framing: only left and bottom axes visible.
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.tick_params(top=False, right=False)
     # Keep a fixed panel box so editable PDF exports retain the same maximum
     # y-axis spine height as the deconvolution PDF, regardless of tick labels.
     fig.subplots_adjust(
@@ -1853,6 +1893,83 @@ def create_chromatogram_overlay_export_figure(
         bottom=0.18161080125814368,
         top=0.8367908466096177,
     )
+    return fig
+
+
+def create_stacked_chromatogram_overlay_export_figure(
+    panels: list[dict],
+) -> matplotlib.figure.Figure:
+    """Create one tall stacked chromatogram export page for combined progression PDFs."""
+    normalized_panels = [panel for panel in (panels or []) if isinstance(panel, dict)]
+    if not normalized_panels:
+        fig, ax = plt.subplots(1, 1, figsize=(8.0, 4.0))
+        ax.text(0.5, 0.5, "No data available", ha='center', va='center', transform=ax.transAxes)
+        ax.set_axis_off()
+        plt.tight_layout(pad=0.8)
+        return fig
+
+    default_style = normalized_panels[0].get("style", {})
+    if not isinstance(default_style, dict):
+        default_style = {}
+
+    base_fig_width = max(1.0, _coerce_finite_float(default_style.get('fig_width', 8.0), 8.0))
+    panel_width_multiplier = max(1.0, _coerce_finite_float(default_style.get('panel_width_multiplier', 2.0), 2.0))
+    panel_height_multiplier = max(0.5, _coerce_finite_float(default_style.get('panel_height_multiplier', 1.0), 1.0))
+
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    deconv_page_width_scale = 0.985516693
+    deconv_page_height_scale = 1.00101474
+    fig_width_in = panel_width_in * panel_width_multiplier * deconv_page_width_scale
+    single_panel_height_in = panel_height_in * panel_height_multiplier * deconv_page_height_scale
+
+    left = 0.1250644595709571
+    right = 0.9645386413641364
+    single_bottom = 0.18161080125814368
+    single_top = 0.8367908466096177
+    bottom_margin_in = single_panel_height_in * single_bottom
+    top_margin_in = single_panel_height_in * (1.0 - single_top)
+    axis_height_in = max(0.1, single_panel_height_in * (single_top - single_bottom))
+    stacked_top_margin_in = max(0.20, min(top_margin_in, axis_height_in * 0.11))
+    stacked_bottom_margin_in = max(0.24, min(bottom_margin_in, axis_height_in * 0.14))
+    stacked_panel_height_in = axis_height_in + stacked_top_margin_in + stacked_bottom_margin_in
+    total_height_in = stacked_panel_height_in * len(normalized_panels)
+
+    fig = plt.figure(figsize=(fig_width_in, total_height_in))
+
+    for index, panel in enumerate(normalized_panels):
+        slot_bottom_in = (len(normalized_panels) - index - 1) * stacked_panel_height_in
+        ax_bottom = (slot_bottom_in + stacked_bottom_margin_in) / total_height_in
+        ax_height = axis_height_in / total_height_in
+        ax = fig.add_axes([left, ax_bottom, right - left, ax_height])
+
+        style = panel.get("style", {})
+        if not isinstance(style, dict):
+            style = {}
+        line_width = max(0.1, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
+        show_grid = _coerce_bool(style.get('show_grid', False), False)
+
+        x_range_raw = panel.get("x_range")
+        x_range = None
+        if isinstance(x_range_raw, (list, tuple)) and len(x_range_raw) == 2:
+            x0 = _coerce_finite_float(x_range_raw[0], np.nan)
+            x1 = _coerce_finite_float(x_range_raw[1], np.nan)
+            if np.isfinite(x0) and np.isfinite(x1) and x1 > x0:
+                x_range = (float(x0), float(x1))
+
+        normalized_traces = _normalize_chromatogram_overlay_traces(panel.get("traces", []))
+        _render_chromatogram_overlay_axis(
+            ax,
+            normalized_traces,
+            str(panel.get("title", "Time Progression")),
+            str(panel.get("y_label", "Intensity")),
+            str(panel.get("x_label", "Time (min)")),
+            line_width=line_width,
+            show_grid=show_grid,
+            x_range=x_range,
+            title_y=1.0,
+            x_label_pad=-0.5,
+            tick_pad=0.5,
+        )
     return fig
 
 
@@ -1889,7 +2006,7 @@ def _fit_linear_points(points: list[dict]) -> Optional[dict]:
 def create_calibration_curve_export_figure(
     points: list[dict],
     title: str,
-    x_label: str = "Concentration (uM)",
+    x_label: str = "Concentration (µM)",
     y_label: str = "Integrated Area",
     style: Optional[dict] = None,
     fit: Optional[dict] = None,
@@ -1899,6 +2016,9 @@ def create_calibration_curve_export_figure(
     base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 6.0), 6.0))
     panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
     fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
+    fig.patch.set_facecolor('none')
+    fig.patch.set_alpha(0.0)
+    ax.set_facecolor('none')
 
     normalized_points: list[dict] = []
     for idx, point in enumerate(points or []):
@@ -1996,6 +2116,232 @@ def create_calibration_curve_export_figure(
         )
 
     fig.subplots_adjust(left=0.25, right=0.98, bottom=0.22, top=0.86)
+    return fig
+
+
+def create_uptake_assay_export_figure(
+    points: list[dict],
+    title: str,
+    x_label: str = "Concentration (µM)",
+    y_label: str = "Integrated Area",
+    style: Optional[dict] = None,
+    fit: Optional[dict] = None,
+    assay_points: Optional[list[dict]] = None,
+    assay_title: str = "Uptake Assay",
+    assay_y_label: str = "Calculated Concentration (µM)",
+) -> matplotlib.figure.Figure:
+    """Create a calibration export, with an optional uptake bar chart beside it."""
+    normalized_assay_points: list[dict] = []
+    for idx, point in enumerate(assay_points or []):
+        if not isinstance(point, dict):
+            continue
+        label = str(point.get('label') or f"Sample {idx + 1}").strip()
+        y_val = _coerce_finite_float(point.get('y'), np.nan)
+        y_sd = _coerce_finite_float(point.get('y_sd'), 0.0)
+        if not label or not np.isfinite(y_val):
+            continue
+        normalized_assay_points.append({
+            'label': label,
+            'y': y_val,
+            'y_sd': max(0.0, y_sd) if np.isfinite(y_sd) else 0.0,
+        })
+
+    if not normalized_assay_points:
+        return create_calibration_curve_export_figure(
+            points=points,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            style=style,
+            fit=fit,
+        )
+
+    style = style or {}
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 6.0), 6.0))
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    label_count = len(normalized_assay_points)
+    longest_label = max((len(point['label']) for point in normalized_assay_points), default=0)
+    bar_width_in = panel_width_in + max(0.0, (label_count - 4) * 0.255) + max(0.0, (longest_label - 14) * 0.05)
+    curve_width_in = panel_width_in
+    needs_rotation = label_count >= 4 or longest_label > 14
+    extra_label_height_in = 0.25 if not needs_rotation else min(1.45, 0.78 + max(0, longest_label - 14) * 0.065)
+    top_margin = 0.84
+    bottom_margin = max(0.22, min(0.52, (extra_label_height_in / max(panel_height_in + extra_label_height_in, 0.1)) + 0.08))
+    calibration_axis_height_in = panel_height_in * (0.86 - 0.22)
+    available_axis_frac = max(0.12, top_margin - bottom_margin)
+    figure_height_in = calibration_axis_height_in / available_axis_frac
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(curve_width_in + bar_width_in + 0.55, figure_height_in),
+        squeeze=False,
+        gridspec_kw={'width_ratios': [curve_width_in, bar_width_in]},
+    )
+    ax_curve = axes[0, 0]
+    ax_bar = axes[0, 1]
+    fig.patch.set_facecolor('none')
+    fig.patch.set_alpha(0.0)
+    ax_curve.set_facecolor('none')
+    ax_bar.set_facecolor('none')
+
+    normalized_points: list[dict] = []
+    for idx, point in enumerate(points or []):
+        if not isinstance(point, dict):
+            continue
+        x_val = _coerce_finite_float(point.get('x'), np.nan)
+        y_val = _coerce_finite_float(point.get('y'), np.nan)
+        y_sd = _coerce_finite_float(point.get('y_sd'), 0.0)
+        if not np.isfinite(x_val) or not np.isfinite(y_val):
+            continue
+        normalized_points.append({
+            'x': x_val,
+            'y': y_val,
+            'y_sd': max(0.0, y_sd) if np.isfinite(y_sd) else 0.0,
+            'label': str(point.get('label') or f"Point {idx + 1}"),
+        })
+
+    if not normalized_points:
+        ax_curve.text(0.5, 0.5, "No calibration points", ha='center', va='center', transform=ax_curve.transAxes)
+        ax_curve.set_axis_off()
+    else:
+        x_vals = np.asarray([point['x'] for point in normalized_points], dtype=float)
+        y_vals = np.asarray([point['y'] for point in normalized_points], dtype=float)
+        fit_result = fit if isinstance(fit, dict) else _fit_linear_points(normalized_points)
+        slope = _coerce_finite_float(fit_result.get('slope') if fit_result else np.nan, np.nan)
+        intercept = _coerce_finite_float(fit_result.get('intercept') if fit_result else np.nan, np.nan)
+        r_squared = _coerce_finite_float(fit_result.get('r_squared') if fit_result else np.nan, np.nan)
+
+        x_span = float(np.max(x_vals) - np.min(x_vals)) if x_vals.size > 1 else 0.0
+        x_margin = max(2.0, x_span * 0.05)
+        x_min = min(0.0, float(np.min(x_vals)) - x_margin)
+        x_max = float(np.max(x_vals)) + x_margin
+        y_err = np.asarray([point.get('y_sd', 0.0) for point in normalized_points], dtype=float)
+        y_max = float(np.max(y_vals + y_err)) if y_vals.size > 0 else 1.0
+        y_max = max(y_max * 1.08, 1.0)
+
+        if np.isfinite(slope) and np.isfinite(intercept):
+            fit_x = np.linspace(float(np.min(x_vals)), float(np.max(x_vals)), 300)
+            fit_y = slope * fit_x + intercept
+            ax_curve.plot(
+                fit_x,
+                fit_y,
+                color=str(style.get('line_color') or "#1f77b4"),
+                linewidth=max(0.1, _coerce_finite_float(style.get('line_width', 2.0), 2.0)),
+                zorder=2,
+            )
+
+        ax_curve.scatter(
+            x_vals,
+            y_vals,
+            s=max(1.0, _coerce_finite_float(style.get('point_size', 26.0), 26.0)),
+            facecolor=str(style.get('point_face_color') or "#1f77b4"),
+            edgecolor=str(style.get('point_edge_color') or "#0d4f8a"),
+            linewidth=max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8)),
+            clip_on=False,
+            zorder=3,
+        )
+        if np.any(y_err > 0):
+            ax_curve.errorbar(
+                x_vals,
+                y_vals,
+                yerr=y_err,
+                fmt='none',
+                ecolor=str(style.get('point_edge_color') or "#0d4f8a"),
+                elinewidth=max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8)),
+                capsize=3,
+                capthick=max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8)),
+                zorder=2.5,
+            )
+
+        ax_curve.set_title(title, fontweight='bold', y=1.03)
+        ax_curve.set_xlabel(x_label)
+        ax_curve.set_ylabel(y_label)
+        ax_curve.set_xlim(x_min, x_max)
+        ax_curve.set_ylim(0, y_max)
+        ax_curve.grid(False)
+        ax_curve.spines['top'].set_visible(False)
+        ax_curve.spines['right'].set_visible(False)
+        ax_curve.tick_params(top=False, right=False)
+        _apply_safe_scientific_y_format(ax_curve, scilimits=(-2, 3))
+
+        if np.isfinite(slope) and np.isfinite(intercept) and np.isfinite(r_squared):
+            fit_text = f"y = {slope:.1f}x {intercept:+.1f}\nR$^2$ = {r_squared:.4f}"
+            ax_curve.text(
+                0.04,
+                0.96,
+                fit_text,
+                transform=ax_curve.transAxes,
+                ha='left',
+                va='top',
+                fontsize=8,
+                fontweight='bold',
+            )
+
+    labels = [point['label'] for point in normalized_assay_points]
+    y_vals = np.asarray([point['y'] for point in normalized_assay_points], dtype=float)
+    y_err = np.asarray([point['y_sd'] for point in normalized_assay_points], dtype=float)
+    bar_width = 0.09
+    inter_bar_gap = 0.0135
+    spacing = bar_width + inter_bar_gap
+    x_pos = np.arange(len(labels), dtype=float) * spacing
+    bar_color = str(style.get('point_face_color') or "#1f77b4")
+    edge_color = str(style.get('point_edge_color') or "#0d4f8a")
+    line_width = max(0.1, _coerce_finite_float(style.get('point_edge_width', 0.8), 0.8))
+    ax_bar.bar(
+        x_pos,
+        y_vals,
+        width=bar_width,
+        color=bar_color,
+        edgecolor=edge_color,
+        linewidth=line_width,
+        zorder=3,
+    )
+    if np.any(y_err > 0):
+        ax_bar.errorbar(
+            x_pos,
+            y_vals,
+            yerr=y_err,
+            fmt='none',
+            ecolor=edge_color,
+            elinewidth=line_width,
+            capsize=3,
+            capthick=line_width,
+            zorder=4,
+        )
+
+    y_low = float(np.min(y_vals - y_err)) if y_vals.size > 0 else 0.0
+    y_high = float(np.max(y_vals + y_err)) if y_vals.size > 0 else 1.0
+    if y_low >= 0:
+        y_low = 0.0
+    else:
+        y_low *= 1.08
+    y_high = max(y_high * 1.08, 1.0)
+
+    ax_bar.set_title(assay_title, fontweight='bold', y=1.03)
+    ax_bar.set_xlabel("Sample Name")
+    ax_bar.set_ylabel(assay_y_label)
+    ax_bar.set_xticks(x_pos)
+    rotation = 45 if needs_rotation else 0
+    tick_font_size = 6 if longest_label > 26 else 7 if longest_label > 20 else 8 if longest_label > 14 else 9
+    ax_bar.set_xticklabels(
+        labels,
+        fontsize=tick_font_size,
+        rotation=rotation,
+        ha='right' if rotation else 'center',
+        rotation_mode='anchor',
+    )
+    ax_bar.set_xlim(
+        -(bar_width / 2.0) - inter_bar_gap,
+        (x_pos[-1] if len(x_pos) else 0.0) + (bar_width / 2.0) + inter_bar_gap,
+    )
+    ax_bar.set_ylim(y_low, y_high)
+    ax_bar.grid(False)
+    ax_bar.spines['top'].set_visible(False)
+    ax_bar.spines['right'].set_visible(False)
+    ax_bar.tick_params(top=False, right=False)
+    _apply_safe_scientific_y_format(ax_bar, scilimits=(-2, 3))
+
+    fig.subplots_adjust(left=0.10, right=0.98, bottom=bottom_margin, top=top_margin, wspace=0.34)
     return fig
 
 

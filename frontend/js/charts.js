@@ -28,7 +28,10 @@ const PLOT_CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemo
 /** Read container height or use fallback. Plotly autosize can't read height before browser reflow. */
 function getContainerHeight(divId, fallback) {
   const el = document.getElementById(divId);
-  if (el && el.clientHeight > 50) return el.clientHeight;
+  const fixedHeight = Number(el?.dataset?.fixedPlotHeight || 0);
+  if (Number.isFinite(fixedHeight) && fixedHeight > 50) return Math.floor(fixedHeight);
+  const layoutHeight = Number(el?.layout?.height || el?._fullLayout?.height || 0);
+  if (Number.isFinite(layoutHeight) && layoutHeight > 50) return Math.floor(layoutHeight);
   return fallback;
 }
 
@@ -821,7 +824,7 @@ const charts = {
 
     const layout = mergeLayout({
       title: { text: options.title || 'Uptake Assay Calibration Curve', font: { size: 14 } },
-      xaxis: { title: options.xLabel || 'Concentration (uM)' },
+      xaxis: { title: options.xLabel || 'Concentration (µM)' },
       yaxis: { title: options.yLabel || 'Integrated Area' },
       showlegend: false,
       height: getContainerHeight(divId, 320),
@@ -829,6 +832,118 @@ const charts = {
       annotations,
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+  },
+
+  plotUptakeAssayBarChart(divId, points, options = {}) {
+    const usablePoints = Array.isArray(points) ? points.filter((point) =>
+      point && String(point.label || '').trim() && Number.isFinite(Number(point?.y))
+    ) : [];
+    const plotEl = document.getElementById(divId);
+
+    if (usablePoints.length === 0) {
+      const layout = mergeLayout({
+        title: { text: options.title || 'Uptake Assay Concentrations', font: { size: 14 } },
+        xaxis: { visible: false },
+        yaxis: { visible: false },
+        height: getContainerHeight(divId, 320),
+        margin: { l: 72, r: 24, t: 40, b: 76 },
+        annotations: [{
+          xref: 'paper',
+          yref: 'paper',
+          x: 0.5,
+          y: 0.5,
+          showarrow: false,
+          text: options.emptyText || 'Add assay sample rows to calculate intracellular concentrations',
+          font: { size: 12, color: '#555555' },
+        }],
+      });
+      Plotly.newPlot(divId, [], layout, PLOT_CONFIG);
+      return;
+    }
+
+    const labels = usablePoints.map((point) => String(point.label || '').trim());
+    const longestLabel = labels.reduce((max, label) => Math.max(max, label.length), 0);
+    const tickAngle = usablePoints.length >= 4 || longestLabel > 14 ? 45 : 0;
+    const tickFontSize = longestLabel > 20 ? 8 : longestLabel > 14 ? 9 : 10;
+    const bottomMargin = tickAngle !== 0 ? 122 : 76;
+    const barWidth = 0.09;
+    const interBarGap = 0.0135;
+    const spacing = barWidth + interBarGap;
+    const slotWidthPx = 65;
+    const axisPaddingPx = 14;
+    const baseWidth = Math.max(Number(plotEl?.clientWidth) || 0, 520);
+    const minimumChartWidth = (Math.max(usablePoints.length, 4) * slotWidthPx) + axisPaddingPx + 96;
+    const extraWidth = Math.max(0, longestLabel - 14) * 8;
+    const targetWidth = Math.max(baseWidth, minimumChartWidth + extraWidth);
+
+    const xPositions = usablePoints.map((_, index) => index * spacing);
+    const errorArray = usablePoints.map((point) => {
+      const value = Number(point?.y_sd);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    });
+    const hasErrorBars = errorArray.some((value) => value > 0);
+    const trace = {
+      x: xPositions,
+      y: usablePoints.map((point) => Number(point.y)),
+      type: 'bar',
+      width: barWidth,
+      marker: {
+        color: '#1f77b4',
+        line: { color: '#0d4f8a', width: 1 },
+      },
+      error_y: hasErrorBars ? {
+        type: 'data',
+        array: errorArray,
+        visible: true,
+        color: '#0d4f8a',
+        thickness: 1.2,
+        width: 4,
+      } : undefined,
+      hovertext: usablePoints.map((point) => {
+        const lines = [
+          `<b>${point.label || ''}</b>`,
+          `Mean concentration: ${Number(point.y).toFixed(2)} µM`,
+        ];
+        const replicateCount = Number(point?.replicate_count) || 1;
+        if (replicateCount > 1) {
+          const sdValue = Number(point?.y_sd);
+          lines.push(`SD: ${Number.isFinite(sdValue) ? sdValue.toFixed(2) : '0.00'} µM`);
+          lines.push(`Replicates: ${replicateCount}`);
+        }
+        const sampleNames = Array.isArray(point?.sample_names) ? point.sample_names.filter(Boolean) : [];
+        if (sampleNames.length > 0) {
+          lines.push(`Samples: ${sampleNames.join(', ')}`);
+        }
+        return lines.join('<br>');
+      }),
+      hovertemplate: '%{hovertext}<extra></extra>',
+      showlegend: false,
+    };
+
+    const layout = mergeLayout({
+      title: { text: options.title || 'Uptake Assay Concentrations', font: { size: 14 } },
+      xaxis: {
+        title: options.xLabel || 'Sample Name',
+        tickmode: 'array',
+        tickvals: xPositions,
+        ticktext: labels,
+        tickangle: tickAngle,
+        tickfont: { size: tickFontSize },
+        automargin: true,
+        range: [
+          -(barWidth / 2) - interBarGap,
+          (xPositions[xPositions.length - 1] || 0) + (barWidth / 2) + interBarGap,
+        ],
+      },
+      yaxis: { title: options.yLabel || 'Calculated Concentration (µM)' },
+      showlegend: false,
+      height: getContainerHeight(divId, 320),
+      width: targetWidth,
+      autosize: false,
+      bargap: 0,
+      margin: { l: 72, r: 24, t: 40, b: bottomMargin },
+    });
+    Plotly.newPlot(divId, [trace], layout, PLOT_CONFIG);
   },
 
   plotMassSpectrum(divId, mzValues, intensities, annotations, options = {}) {
