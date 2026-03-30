@@ -14,6 +14,11 @@ on:
       - "v*"
 
 env:
+  # March 26, 2026: GitHub warns that actions/checkout@v4, actions/setup-node@v4,
+  # actions/setup-python@v5, and actions/upload-artifact@v4 still target deprecated
+  # Node.js 20. We already force JavaScript actions onto Node 24 to stay ahead of
+  # the June 2, 2026 default switch, but these actions should be upgraded to
+  # Node-24-native releases once available so the warnings can be removed.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:

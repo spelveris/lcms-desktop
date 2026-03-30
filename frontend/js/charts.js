@@ -152,6 +152,22 @@ function buildWindowTrace(times, intensities, start, end) {
   return { x, y };
 }
 
+function buildLinearWindowBaseline(times, intensities, start, end) {
+  const win = buildWindowTrace(times, intensities, start, end);
+  if (!Array.isArray(win.x) || win.x.length === 0) {
+    return { x: [], y: [] };
+  }
+  const yStart = interpAt(times, intensities, start);
+  const yEnd = interpAt(times, intensities, end);
+  const span = Number(end) - Number(start);
+  const y = win.x.map((xVal) => {
+    if (!Number.isFinite(span) || Math.abs(span) < 1e-12) return yStart;
+    const t = (Number(xVal) - Number(start)) / span;
+    return yStart + ((yEnd - yStart) * t);
+  });
+  return { x: win.x, y };
+}
+
 function mergeLayout(partial = {}) {
   const merged = JSON.parse(JSON.stringify(WEBAPP_LAYOUT));
   if (partial.xaxis) { merged.xaxis = { ...merged.xaxis, ...partial.xaxis }; delete partial.xaxis; }
@@ -558,38 +574,73 @@ const charts = {
 
   plotEICWithPeaks(divId, data, options = {}) {
     const mzValue = Number(data.mz ?? data.target_mz);
-    const mzLabel = Number.isFinite(mzValue) ? mzValue.toFixed(2) : '?';
+    const defaultSeriesLabel = Number.isFinite(mzValue) ? `m/z ${mzValue.toFixed(2)}` : 'Signal';
+    const defaultTitle = Number.isFinite(mzValue) ? `EIC m/z ${mzValue.toFixed(2)}` : 'Chromatogram';
+    const seriesLabel = options.seriesLabel || data.label || defaultSeriesLabel;
+    const baselineMode = options.baselineMode || data.baselineMode || null;
     const traces = [{
       x: data.times, y: data.intensities,
       type: 'scatter', mode: 'lines',
-      name: `m/z ${mzLabel}`,
+      name: seriesLabel,
       line: { color: options.color || '#1f77b4', width: getLineWidth() },
     }];
     if (data.peaks) {
       data.peaks.forEach((peak, i) => {
         if (peak.selected !== false && peak.start != null && peak.end != null) {
-          // Create filled region between exact start/end boundaries so adjacent
-          // touching peaks render without visual gaps.
-          const win = buildWindowTrace(data.times, data.intensities, peak.start, peak.end);
-          if (win.x.length < 2) return;
-          traces.push({
-            x: win.x, y: win.y,
-            type: 'scatter',
-            mode: 'none',
-            fill: 'tozeroy',
-            fillcolor: hexToRGBA(getColor(i + 1), 0.3),
-            line: { width: 0 },
-            name: `Peak ${i + 1} (${peak.area ? peak.area.toExponential(2) : '?'})`,
-            showlegend: false,
-            hoverinfo: 'skip',
-          });
+          const itemLabel = options.areaItemLabel || (baselineMode === 'linear-endpoints' ? 'Area' : 'Peak');
+          const areaLabel = Number.isFinite(Number(peak.area)) ? Number(peak.area).toExponential(2) : '?';
+          if (baselineMode === 'linear-endpoints') {
+            const baseline = buildLinearWindowBaseline(data.times, data.intensities, peak.start, peak.end);
+            const win = buildWindowTrace(data.times, data.intensities, peak.start, peak.end);
+            if (win.x.length < 2 || baseline.x.length !== win.x.length) return;
+            const fillY = win.y.map((y, idx) => Math.max(Number(y) || 0, Number(baseline.y[idx]) || 0));
+            traces.push({
+              x: baseline.x,
+              y: baseline.y,
+              type: 'scatter',
+              mode: 'lines',
+              line: { color: getColor(i + 1), width: 1, dash: 'dot' },
+              name: `${itemLabel} ${i + 1} baseline`,
+              showlegend: false,
+              hoverinfo: 'skip',
+            });
+            traces.push({
+              x: win.x,
+              y: fillY,
+              type: 'scatter',
+              mode: 'lines',
+              fill: 'tonexty',
+              fillcolor: hexToRGBA(getColor(i + 1), 0.3),
+              line: { color: getColor(i + 1), width: 1.2 },
+              name: `${itemLabel} ${i + 1} (${areaLabel})`,
+              showlegend: false,
+              hoverinfo: 'skip',
+            });
+          } else {
+            // Create filled region between exact start/end boundaries so adjacent
+            // touching peaks render without visual gaps.
+            const win = buildWindowTrace(data.times, data.intensities, peak.start, peak.end);
+            if (win.x.length < 2) return;
+            traces.push({
+              x: win.x, y: win.y,
+              type: 'scatter',
+              mode: 'none',
+              fill: 'tozeroy',
+              fillcolor: hexToRGBA(getColor(i + 1), 0.3),
+              line: { width: 0 },
+              name: `${itemLabel} ${i + 1} (${areaLabel})`,
+              showlegend: false,
+              hoverinfo: 'skip',
+            });
+          }
         }
       });
     }
     const showLegend = traces.length > 1;
     const layout = mergeLayout({
-      title: { text: options.title || `EIC m/z ${mzLabel}`, font: { size: 14 } },
-      xaxis: { title: getXAxisLabel() }, yaxis: { title: 'Intensity' },
+      title: { text: options.title || data.title || defaultTitle, font: { size: 14 } },
+      xaxis: { title: getXAxisLabel() },
+      yaxis: { title: options.yLabel || data.yLabel || 'Intensity' },
       showlegend: showLegend,
       legend: showLegend ? {
         x: 0.995,
@@ -600,6 +651,8 @@ const charts = {
       } : undefined,
       height: getContainerHeight(divId, 300),
       margin: { r: showLegend ? 34 : 24 },
+      dragmode: options.dragmode || 'zoom',
+      selectdirection: options.selectdirection,
     });
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
   },

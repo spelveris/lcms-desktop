@@ -46,6 +46,7 @@ const state = {
   singleSpectrumSelections: {},
   backgroundSubtractionData: null,
   backgroundSubtractInFlight: false,
+  backgroundSubtractionSpectrumSelections: {},
   progressionData: null,
   progressionLoadInFlight: false,
   uptakeAssayData: null,
@@ -702,10 +703,137 @@ function bindSingleTicSpectrumSelection(ticPlotId, spectrumPlotId, samplePath, p
   });
 }
 
+function getBgsubSpectrumSelectionKey(polarity = null) {
+  if (polarity === 'negative') return 'negative';
+  if (polarity === 'positive') return 'positive';
+  return 'default';
+}
+
+function renderBgsubSummedSpectrumPlaceholder(plotId, panelLabel = '') {
+  const plotEl = document.getElementById(plotId);
+  if (!plotEl) return;
+  const labelSuffix = panelLabel ? ` ${panelLabel}` : '';
+  plotEl.innerHTML = `<p class="placeholder-msg">Drag on the TIC${labelSuffix} to populate a summed MS spectrum</p>`;
+}
+
+async function loadBgsubSummedSpectrumWindow({
+  samplePath,
+  plotId,
+  start,
+  end,
+  polarity = null,
+  panelLabel = '',
+}) {
+  const plotEl = document.getElementById(plotId);
+  if (!plotEl || !samplePath) return;
+
+  const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  plotEl.dataset.requestToken = token;
+  plotEl.innerHTML = '<p class="muted" style="padding:8px 4px;">Loading summed MS spectrum...</p>';
+
+  try {
+    const spectrum = await api.getSummedSpectrum(samplePath, start, end, polarity);
+    if (!document.body.contains(plotEl) || plotEl.dataset.requestToken !== token) return;
+
+    const labelSuffix = panelLabel ? ` ${panelLabel}` : '';
+    charts.plotMassSpectrum(plotId, spectrum.mz || [], spectrum.intensities || [], [], {
+      title: `Summed MS Spectrum${labelSuffix} (${start.toFixed(2)}-${end.toFixed(2)} min)`,
+      xRange: getSingleSummedSpectrumXRange(spectrum.mz || []),
+      heightPx: 300,
+    });
+    schedulePlotlyResize([plotId]);
+  } catch (_) {
+    if (!document.body.contains(plotEl) || plotEl.dataset.requestToken !== token) return;
+    plotEl.innerHTML = `<p class="placeholder-msg">No summed MS spectrum could be generated for the selected TIC${panelLabel ? ` ${escapeHtml(panelLabel)}` : ''} window</p>`;
+  }
+}
+
+function renderBgsubInteractiveTicPlot({
+  plotId,
+  times,
+  intensities,
+  title,
+  color,
+  samplePath,
+  polarity = null,
+  panelLabel = '',
+  spectrumPlotId,
+}) {
+  const selection = state.backgroundSubtractionSpectrumSelections[getBgsubSpectrumSelectionKey(polarity)] || null;
+  charts.plotTIC(plotId, times, intensities, title, color, {
+    startAtZero: true,
+    dragmode: 'select',
+    selectdirection: 'h',
+    heightPx: 300,
+    start: selection?.start,
+    end: selection?.end,
+    windowColor: 'rgba(255, 215, 0, 0.25)',
+    showWindowAnnotation: false,
+  });
+  bindBgsubTicSpectrumSelection(plotId, spectrumPlotId, samplePath, polarity, panelLabel, {
+    times,
+    intensities,
+    title,
+    color,
+  });
+}
+
+function bindBgsubTicSpectrumSelection(ticPlotId, spectrumPlotId, samplePath, polarity = null, panelLabel = '', renderArgs = null) {
+  const plot = document.getElementById(ticPlotId);
+  if (!plot || typeof plot.on !== 'function') return;
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_selected');
+  }
+
+  plot.on('plotly_selected', async (eventData) => {
+    if (!eventData) return;
+    const points = Array.isArray(eventData.points) ? eventData.points : [];
+    const startRaw = eventData.range?.x?.[0] ?? points[0]?.x;
+    const endRaw = eventData.range?.x?.[1] ?? points[points.length - 1]?.x;
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    if ((end - start) < 0.02) return;
+
+    const normalizedStart = Math.max(0, Math.min(start, end));
+    const normalizedEnd = Math.max(normalizedStart, end);
+    state.backgroundSubtractionSpectrumSelections[getBgsubSpectrumSelectionKey(polarity)] = {
+      start: normalizedStart,
+      end: normalizedEnd,
+    };
+
+    if (renderArgs) {
+      renderBgsubInteractiveTicPlot({
+        plotId: ticPlotId,
+        times: renderArgs.times,
+        intensities: renderArgs.intensities,
+        title: renderArgs.title,
+        color: renderArgs.color,
+        samplePath,
+        polarity,
+        panelLabel,
+        spectrumPlotId,
+      });
+    }
+
+    await loadBgsubSummedSpectrumWindow({
+      samplePath,
+      plotId: spectrumPlotId,
+      start: normalizedStart,
+      end: normalizedEnd,
+      polarity,
+      panelLabel,
+    });
+  });
+}
+
 function resetBackgroundSubtractionView() {
   const metrics = document.getElementById('bgsub-metrics');
   const uv = document.getElementById('bgsub-uv-plots');
   const tic = document.getElementById('bgsub-tic-plot');
+  const summedSpectrumPanel = document.getElementById('bgsub-summed-spectrum-panel');
   const spectrum = document.getElementById('bgsub-spectrum-plot');
   const spectrumTable = document.getElementById('bgsub-spectrum-table');
   const eic = document.getElementById('bgsub-eic-plots');
@@ -715,6 +843,10 @@ function resetBackgroundSubtractionView() {
     tic.innerHTML = '';
     tic.className = 'plot-container';
   }
+  if (summedSpectrumPanel) {
+    summedSpectrumPanel.innerHTML = '';
+    summedSpectrumPanel.className = 'plot-container hidden';
+  }
   if (spectrum) spectrum.innerHTML = '';
   if (spectrum) spectrum.className = 'plot-container';
   if (spectrumTable) {
@@ -722,6 +854,7 @@ function resetBackgroundSubtractionView() {
     spectrumTable.className = 'plot-container';
   }
   if (eic) eic.innerHTML = '';
+  state.backgroundSubtractionSpectrumSelections = {};
   setBackgroundSubtractionEmptyState(true);
 }
 
@@ -906,9 +1039,13 @@ function schedulePlotlyResize(plotIds = []) {
       'single-spectrum-pos-plot',
       'single-spectrum-neg-plot',
       'bgsub-tic-plot',
+      'bgsub-tic-plot-main',
+      'bgsub-summed-spectrum-plot',
       'bgsub-spectrum-plot',
       'bgsub-tic-pos-plot',
       'bgsub-tic-neg-plot',
+      'bgsub-summed-spectrum-pos-plot',
+      'bgsub-summed-spectrum-neg-plot',
       'bgsub-spectrum-positive-plot',
       'bgsub-spectrum-negative-plot',
       'eic-overlay-plot',
@@ -1685,6 +1822,7 @@ async function loadBackgroundSubtraction() {
       mzTargets: state.mzTargets,
       mzWindow,
     });
+    state.backgroundSubtractionSpectrumSelections = {};
     state.backgroundSubtractionData = data;
     renderBackgroundSubtraction(data);
     toast('Background subtraction finished', 'success');
@@ -1772,7 +1910,12 @@ function renderBackgroundSubtraction(data) {
   }
 
   const ticContainer = document.getElementById('bgsub-tic-plot');
+  const summedSpectrumPanel = document.getElementById('bgsub-summed-spectrum-panel');
   ticContainer.innerHTML = '';
+  if (summedSpectrumPanel) {
+    summedSpectrumPanel.innerHTML = '';
+    summedSpectrumPanel.className = 'plot-container hidden';
+  }
   if (hasDualTic) {
     const ticTitle = document.getElementById('label-tic-panel');
     const baseTitle = (ticTitle && ticTitle.value) || 'Total Ion Chromatogram';
@@ -1782,17 +1925,66 @@ function renderBackgroundSubtraction(data) {
     posDiv.className = 'plot-container';
     posDiv.id = 'bgsub-tic-pos-plot';
     ticContainer.appendChild(posDiv);
-    charts.plotTIC('bgsub-tic-pos-plot', data.tic.times_pos, data.tic.intensities_pos, `${baseTitle} (+) (${sampleTitle} - ${backgroundTitle})`, '#1f77b4');
+    const posSpectrumDiv = document.createElement('div');
+    posSpectrumDiv.className = 'plot-container';
+    posSpectrumDiv.id = 'bgsub-summed-spectrum-pos-plot';
+    ticContainer.appendChild(posSpectrumDiv);
+    renderBgsubSummedSpectrumPlaceholder('bgsub-summed-spectrum-pos-plot', '(+)');
+    renderBgsubInteractiveTicPlot({
+      plotId: 'bgsub-tic-pos-plot',
+      times: data.tic.times_pos,
+      intensities: data.tic.intensities_pos,
+      title: `${baseTitle} (+) (${sampleTitle} - ${backgroundTitle})`,
+      color: '#1f77b4',
+      samplePath: data.sample_path,
+      polarity: 'positive',
+      panelLabel: '(+)',
+      spectrumPlotId: 'bgsub-summed-spectrum-pos-plot',
+    });
 
     const negDiv = document.createElement('div');
     negDiv.className = 'plot-container';
     negDiv.id = 'bgsub-tic-neg-plot';
     ticContainer.appendChild(negDiv);
-    charts.plotTIC('bgsub-tic-neg-plot', data.tic.times_neg, data.tic.intensities_neg, `${baseTitle} (-) (${sampleTitle} - ${backgroundTitle})`, '#d62728');
+    const negSpectrumDiv = document.createElement('div');
+    negSpectrumDiv.className = 'plot-container';
+    negSpectrumDiv.id = 'bgsub-summed-spectrum-neg-plot';
+    ticContainer.appendChild(negSpectrumDiv);
+    renderBgsubSummedSpectrumPlaceholder('bgsub-summed-spectrum-neg-plot', '(−)');
+    renderBgsubInteractiveTicPlot({
+      plotId: 'bgsub-tic-neg-plot',
+      times: data.tic.times_neg,
+      intensities: data.tic.intensities_neg,
+      title: `${baseTitle} (-) (${sampleTitle} - ${backgroundTitle})`,
+      color: '#d62728',
+      samplePath: data.sample_path,
+      polarity: 'negative',
+      panelLabel: '(−)',
+      spectrumPlotId: 'bgsub-summed-spectrum-neg-plot',
+    });
   } else if (data.tic && data.tic.times && data.tic.times.length > 0) {
     const ticTitle = document.getElementById('label-tic-panel');
-    ticContainer.className = 'plot-container';
-    charts.plotTIC('bgsub-tic-plot', data.tic.times, data.tic.intensities, `${(ticTitle && ticTitle.value) || 'Total Ion Chromatogram'} (${sampleTitle} - ${backgroundTitle})`);
+    ticContainer.className = 'plot-stack';
+    const ticDiv = document.createElement('div');
+    ticDiv.className = 'plot-container';
+    ticDiv.id = 'bgsub-tic-plot-main';
+    ticContainer.appendChild(ticDiv);
+    const spectrumDiv = document.createElement('div');
+    spectrumDiv.className = 'plot-container';
+    spectrumDiv.id = 'bgsub-summed-spectrum-plot';
+    ticContainer.appendChild(spectrumDiv);
+    renderBgsubSummedSpectrumPlaceholder('bgsub-summed-spectrum-plot');
+    renderBgsubInteractiveTicPlot({
+      plotId: 'bgsub-tic-plot-main',
+      times: data.tic.times,
+      intensities: data.tic.intensities,
+      title: `${(ticTitle && ticTitle.value) || 'Total Ion Chromatogram'} (${sampleTitle} - ${backgroundTitle})`,
+      color: '#ff7f0e',
+      samplePath: data.sample_path,
+      polarity: null,
+      panelLabel: '',
+      spectrumPlotId: 'bgsub-summed-spectrum-plot',
+    });
   } else {
     ticContainer.className = 'plot-container';
     ticContainer.innerHTML = '<p class="placeholder-msg">No TIC data available for the selected subtraction</p>';
@@ -3374,6 +3566,44 @@ function updateRangeWithTimes(range, times) {
   return [minX, maxX];
 }
 
+function normalizeChromatogramSeriesBaseline(series, anchor = 'last') {
+  if (!series || typeof series !== 'object') return null;
+
+  const times = Array.isArray(series.times) ? series.times.slice() : [];
+  const intensities = Array.isArray(series.intensities) ? series.intensities.slice() : [];
+  const count = Math.min(times.length, intensities.length);
+  if (count <= 0) {
+    return { ...series, times, intensities };
+  }
+
+  const useFirst = String(anchor).toLowerCase() === 'first';
+  const start = useFirst ? 0 : count - 1;
+  const end = useFirst ? count : -1;
+  const step = useFirst ? 1 : -1;
+  let baselineIndex = -1;
+
+  for (let i = start; i !== end; i += step) {
+    const time = Number(times[i]);
+    const intensity = Number(intensities[i]);
+    if (!Number.isFinite(time) || !Number.isFinite(intensity)) continue;
+    baselineIndex = i;
+    break;
+  }
+
+  if (baselineIndex < 0) {
+    return { ...series, times, intensities };
+  }
+
+  const baseline = Number(intensities[baselineIndex]);
+  for (let i = 0; i < count; i += 1) {
+    const value = Number(intensities[i]);
+    if (!Number.isFinite(value)) continue;
+    intensities[i] = value - baseline;
+  }
+
+  return { ...series, times, intensities };
+}
+
 function computeProgressionXRange(data) {
   let minX = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
@@ -4521,7 +4751,7 @@ async function loadProgression() {
     const data = {};
 
     // UV progression
-    const uvData = perSample.map((s) => s.uv || null);
+    const uvData = perSample.map((s) => normalizeChromatogramSeriesBaseline(s.uv, 'last'));
     if (uvData.some(Boolean)) {
       data.uv_progression = uvData;
     }
@@ -4731,12 +4961,92 @@ async function exportProgression(format) {
   }
 }
 
-// ===== EIC Batch Tab =====
+// ===== Area Calculation Tab =====
+function getAreaCalculationMode(data = null) {
+  const explicitMode = String(data?.mode || '').toLowerCase();
+  if (explicitMode === 'uv' || explicitMode === 'eic') return explicitMode;
+  return document.getElementById('eic-signal-type')?.value === 'uv' ? 'uv' : 'eic';
+}
+
+function isUvAreaCalculationMode(data = null) {
+  return getAreaCalculationMode(data) === 'uv';
+}
+
+function getAreaCalculationSampleName(samplePath = '') {
+  const loaded = state.loadedSamples[samplePath];
+  if (loaded && String(loaded.name || '').trim()) return String(loaded.name).trim();
+  const file = state.selectedFiles.find((entry) => entry.path === samplePath);
+  if (file && String(file.name || '').trim()) return String(file.name).trim();
+  return String(samplePath || '').split(/[\\/]/).pop() || 'Sample';
+}
+
+function getAreaCalculationWavelength(samplePath = '') {
+  const selected = getSelectedWavelengths().filter((wl) => Number.isFinite(Number(wl)));
+  if (selected.length > 0) return Number(selected[0]);
+
+  const loaded = state.loadedSamples[samplePath];
+  const wavelengths = Array.isArray(loaded?.uv_wavelengths)
+    ? loaded.uv_wavelengths
+    : Array.isArray(loaded?.wavelengths)
+      ? loaded.wavelengths
+      : [];
+  const first = Number(wavelengths[0]);
+  if (Number.isFinite(first)) return first;
+  return Number.NaN;
+}
+
+function getAreaCalculationTargetLabel(target) {
+  if (target?.signal_type === 'uv') {
+    const wavelength = Number(target?.wavelength);
+    return Number.isFinite(wavelength) ? `UV ${wavelength.toFixed(0)} nm` : 'UV';
+  }
+
+  const mz = Number(target?.mz ?? target?.target_mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(2) : '?';
+  const polarityLabel = target?.polarity === 'negative' ? ' (−)' : ' (+)';
+  return `m/z ${mzLabel}${polarityLabel}`;
+}
+
+function getAreaCalculationItemLabel(target) {
+  return target?.signal_type === 'uv' ? 'Area' : 'Peak';
+}
+
+function updateAreaCalculationModeUI() {
+  const isUv = isUvAreaCalculationMode();
+  const mzToolbar = document.getElementById('eic-mz-toolbar');
+  const overlayWrap = document.getElementById('eic-overlay-wrap');
+  const normalizeWrap = document.getElementById('eic-normalize-wrap');
+  const runButton = document.getElementById('btn-run-eic');
+  const note = document.getElementById('eic-batch-mode-note');
+  const overlay = document.getElementById('eic-overlay');
+  const normalize = document.getElementById('eic-normalize');
+
+  if (mzToolbar) mzToolbar.classList.toggle('hidden', isUv);
+  if (overlayWrap) overlayWrap.classList.toggle('hidden', isUv);
+  if (normalizeWrap) normalizeWrap.classList.toggle('hidden', isUv);
+  if (overlay) overlay.disabled = isUv;
+  if (normalize) normalize.disabled = isUv;
+  if (runButton) runButton.textContent = isUv ? 'Load UV Area' : 'Run Area Analysis';
+  if (note) {
+    note.textContent = isUv
+      ? 'UV mode uses the first checked UV wavelength from Settings. Drag on the UV trace to add area windows, or add one manually and adjust start/end.'
+      : 'EIC mode uses the current m/z targets and keeps the existing peak-area workflow.';
+  }
+}
+
 function initEICBatch() {
   document.getElementById('btn-run-eic').addEventListener('click', runEICBatch);
   document.getElementById('btn-export-eic-csv').addEventListener('click', exportEICCSV);
   document.getElementById('eic-overlay').addEventListener('change', reRenderEICBatch);
   document.getElementById('eic-normalize').addEventListener('change', reRenderEICBatch);
+  document.getElementById('eic-signal-type')?.addEventListener('change', () => {
+    state.eicBatchData = null;
+    state.eicBatchOriginalData = null;
+    state.eicCollapsedSections = {};
+    resetEICBatchView();
+    renderReportSummary();
+    updateAreaCalculationModeUI();
+  });
   const eicAddBtn = document.getElementById('btn-eic-add-mz');
   const eicAddInput = document.getElementById('eic-mz-add-input');
   if (eicAddBtn && eicAddInput) {
@@ -4745,38 +5055,79 @@ function initEICBatch() {
       if (e.key === 'Enter') addMzTargetFromInput(eicAddInput);
     });
   }
+  updateAreaCalculationModeUI();
 }
 
 async function runEICBatch() {
   const samplePath = document.getElementById('eic-sample-select').value;
+  const mode = getAreaCalculationMode();
   if (!samplePath) {
     toast('Select a sample first', 'warning');
     return;
   }
-  if (state.mzTargets.length === 0) {
+  if (mode === 'eic' && state.mzTargets.length === 0) {
     toast('Add target m/z values in Settings first', 'warning');
     return;
   }
 
-  showLoading('Running EIC batch analysis...');
+  showLoading(mode === 'uv' ? 'Loading UV area trace...' : 'Running area analysis...');
   try {
-    const data = await api.runEICBatch({
-      path: samplePath,
-      targets: state.mzTargets,
-      mz_window: parseFloat(document.getElementById('mz-window').value),
-      smoothing: parseInt(document.getElementById('eic-smoothing').value),
-    });
-    if (Array.isArray(data?.targets)) {
-      data.targets.forEach((target) => normalizeTargetAutoPeaks(target));
+    let data;
+    if (mode === 'uv') {
+      const wavelength = getAreaCalculationWavelength(samplePath);
+      if (!Number.isFinite(wavelength)) {
+        toast('Select a UV wavelength in Settings first', 'warning');
+        return;
+      }
+
+      const uvTrace = await api.getUVChromatogram(
+        samplePath,
+        wavelength,
+        parseInt(document.getElementById('uv-smoothing').value, 10)
+      );
+
+      if (!Array.isArray(uvTrace?.times) || uvTrace.times.length === 0 || !Array.isArray(uvTrace?.intensities)) {
+        throw new Error(`No UV data available at ${wavelength.toFixed(0)} nm`);
+      }
+
+      data = {
+        mode: 'uv',
+        sample_path: samplePath,
+        sample_name: getAreaCalculationSampleName(samplePath),
+        targets: [{
+          signal_type: 'uv',
+          wavelength,
+          label: `UV ${wavelength.toFixed(0)} nm`,
+          title: `UV ${wavelength.toFixed(0)} nm`,
+          yLabel: 'Absorbance (mAU)',
+          times: uvTrace.times || [],
+          intensities: uvTrace.intensities || [],
+          peaks: [],
+        }],
+      };
+    } else {
+      data = await api.runEICBatch({
+        path: samplePath,
+        targets: state.mzTargets,
+        mz_window: parseFloat(document.getElementById('mz-window').value),
+        smoothing: parseInt(document.getElementById('eic-smoothing').value, 10),
+      });
+      data.mode = 'eic';
+      data.sample_path = samplePath;
+      data.sample_name = getAreaCalculationSampleName(samplePath);
+      if (Array.isArray(data?.targets)) {
+        data.targets.forEach((target) => normalizeTargetAutoPeaks(target));
+      }
     }
 
+    state.eicCollapsedSections = {};
     state.eicBatchData = data;
     state.eicBatchOriginalData = deepClone(data);
     renderEICBatch(data);
     renderReportSummary();
-    toast('EIC batch analysis complete', 'success');
+    toast('Area analysis complete', 'success');
   } catch (err) {
-    toast(`EIC batch failed: ${err.message}`, 'error');
+    toast(`Area analysis failed: ${err.message}`, 'error');
   } finally {
     hideLoading();
   }
@@ -4784,20 +5135,25 @@ async function runEICBatch() {
 
 function renderEICBatch(data) {
   setEICBatchEmptyState(false);
+  updateAreaCalculationModeUI();
 
-  const overlay = document.getElementById('eic-overlay').checked;
-  const normalize = document.getElementById('eic-normalize').checked;
+  const isUv = isUvAreaCalculationMode(data);
+  const overlay = !isUv && document.getElementById('eic-overlay').checked;
+  const normalize = !isUv && document.getElementById('eic-normalize').checked;
 
   // Combined/overlay plot
   const plotDiv = document.getElementById('eic-combined-plot');
   plotDiv.innerHTML = '';
   plotDiv.id = 'eic-combined-plot';
+  plotDiv.classList.toggle('hidden', isUv);
 
   if (data.targets && data.targets.length > 0) {
-    if (overlay) {
-      charts.plotEICOverlay('eic-combined-plot', data.targets, { normalize, title: 'EIC Overlay - All Targets' });
-    } else {
-      charts.plotEICOverlay('eic-combined-plot', data.targets, { normalize, title: 'EIC Combined View' });
+    if (!isUv) {
+      if (overlay) {
+        charts.plotEICOverlay('eic-combined-plot', data.targets, { normalize, title: 'EIC Overlay - All Targets' });
+      } else {
+        charts.plotEICOverlay('eic-combined-plot', data.targets, { normalize, title: 'EIC Combined View' });
+      }
     }
   }
 
@@ -4818,17 +5174,21 @@ function renderEICBatch(data) {
       const isCollapsed = state.eicCollapsedSections[String(ti)] === true;
 
       const peakCount = target.peaks ? target.peaks.length : 0;
+      const itemLabel = getAreaCalculationItemLabel(target);
+      const targetLabel = getAreaCalculationTargetLabel(target);
       section.innerHTML = `
         <div class="eic-section-header" data-toggle="eic-section-body-${ti}">
-          <span>m/z ${target.mz.toFixed(2)} (${peakCount} peak${peakCount !== 1 ? 's' : ''})</span>
+          <span>${escapeHtml(targetLabel)} (${peakCount} ${escapeHtml(itemLabel.toLowerCase())}${peakCount !== 1 ? 's' : ''})</span>
           <span class="chevron" style="${isCollapsed ? 'transform: rotate(-90deg);' : ''}">&#9660;</span>
         </div>
         <div id="eic-section-body-${ti}" class="eic-section-body${isCollapsed ? ' collapsed' : ''}">
           <div id="eic-detail-plot-${ti}" class="plot-container" style="min-height:250px;"></div>
           <div id="eic-peaks-${ti}"></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-            <button type="button" class="btn btn-sm" data-target-idx="${ti}" style="margin-top:0;">+ Add Peak Manually</button>
-            <button type="button" class="btn btn-sm" data-reset-target-idx="${ti}" style="margin-top:0;">Reset to Auto Peaks</button>
+            <button type="button" class="btn btn-sm" data-target-idx="${ti}" style="margin-top:0;">+ Add ${escapeHtml(itemLabel)} Manually</button>
+            ${target.signal_type === 'uv'
+              ? `<button type="button" class="btn btn-sm" data-clear-target-idx="${ti}" style="margin-top:0;">Clear Areas</button>`
+              : `<button type="button" class="btn btn-sm" data-reset-target-idx="${ti}" style="margin-top:0;">Reset to Auto Peaks</button>`}
           </div>
         </div>
       `;
@@ -4845,9 +5205,16 @@ function renderEICBatch(data) {
 
       // Render detail plot
       charts.plotEICWithPeaks(`eic-detail-plot-${ti}`, target, {
-        title: `EIC m/z ${target.mz.toFixed(2)}`,
+        title: target.signal_type === 'uv' ? `${targetLabel} (${escapeHtml(data.sample_name || 'Sample')})` : `EIC ${targetLabel}`,
+        seriesLabel: targetLabel,
+        yLabel: target.signal_type === 'uv' ? 'Absorbance (mAU)' : 'Intensity',
+        baselineMode: target.signal_type === 'uv' ? 'linear-endpoints' : undefined,
+        areaItemLabel: itemLabel,
         normalize,
+        dragmode: target.signal_type === 'uv' ? 'select' : 'zoom',
+        selectdirection: target.signal_type === 'uv' ? 'h' : undefined,
       });
+      if (target.signal_type === 'uv') bindAreaCalculationDragSelection(`eic-detail-plot-${ti}`, ti);
 
       // Render peak rows
       renderPeakRows(ti, target);
@@ -4859,12 +5226,19 @@ function renderEICBatch(data) {
         addManualPeak(ti);
       });
 
-      // Reset to original auto-detected peaks for this target
-      section.querySelector(`button[data-reset-target-idx="${ti}"]`).addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        resetTargetToAutoPeaks(ti);
-      });
+      if (target.signal_type === 'uv') {
+        section.querySelector(`button[data-clear-target-idx="${ti}"]`).addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          clearTargetAreas(ti);
+        });
+      } else {
+        section.querySelector(`button[data-reset-target-idx="${ti}"]`).addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          resetTargetToAutoPeaks(ti);
+        });
+      }
     });
   }
 
@@ -4889,6 +5263,103 @@ function findClosestTimeIndex(times, value) {
   }
 
   return Math.abs(Number(times[lo]) - target) <= Math.abs(Number(times[hi]) - target) ? lo : hi;
+}
+
+function interpolateChromatogramValue(times, intensities, timeValue) {
+  if (!Array.isArray(times) || !Array.isArray(intensities) || times.length !== intensities.length || times.length === 0) {
+    return 0;
+  }
+
+  const target = Number(timeValue);
+  if (!Number.isFinite(target)) return Number(intensities[0]) || 0;
+  if (times.length === 1) return Number(intensities[0]) || 0;
+
+  const firstTime = Number(times[0]);
+  const lastTime = Number(times[times.length - 1]);
+  if (target <= firstTime) return Number(intensities[0]) || 0;
+  if (target >= lastTime) return Number(intensities[intensities.length - 1]) || 0;
+
+  let lo = 0;
+  let hi = times.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (Number(times[mid]) <= target) lo = mid;
+    else hi = mid;
+  }
+
+  const x0 = Number(times[lo]);
+  const x1 = Number(times[hi]);
+  const y0 = Number(intensities[lo]) || 0;
+  const y1 = Number(intensities[hi]) || 0;
+  if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) return y0;
+  const t = (target - x0) / (x1 - x0);
+  return y0 + ((y1 - y0) * t);
+}
+
+function buildChromatogramWindow(times, intensities, start, end) {
+  if (!Array.isArray(times) || !Array.isArray(intensities) || times.length !== intensities.length || times.length === 0) {
+    return { times: [], intensities: [] };
+  }
+
+  const rawStart = Number(start);
+  const rawEnd = Number(end);
+  if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) {
+    return { times: [], intensities: [] };
+  }
+
+  const s = Math.min(rawStart, rawEnd);
+  const e = Math.max(rawStart, rawEnd);
+  if (!(e > s)) return { times: [], intensities: [] };
+
+  const windowTimes = [s];
+  const windowInts = [interpolateChromatogramValue(times, intensities, s)];
+
+  for (let i = 0; i < times.length; i++) {
+    const t = Number(times[i]);
+    if (t > s && t < e) {
+      windowTimes.push(t);
+      windowInts.push(Number(intensities[i]) || 0);
+    }
+  }
+
+  windowTimes.push(e);
+  windowInts.push(interpolateChromatogramValue(times, intensities, e));
+
+  return { times: windowTimes, intensities: windowInts };
+}
+
+function calculateWindowArea(windowTimes, windowInts, baselineMode = 'zero') {
+  if (!Array.isArray(windowTimes) || !Array.isArray(windowInts) || windowTimes.length !== windowInts.length || windowTimes.length < 2) {
+    return 0;
+  }
+
+  const startTime = Number(windowTimes[0]);
+  const endTime = Number(windowTimes[windowTimes.length - 1]);
+  const startInt = Number(windowInts[0]) || 0;
+  const endInt = Number(windowInts[windowInts.length - 1]) || 0;
+  const span = endTime - startTime;
+
+  let area = 0;
+  for (let i = 0; i < windowTimes.length - 1; i++) {
+    const x0 = Number(windowTimes[i]);
+    const x1 = Number(windowTimes[i + 1]);
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 <= x0) continue;
+
+    let y0 = Number(windowInts[i]) || 0;
+    let y1 = Number(windowInts[i + 1]) || 0;
+    if (baselineMode === 'linear-endpoints' && span > 0) {
+      const t0 = (x0 - startTime) / span;
+      const t1 = (x1 - startTime) / span;
+      const b0 = startInt + ((endInt - startInt) * t0);
+      const b1 = startInt + ((endInt - startInt) * t1);
+      y0 = Math.max(0, y0 - b0);
+      y1 = Math.max(0, y1 - b1);
+    }
+
+    area += (x1 - x0) * (y0 + y1) / 2;
+  }
+
+  return area;
 }
 
 function findValleyIndex(intensities, leftIdx, rightIdx) {
@@ -5063,17 +5534,8 @@ function recalculatePeakMetrics(target, peak) {
   peak.start = start;
   peak.end = end;
 
-  let first = -1;
-  let last = -1;
-  for (let i = 0; i < times.length; i++) {
-    const t = Number(times[i]);
-    if (t >= start && t <= end) {
-      if (first === -1) first = i;
-      last = i;
-    }
-  }
-
-  if (first === -1 || last === -1 || last < first) {
+  const window = buildChromatogramWindow(times, intensities, start, end);
+  if (window.times.length < 2) {
     peak.area = 0;
     peak.apex = start;
     peak.times = [];
@@ -5081,31 +5543,24 @@ function recalculatePeakMetrics(target, peak) {
     return;
   }
 
-  const sliceTimes = times.slice(first, last + 1);
-  const sliceInts = intensities.slice(first, last + 1);
-  peak.times = sliceTimes;
-  peak.intensities = sliceInts;
+  peak.times = window.times;
+  peak.intensities = window.intensities;
+  peak.area = calculateWindowArea(
+    window.times,
+    window.intensities,
+    target?.signal_type === 'uv' ? 'linear-endpoints' : 'zero'
+  );
 
-  let area = 0;
-  for (let i = first; i < last; i++) {
-    const x0 = Number(times[i]);
-    const x1 = Number(times[i + 1]);
-    const y0 = Number(intensities[i]) || 0;
-    const y1 = Number(intensities[i + 1]) || 0;
-    area += Math.max(0, x1 - x0) * (y0 + y1) / 2;
-  }
-  peak.area = area;
-
-  let apexIdx = first;
-  let apexInt = Number(intensities[first]) || 0;
-  for (let i = first + 1; i <= last; i++) {
-    const val = Number(intensities[i]) || 0;
+  let apexIdx = 0;
+  let apexInt = Number(window.intensities[0]) || 0;
+  for (let i = 1; i < window.intensities.length; i++) {
+    const val = Number(window.intensities[i]) || 0;
     if (val > apexInt) {
       apexInt = val;
       apexIdx = i;
     }
   }
-  peak.apex = Number(times[apexIdx]);
+  peak.apex = Number(window.times[apexIdx]);
 }
 
 function recalculateTargetPeaks(target) {
@@ -5157,9 +5612,12 @@ function enforcePeakBoundaries(target, movedIdx, changeInfo = {}) {
 function renderPeakRows(targetIdx, target) {
   const container = document.getElementById(`eic-peaks-${targetIdx}`);
   container.innerHTML = '';
+  const itemLabel = getAreaCalculationItemLabel(target);
 
   if (!target.peaks || target.peaks.length === 0) {
-    container.innerHTML = '<p class="muted" style="padding:6px 0;">No peaks detected</p>';
+    container.innerHTML = target?.signal_type === 'uv'
+      ? '<p class="muted" style="padding:6px 0;">No areas selected yet. Drag on the UV trace or add one manually.</p>'
+      : '<p class="muted" style="padding:6px 0;">No peaks detected</p>';
     return;
   }
 
@@ -5174,7 +5632,7 @@ function renderPeakRows(targetIdx, target) {
     row.className = 'peak-row';
     row.innerHTML = `
       <input type="checkbox" class="peak-check" data-ti="${targetIdx}" data-pi="${pi}" ${peak.selected !== false ? 'checked' : ''}>
-      <span>Peak ${pi + 1}</span>
+      <span>${escapeHtml(itemLabel)} ${pi + 1}</span>
       <label style="display:flex;align-items:center;gap:4px;margin:0;">Start: <input type="number" class="peak-start" data-ti="${targetIdx}" data-pi="${pi}" value="${startVal.toFixed(3)}" step="0.01" style="width:80px;"></label>
       <label style="display:flex;align-items:center;gap:4px;margin:0;">End: <input type="number" class="peak-end" data-ti="${targetIdx}" data-pi="${pi}" value="${endVal.toFixed(3)}" step="0.01" style="width:80px;"></label>
       <span class="area-val">Area: ${areaVal.toExponential(3)}</span>
@@ -5222,35 +5680,83 @@ function renderPeakRows(targetIdx, target) {
   });
 }
 
-function addManualPeak(targetIdx) {
+function bindAreaCalculationDragSelection(plotId, targetIdx) {
+  const plot = document.getElementById(plotId);
+  const target = state.eicBatchData?.targets?.[targetIdx];
+  if (!plot || typeof plot.on !== 'function' || !target || target.signal_type !== 'uv') return;
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_selected');
+  }
+
+  plot.on('plotly_selected', (eventData) => {
+    if (!eventData) return;
+    const points = Array.isArray(eventData.points) ? eventData.points : [];
+    const startRaw = eventData.range?.x?.[0] ?? points[0]?.x;
+    const endRaw = eventData.range?.x?.[1] ?? points[points.length - 1]?.x;
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    if ((end - start) < 0.02) return;
+
+    addManualPeak(targetIdx, {
+      start,
+      end,
+      silentToast: true,
+    });
+    toast('Area window added. Adjust start/end if needed.', 'success');
+  });
+}
+
+function addManualPeak(targetIdx, options = {}) {
   const target = state.eicBatchData.targets[targetIdx];
   if (!target.peaks) target.peaks = [];
 
-  // Default: a small window in the middle of the time range
   const times = target.times;
   if (!Array.isArray(times) || times.length === 0) {
-    toast('Cannot add manual peak: no EIC time axis available', 'warning');
+    toast(`Cannot add manual ${getAreaCalculationItemLabel(target).toLowerCase()}: no chromatogram time axis available`, 'warning');
     return;
   }
-  const mid = times[Math.floor(times.length / 2)];
-  const span = (times[times.length - 1] - times[0]) * 0.05;
 
-  target.peaks.push({
-    start: mid - span,
-    end: mid + span,
-    apex: mid,
+  let start = Number(options.start);
+  let end = Number(options.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    const mid = times[Math.floor(times.length / 2)];
+    const span = (times[times.length - 1] - times[0]) * 0.05;
+    start = mid - span;
+    end = mid + span;
+  }
+
+  const peak = {
+    start,
+    end,
+    apex: (start + end) / 2,
     area: 0,
     type: 'manual',
     selected: true,
     times: [],
     intensities: [],
-  });
+  };
+  target.peaks.push(peak);
 
   sortTargetPeaksByStart(target);
-  enforcePeakBoundaries(target, target.peaks.length - 1, { field: 'end' });
+  const insertedIdx = Math.max(0, target.peaks.indexOf(peak));
+  enforcePeakBoundaries(target, insertedIdx, { field: 'end' });
   recalculateTargetPeaks(target);
   reRenderEICBatch({ preserveScroll: true });
-  toast('Manual peak added. Adjust start/end times.', 'info');
+  if (options.silentToast !== true) {
+    const itemLabel = getAreaCalculationItemLabel(target);
+    toast(`${itemLabel} window added. Adjust start/end times.`, 'info');
+  }
+}
+
+function clearTargetAreas(targetIdx) {
+  const target = state.eicBatchData?.targets?.[targetIdx];
+  if (!target) return;
+  target.peaks = [];
+  reRenderEICBatch({ preserveScroll: true });
+  toast('Cleared UV area windows', 'success');
 }
 
 function resetTargetToAutoPeaks(targetIdx) {
@@ -5297,8 +5803,9 @@ function renderEICResultsTable(data) {
     if (target.peaks) {
       target.peaks.forEach((peak, pi) => {
         rows.push({
-          mz: target.mz,
-          peak: pi + 1,
+          signal: getAreaCalculationTargetLabel(target),
+          itemLabel: getAreaCalculationItemLabel(target),
+          itemIndex: pi + 1,
           type: peak.type || 'auto',
           apex: peak.apex,
           start: peak.start,
@@ -5310,23 +5817,24 @@ function renderEICResultsTable(data) {
   });
 
   if (rows.length === 0) {
-    container.innerHTML = '<p class="placeholder-msg">No peaks found</p>';
+    container.innerHTML = isUvAreaCalculationMode(data)
+      ? '<p class="placeholder-msg">No areas defined yet</p>'
+      : '<p class="placeholder-msg">No peaks found</p>';
     return;
   }
 
   let html = `<div class="data-table-wrapper"><table class="data-table">
     <thead><tr>
-      <th>m/z</th><th>Peak</th><th>Type</th><th>Apex (min)</th><th>Start (min)</th><th>End (min)</th><th>Area</th>
+      <th>Signal</th><th>Item</th><th>Type</th><th>Apex (min)</th><th>Start (min)</th><th>End (min)</th><th>Area</th>
     </tr></thead><tbody>`;
 
   rows.forEach(r => {
     const startVal = Number.isFinite(r.start) ? r.start.toFixed(3) : '-';
     const endVal = Number.isFinite(r.end) ? r.end.toFixed(3) : '-';
     const areaVal = Number.isFinite(r.area) ? r.area.toExponential(3) : '-';
-    const mzVal = Number.isFinite(r.mz) ? r.mz.toFixed(2) : '-';
     html += `<tr>
-      <td>${mzVal}</td>
-      <td>${r.peak}</td>
+      <td>${escapeHtml(r.signal)}</td>
+      <td>${escapeHtml(r.itemLabel)} ${r.itemIndex}</td>
       <td>${r.type}</td>
       <td>${r.apex != null ? r.apex.toFixed(3) : '-'}</td>
       <td>${startVal}</td>
@@ -5341,16 +5849,16 @@ function renderEICResultsTable(data) {
 
 async function exportEICCSV() {
   if (!state.eicBatchData) {
-    toast('Run EIC batch analysis first', 'warning');
+    toast('Run area analysis first', 'warning');
     return;
   }
 
-  const rows = [['m/z', 'Peak', 'Type', 'Apex (min)', 'Start (min)', 'End (min)', 'Area']];
+  const rows = [['Signal', 'Item', 'Type', 'Apex (min)', 'Start (min)', 'End (min)', 'Area']];
   state.eicBatchData.targets.forEach(target => {
     (target.peaks || []).forEach((peak, pi) => {
       rows.push([
-        Number.isFinite(target.mz) ? target.mz.toFixed(2) : '',
-        pi + 1,
+        getAreaCalculationTargetLabel(target),
+        `${getAreaCalculationItemLabel(target)} ${pi + 1}`,
         peak.type || 'auto',
         Number.isFinite(peak.apex) ? peak.apex.toFixed(3) : '',
         Number.isFinite(peak.start) ? peak.start.toFixed(3) : '',
@@ -5362,7 +5870,7 @@ async function exportEICCSV() {
 
   const csv = rows.map(r => r.join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
-  downloadBlob(blob, 'eic_results.csv');
+  downloadBlob(blob, 'area_calculation_results.csv');
   toast('CSV exported', 'success');
 }
 
@@ -7034,7 +7542,7 @@ function renderReportSummary() {
   lines.push(`<p><strong>Report options:</strong> UV ${includeUv ? 'included' : 'excluded'}, Deconvolution ${includeDeconv ? 'included' : 'excluded'}</p>`);
   lines.push(`<p><strong>Selected samples:</strong> ${state.selectedFiles.length}</p>`);
   lines.push(`<p><strong>Single sample analysis:</strong> ${state.singleSampleData ? 'ready' : 'not run'}</p>`);
-  lines.push(`<p><strong>EIC batch:</strong> ${state.eicBatchData ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Area calculation:</strong> ${state.eicBatchData ? 'ready' : 'not run'}</p>`);
   lines.push(`<p><strong>Deconvolution:</strong> ${state.deconvResults ? 'ready' : 'not run'}</p>`);
   lines.push(`<p><strong>Batch deconvolution:</strong> ${state.batchDeconvData ? 'ready' : 'not run'}</p>`);
   lines.push(`<p><strong>Time progression:</strong> ${state.progressionData ? 'ready' : 'not run'}</p>`);
@@ -7050,6 +7558,7 @@ function exportSessionJSON() {
     analyses: {
       single_sample: state.singleSampleData,
       progression: state.progressionData,
+      area_calculation: state.eicBatchData,
       eic_batch: state.eicBatchData,
       deconvolution: state.deconvResults,
       batch_deconvolution: state.batchDeconvData,
@@ -7064,7 +7573,7 @@ function exportReportSummaryCSV() {
   const rows = [['Section', 'Status', 'Detail']];
   rows.push(['Selected Samples', state.selectedFiles.length > 0 ? 'ok' : 'empty', String(state.selectedFiles.length)]);
   rows.push(['Single Sample', state.singleSampleData ? 'ok' : 'not_run', '']);
-  rows.push(['EIC Batch', state.eicBatchData ? 'ok' : 'not_run', state.eicBatchData ? `${(state.eicBatchData.targets || []).length} targets` : '']);
+  rows.push(['Area Calculation', state.eicBatchData ? 'ok' : 'not_run', state.eicBatchData ? `${(state.eicBatchData.targets || []).length} signals` : '']);
   rows.push(['Deconvolution', state.deconvResults ? 'ok' : 'not_run', state.deconvResults ? `${(state.deconvResults.components || []).length} components` : '']);
   rows.push(['Batch Deconvolution', state.batchDeconvData ? 'ok' : 'not_run', state.batchDeconvData ? `${(state.batchDeconvData.samples || []).length} samples` : '']);
   rows.push(['Time Progression', state.progressionData ? 'ok' : 'not_run', '']);

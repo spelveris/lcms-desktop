@@ -317,7 +317,7 @@ const api = {
   },
 
   /**
-   * Run EIC batch: fetch EIC + peaks for each target m/z.
+   * Run area calculation in EIC mode: fetch EIC + peaks for each target m/z.
    */
   async runEICBatch(params) {
     const { path, targets, mz_window, smoothing } = params;
@@ -331,7 +331,7 @@ const api = {
       const { mz, polarity = 'positive' } = target;
       const [eicData, peakData] = await Promise.all([
         this.getEIC(path, mz, mz_window, smoothing, polarity).catch(() => null),
-        // EIC batch uses a slightly more sensitive detector to avoid missing
+        // Area calculation uses a slightly more sensitive detector to avoid missing
         // lower-abundance shoulder peaks in multi-peak traces.
         this.findPeaks(path, 'eic', {
           mz,

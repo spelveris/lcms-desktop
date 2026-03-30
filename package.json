@@ -1,6 +1,6 @@
 {
   "name": "catrupole",
-  "version": "0.2.29",
+  "version": "0.2.30",
   "description": "CATrupole Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "setup": "./setup-dev.sh",
     "frontend-only": "open frontend/index.html",
     "build:backend": "node scripts/build-backend.js",
+    "smoke:mac": "bash scripts/smoke-test-mac.sh",
     "dist": "npm run build:backend && electron-builder --publish never",
     "dist:mac": "npm run build:backend && electron-builder --mac dmg zip --publish never",
     "dist:win": "npm run build:backend && electron-builder --win nsis portable zip --publish never",
