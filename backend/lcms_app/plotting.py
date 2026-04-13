@@ -199,6 +199,22 @@ def _get_deconvolution_panel_dimensions(base_fig_width: float = 8.0) -> tuple[fl
     return panel_width_in, panel_height_in
 
 
+def _apply_locked_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> None:
+    """Lock the single-panel deconvolution export axes box to a stable size.
+
+    The default ``tight_layout`` solver can subtly resize the plotting area based
+    on sample-specific subtitles, labels, or annotations. For deconvolution mass
+    exports we want the physical plot box to remain fixed between samples and
+    between standard/dense variants so exported PDFs and images compare directly.
+    """
+    fig.subplots_adjust(
+        left=0.25,
+        right=0.93,
+        bottom=0.18,
+        top=0.83,
+    )
+
+
 def create_single_panel(
     ax: plt.Axes,
     times: np.ndarray,
@@ -1561,6 +1577,138 @@ def _plot_deconvoluted_component_inset(
     ax.spines['right'].set_visible(False)
 
 
+def _gaussian_smooth_profile(y: np.ndarray, sigma_bins: float) -> np.ndarray:
+    if y.size == 0 or not np.isfinite(float(sigma_bins)) or sigma_bins <= 0.0:
+        return y
+    radius = max(1, int(np.ceil(float(sigma_bins) * 4.0)))
+    offsets = np.arange(-radius, radius + 1, dtype=float)
+    kernel = np.exp(-0.5 * (offsets / float(sigma_bins)) ** 2)
+    kernel_sum = float(np.sum(kernel))
+    if kernel_sum <= 0.0:
+        return y
+    kernel /= kernel_sum
+    return np.convolve(y, kernel, mode='same')
+
+
+def _build_dense_zero_charge_profile(
+    mz_values,
+    intensity_values,
+    mass_min_da: float,
+    mass_max_da: float,
+    min_charge: int,
+    max_charge: int,
+    use_monoisotopic: bool,
+    bin_da: float,
+    smooth_sigma_da: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    mz_arr = np.asarray(mz_values if mz_values is not None else [], dtype=float)
+    intensity_arr = np.asarray(intensity_values if intensity_values is not None else [], dtype=float)
+    if mz_arr.size == 0 or intensity_arr.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    valid = np.isfinite(mz_arr) & np.isfinite(intensity_arr) & (intensity_arr > 0.0)
+    mz_arr = mz_arr[valid]
+    intensity_arr = intensity_arr[valid]
+    if mz_arr.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    mass_min = float(min(mass_min_da, mass_max_da))
+    mass_max = float(max(mass_min_da, mass_max_da))
+    if not np.isfinite(mass_min) or not np.isfinite(mass_max) or mass_max <= mass_min:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    bin_width = max(0.01, _coerce_finite_float(bin_da, 0.1))
+    sigma_da = max(0.0, _coerce_finite_float(smooth_sigma_da, 2.0))
+    charge_low = max(1, int(min(min_charge, max_charge)))
+    charge_high = max(charge_low, int(max(min_charge, max_charge)))
+    proton_mass = 1.007276 if use_monoisotopic else 1.00784
+
+    edges = np.arange(mass_min, mass_max + bin_width, bin_width, dtype=float)
+    if edges.size < 2:
+        edges = np.array([mass_min, mass_max], dtype=float)
+    raw_profile = np.zeros(edges.size - 1, dtype=float)
+
+    for charge in range(charge_low, charge_high + 1):
+        masses = (mz_arr - proton_mass) * float(charge)
+        in_window = (masses >= mass_min) & (masses <= mass_max)
+        if not np.any(in_window):
+            continue
+        weights = intensity_arr[in_window] / float(charge)
+        raw_profile += np.histogram(masses[in_window], bins=edges, weights=weights)[0]
+
+    centers = edges[:-1] + (bin_width / 2.0)
+    sigma_bins = sigma_da / bin_width if bin_width > 0 else 0.0
+    smooth_profile = _gaussian_smooth_profile(raw_profile, sigma_bins)
+    return centers, smooth_profile
+
+
+def create_dense_deconvoluted_mass_profile_figure(
+    sample_name: str,
+    spectrum: Optional[dict],
+    style: Optional[dict] = None,
+) -> matplotlib.figure.Figure:
+    """Create a dense zero-charge mass profile using deconvolution export styling."""
+    style = style or {}
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
+
+    x_min_da = _coerce_finite_float(style.get('deconv_x_min_da', 1000.0), 1000.0)
+    x_max_da = _coerce_finite_float(style.get('deconv_x_max_da', 50000.0), 50000.0)
+    if x_max_da <= x_min_da:
+        x_min_da, x_max_da = 1000.0, 50000.0
+
+    mz_values = spectrum.get('mz') if isinstance(spectrum, dict) else []
+    intensity_values = spectrum.get('intensities') if isinstance(spectrum, dict) else []
+    x_da, y_profile = _build_dense_zero_charge_profile(
+        mz_values,
+        intensity_values,
+        x_min_da,
+        x_max_da,
+        int(_coerce_finite_float(style.get('deconv_profile_min_charge', 1), 1)),
+        int(_coerce_finite_float(style.get('deconv_profile_max_charge', 50), 50)),
+        _coerce_bool(style.get('deconv_profile_use_monoisotopic', False), False),
+        _coerce_finite_float(style.get('deconv_profile_bin_da', 0.1), 0.1),
+        _coerce_finite_float(style.get('deconv_profile_smooth_sigma_da', 2.0), 2.0),
+    )
+
+    if x_da.size > 0 and y_profile.size > 0 and np.max(y_profile) > 0:
+        y_norm = (y_profile / float(np.max(y_profile))) * 100.0
+        ax.plot(
+            x_da / 1000.0,
+            y_norm,
+            color='black',
+            linewidth=max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8)),
+        )
+    else:
+        ax.text(0.5, 0.5, "No masses detected", ha='center', va='center', transform=ax.transAxes)
+
+    show_title = _coerce_bool(style.get('deconv_show_title', True), True)
+    show_subtitle = _coerce_bool(style.get('deconv_show_subtitle', True), True)
+    subtitle = (sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name) if show_subtitle else None
+
+    ax.set_xlim(x_min_da / 1000.0, x_max_da / 1000.0)
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Mass (kDa)")
+    ax.set_ylabel("Relative Intensity (%)")
+    if show_title:
+        title_y = 1.08 if subtitle else 1.03
+        ax.set_title("Deconvoluted Masses", fontweight='bold', y=title_y)
+    if subtitle:
+        sub_y = 1.02 if show_title else 1.03
+        ax.text(
+            0.5, sub_y, subtitle,
+            transform=ax.transAxes,
+            ha='center', va='bottom',
+            fontsize=7, fontweight='normal'
+        )
+    ax.grid(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    _apply_locked_deconvolution_export_layout(fig)
+    return fig
+
+
 def create_deconvolution_figure(sample, start_time: float, end_time: float,
                                  deconv_results: list,
                                  style: dict = None) -> matplotlib.figure.Figure:
@@ -1754,7 +1902,7 @@ def create_deconvoluted_masses_figure(
         calc_mass_da=deconv_calc_mass_da,
         show_peak_labels=deconv_show_peak_labels,
     )
-    plt.tight_layout(pad=0.8)
+    _apply_locked_deconvolution_export_layout(fig)
 
     if deconv_export_variant == 'wide-inset' and selected_component is not None and selected_component.get('ion_mzs'):
         inset_ax = ax.inset_axes([0.70, 0.47, 0.27, 0.35])
@@ -2006,7 +2154,7 @@ def _fit_linear_points(points: list[dict]) -> Optional[dict]:
 def create_calibration_curve_export_figure(
     points: list[dict],
     title: str,
-    x_label: str = "Concentration (µM)",
+    x_label: str = "Concentration (μM)",
     y_label: str = "Integrated Area",
     style: Optional[dict] = None,
     fit: Optional[dict] = None,
@@ -2122,13 +2270,13 @@ def create_calibration_curve_export_figure(
 def create_uptake_assay_export_figure(
     points: list[dict],
     title: str,
-    x_label: str = "Concentration (µM)",
+    x_label: str = "Concentration (μM)",
     y_label: str = "Integrated Area",
     style: Optional[dict] = None,
     fit: Optional[dict] = None,
     assay_points: Optional[list[dict]] = None,
     assay_title: str = "Uptake Assay",
-    assay_y_label: str = "Calculated Concentration (µM)",
+    assay_y_label: str = "Calculated Concentration (μM)",
 ) -> matplotlib.figure.Figure:
     """Create a calibration export, with an optional uptake bar chart beside it."""
     normalized_assay_points: list[dict] = []

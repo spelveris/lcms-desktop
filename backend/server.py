@@ -1320,6 +1320,31 @@ def _resolve_node_command() -> Optional[str]:
     return None
 
 
+def _resolve_node_modules_dir() -> str:
+    candidates: list[str] = []
+
+    preferred = os.environ.get("LCMS_NODE_MODULES", "").strip()
+    if preferred:
+        candidates.append(os.path.abspath(preferred))
+
+    executable_dir = os.path.dirname(os.path.abspath(sys.executable or ""))
+    if executable_dir:
+        resources_dir = os.path.dirname(executable_dir)
+        candidates.append(os.path.join(resources_dir, "app", "node_modules"))
+
+    project_root = os.path.abspath(os.path.join(BACKEND_DIR, ".."))
+    candidates.append(os.path.join(project_root, "node_modules"))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.isdir(candidate):
+            return candidate
+    return ""
+
+
 def _compute_smiles_properties(smiles: str) -> dict:
     node_cmd = _resolve_node_command()
     if not node_cmd:
@@ -1330,15 +1355,16 @@ def _compute_smiles_properties(smiles: str) -> dict:
         raise HTTPException(status_code=400, detail="smiles is required")
 
     env = dict(os.environ)
-    node_modules_dir = env.get("LCMS_NODE_MODULES", "").strip()
-    if node_modules_dir and os.path.isdir(node_modules_dir):
+    node_modules_dir = _resolve_node_modules_dir()
+    if node_modules_dir:
+        env["LCMS_NODE_MODULES"] = node_modules_dir
         existing_node_path = env.get("NODE_PATH", "")
         env["NODE_PATH"] = f"{node_modules_dir}{os.pathsep}{existing_node_path}" if existing_node_path else node_modules_dir
 
     if env.get("LCMS_NODE") and os.path.abspath(node_cmd) == os.path.abspath(env["LCMS_NODE"]):
         env["ELECTRON_RUN_AS_NODE"] = "1"
 
-    if node_modules_dir and os.path.isdir(node_modules_dir):
+    if node_modules_dir:
         run_cwd = os.path.dirname(node_modules_dir)
     else:
         project_root = os.path.abspath(os.path.join(BACKEND_DIR, ".."))
@@ -1366,21 +1392,92 @@ process.stdin.on('end', async () => {
 
     const mf = mol.getMolecularFormula();
     const exactMass = Number(mf.absoluteWeight);
+    const averageMass = Number(mf.relativeWeight);
     if (!Number.isFinite(exactMass) || exactMass <= 0) {
       throw new Error('Unable to calculate molecular mass');
     }
-
-    let netCharge = 0;
-    const atomCount = Number(mol.getAllAtoms?.()) || 0;
-    for (let i = 0; i < atomCount; i++) {
-      netCharge += Number(mol.getAtomCharge?.(i)) || 0;
+    if (!Number.isFinite(averageMass) || averageMass <= 0) {
+      throw new Error('Unable to calculate average molecular mass');
     }
 
-    process.stdout.write(JSON.stringify({
-      formula: String(mf.formula || ''),
-      exact_mass: exactMass,
-      net_charge: netCharge
-    }));
+	    let netCharge = 0;
+	    const atomCount = Number(mol.getAllAtoms?.()) || 0;
+	    for (let i = 0; i < atomCount; i++) {
+	      netCharge += Number(mol.getAtomCharge?.(i)) || 0;
+	    }
+
+	    const isCarbonylCarbon = (atomIndex) => {
+	      if (Number(mol.getAtomicNo?.(atomIndex)) !== 6) return false;
+	      for (let i = 0; i < Number(mol.getConnAtoms?.(atomIndex)) || 0; i++) {
+	        const neighbor = Number(mol.getConnAtom?.(atomIndex, i));
+	        const order = Number(mol.getConnBondOrder?.(atomIndex, i));
+	        if (Number(mol.getAtomicNo?.(neighbor)) === 8 && order === 2) return true;
+	      }
+	      return false;
+	    };
+
+	    let freeCarboxylCount = 0;
+	    let freeAmineCount = 0;
+	    for (let atomIndex = 0; atomIndex < atomCount; atomIndex++) {
+	      const atomicNo = Number(mol.getAtomicNo?.(atomIndex));
+	      if (atomicNo === 6 && isCarbonylCarbon(atomIndex)) {
+	        let hasSingleTerminalOxygen = false;
+	        for (let i = 0; i < Number(mol.getConnAtoms?.(atomIndex)) || 0; i++) {
+	          const neighbor = Number(mol.getConnAtom?.(atomIndex, i));
+	          const order = Number(mol.getConnBondOrder?.(atomIndex, i));
+	          if (Number(mol.getAtomicNo?.(neighbor)) !== 8 || order !== 1) continue;
+	          const oxygenDegree = Number(mol.getConnAtoms?.(neighbor)) || 0;
+	          const oxygenCharge = Number(mol.getAtomCharge?.(neighbor)) || 0;
+	          if (oxygenDegree === 1 || oxygenCharge === -1) {
+	            hasSingleTerminalOxygen = true;
+	            break;
+	          }
+	        }
+	        if (hasSingleTerminalOxygen) freeCarboxylCount += 1;
+	      }
+
+	      if (atomicNo === 7) {
+	        const degree = Number(mol.getConnAtoms?.(atomIndex)) || 0;
+	        if (degree === 0 || degree > 2) continue;
+	        let validSingleBondAmine = true;
+	        let attachedToCarbonyl = false;
+	        for (let i = 0; i < degree; i++) {
+	          const neighbor = Number(mol.getConnAtom?.(atomIndex, i));
+	          const order = Number(mol.getConnBondOrder?.(atomIndex, i));
+	          if (order !== 1) {
+	            validSingleBondAmine = false;
+	            break;
+	          }
+	          if (Number(mol.getAtomicNo?.(neighbor)) === 6 && isCarbonylCarbon(neighbor)) {
+	            attachedToCarbonyl = true;
+	          }
+	        }
+	        if (validSingleBondAmine && !attachedToCarbonyl) {
+	          freeAmineCount += 1;
+	        }
+	      }
+	    }
+
+	    const residueInsertionPossible = freeCarboxylCount > 0 && freeAmineCount > 0;
+	    let residueInsertionMessage = 'No free amine/carboxyl pair was recognized; this is not an obvious amino-acid-style replacement precursor.';
+	    if (residueInsertionPossible) {
+	      residueInsertionMessage = 'Free amine and free carboxyl were detected; this looks compatible with amino-acid-style residue insertion. If used as a custom replacement residue, the peptide-style -H2O correction is applied automatically.';
+	    } else if (freeCarboxylCount > 0) {
+	      residueInsertionMessage = 'A free carboxyl group was detected, but no free amine was recognized; this is not an obvious amino-acid-style replacement precursor.';
+	    } else if (freeAmineCount > 0) {
+	      residueInsertionMessage = 'A free amine was detected, but no free carboxyl group was recognized; this is not an obvious amino-acid-style replacement precursor.';
+	    }
+
+	    process.stdout.write(JSON.stringify({
+	      formula: String(mf.formula || ''),
+	      exact_mass: exactMass,
+	      average_mass: averageMass,
+	      net_charge: netCharge,
+	      free_carboxyl_count: freeCarboxylCount,
+	      free_amine_count: freeAmineCount,
+	      residue_insertion_possible: residueInsertionPossible,
+	      residue_insertion_message: residueInsertionMessage
+	    }));
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
     process.stderr.write(msg);
@@ -1421,14 +1518,26 @@ process.stdin.on('end', async () => {
 
     formula = str(parsed.get("formula", ""))
     exact_mass = float(parsed.get("exact_mass", 0.0))
+    average_mass = float(parsed.get("average_mass", 0.0))
     net_charge = int(parsed.get("net_charge", 0))
+    free_carboxyl_count = int(parsed.get("free_carboxyl_count", 0))
+    free_amine_count = int(parsed.get("free_amine_count", 0))
+    residue_insertion_possible = bool(parsed.get("residue_insertion_possible", False))
+    residue_insertion_message = str(parsed.get("residue_insertion_message", ""))
     if not np.isfinite(exact_mass) or exact_mass <= 0:
         raise HTTPException(status_code=400, detail="Unable to calculate molecular mass from this SMILES")
+    if not np.isfinite(average_mass) or average_mass <= 0:
+        raise HTTPException(status_code=400, detail="Unable to calculate average molecular mass from this SMILES")
 
     return {
         "formula": formula,
         "exact_mass": exact_mass,
+        "average_mass": average_mass,
         "net_charge": net_charge,
+        "free_carboxyl_count": free_carboxyl_count,
+        "free_amine_count": free_amine_count,
+        "residue_insertion_possible": residue_insertion_possible,
+        "residue_insertion_message": residue_insertion_message,
     }
 
 
@@ -3014,7 +3123,7 @@ def export_single_sample(payload: dict = Body(...)):
             content = plotting.export_figure_svg(fig)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
-            content = plotting.export_figure_pdf(fig, dpi=dpi)
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
             media_type = "application/pdf"
         else:
             content = plotting.export_figure(fig, dpi=dpi, format="png")
@@ -3146,10 +3255,10 @@ def export_uptake_assay_cc(payload: dict = Body(...)):
     dpi = max(72, min(600, dpi))
 
     title = str(payload.get("title", "Uptake Assay Calibration Curve"))
-    x_label = str(payload.get("x_label", "Concentration (µM)"))
+    x_label = str(payload.get("x_label", "Concentration (μM)"))
     y_label = str(payload.get("y_label", "Integrated Area"))
     assay_title = str(payload.get("assay_title", "Uptake Assay"))
-    assay_y_label = str(payload.get("assay_y_label", "Calculated Concentration (µM)"))
+    assay_y_label = str(payload.get("assay_y_label", "Calculated Concentration (μM)"))
     filename_base = str(payload.get("filename_base", "uptake_assay_cc"))
 
     style = payload.get("style", {})
@@ -3212,8 +3321,8 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     if export_format not in {"png", "svg", "pdf"}:
         raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
     variant = str(payload.get("variant", "standard")).lower()
-    if variant not in {"standard", "wide-inset", "side-by-side"}:
-        raise HTTPException(status_code=400, detail="variant must be one of: standard, wide-inset, side-by-side")
+    if variant not in {"standard", "wide-inset", "side-by-side", "dense-profile"}:
+        raise HTTPException(status_code=400, detail="variant must be one of: standard, wide-inset, side-by-side, dense-profile")
 
     try:
         dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
@@ -3227,13 +3336,16 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     style = dict(style)
     style["deconv_export_variant"] = variant
 
-    fig = plotting.create_deconvoluted_masses_figure(sample_name, components, style, spectrum=spectrum)
+    if variant == "dense-profile":
+        fig = plotting.create_dense_deconvoluted_mass_profile_figure(sample_name, spectrum, style)
+    else:
+        fig = plotting.create_deconvoluted_masses_figure(sample_name, components, style, spectrum=spectrum)
     try:
         if export_format == "svg":
             content = plotting.export_figure_svg(fig)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
-            content = plotting.export_figure_pdf(fig, dpi=dpi)
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
             media_type = "application/pdf"
         else:
             content = plotting.export_figure(fig, dpi=dpi, format="png")
@@ -3248,6 +3360,8 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
         filename_suffix = "batch_deconvoluted_masses_wide"
     elif variant == "side-by-side":
         filename_suffix = "batch_deconvoluted_masses_side_by_side"
+    elif variant == "dense-profile":
+        filename_suffix = "batch_deconvoluted_masses_dense"
     else:
         filename_suffix = "batch_deconvoluted_masses"
     filename = f"{safe_name}_{filename_suffix}.{export_format}"

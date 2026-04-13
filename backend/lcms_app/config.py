@@ -2,7 +2,7 @@
 
 import os
 
-APP_VERSION = os.environ.get("LCMS_APP_VERSION", "0.2.29")
+APP_VERSION = os.environ.get("LCMS_APP_VERSION", "0.2.31")
 
 def get_default_path():
     """Get a sensible default path for LC-MS data."""

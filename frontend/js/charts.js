@@ -877,7 +877,7 @@ const charts = {
 
     const layout = mergeLayout({
       title: { text: options.title || 'Uptake Assay Calibration Curve', font: { size: 14 } },
-      xaxis: { title: options.xLabel || 'Concentration (µM)' },
+      xaxis: { title: options.xLabel || 'Concentration (μM)' },
       yaxis: { title: options.yLabel || 'Integrated Area' },
       showlegend: false,
       height: getContainerHeight(divId, 320),
@@ -955,12 +955,12 @@ const charts = {
       hovertext: usablePoints.map((point) => {
         const lines = [
           `<b>${point.label || ''}</b>`,
-          `Mean concentration: ${Number(point.y).toFixed(2)} µM`,
+          `Mean concentration: ${Number(point.y).toFixed(2)} μM`,
         ];
         const replicateCount = Number(point?.replicate_count) || 1;
         if (replicateCount > 1) {
           const sdValue = Number(point?.y_sd);
-          lines.push(`SD: ${Number.isFinite(sdValue) ? sdValue.toFixed(2) : '0.00'} µM`);
+          lines.push(`SD: ${Number.isFinite(sdValue) ? sdValue.toFixed(2) : '0.00'} μM`);
           lines.push(`Replicates: ${replicateCount}`);
         }
         const sampleNames = Array.isArray(point?.sample_names) ? point.sample_names.filter(Boolean) : [];
@@ -988,7 +988,7 @@ const charts = {
           (xPositions[xPositions.length - 1] || 0) + (barWidth / 2) + interBarGap,
         ],
       },
-      yaxis: { title: options.yLabel || 'Calculated Concentration (µM)' },
+      yaxis: { title: options.yLabel || 'Calculated Concentration (μM)' },
       showlegend: false,
       height: getContainerHeight(divId, 320),
       width: targetWidth,

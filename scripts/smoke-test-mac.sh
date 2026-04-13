@@ -100,6 +100,10 @@ SOURCE_LABEL=""
 SEARCH_ROOT=""
 BACKEND_LOG="$WORK_DIR/backend.log"
 HEALTH_JSON="$WORK_DIR/health.json"
+SMILES_JSON="$WORK_DIR/smiles.json"
+APP_BUNDLE=""
+ELECTRON_BIN=""
+NODE_MODULES_DIR=""
 
 cleanup() {
   if [[ -n "${BACKEND_PID:-}" ]]; then
@@ -137,12 +141,29 @@ if [[ -z "$BACKEND_BIN" ]]; then
   exit 1
 fi
 
+if [[ "$SEARCH_ROOT" == *.app ]]; then
+  APP_BUNDLE="$SEARCH_ROOT"
+else
+  APP_BUNDLE="$(find "$SEARCH_ROOT" -type d -name 'CATrupole.app' | head -n1 || true)"
+fi
+if [[ -n "$APP_BUNDLE" ]]; then
+  ELECTRON_BIN="$APP_BUNDLE/Contents/MacOS/CATrupole"
+  NODE_MODULES_DIR="$APP_BUNDLE/Contents/Resources/app/node_modules"
+fi
+
 echo "Smoke source: $SOURCE_LABEL"
 echo "Work dir: $WORK_DIR"
 echo "Backend binary: $BACKEND_BIN"
 echo "Port: $PORT"
 
-LCMS_PORT="$PORT" "$BACKEND_BIN" >"$BACKEND_LOG" 2>&1 &
+env_cmd=(env "LCMS_PORT=$PORT")
+if [[ -n "$ELECTRON_BIN" && -x "$ELECTRON_BIN" ]]; then
+  env_cmd+=("LCMS_NODE=$ELECTRON_BIN")
+fi
+if [[ -n "$NODE_MODULES_DIR" && -d "$NODE_MODULES_DIR" ]]; then
+  env_cmd+=("LCMS_NODE_MODULES=$NODE_MODULES_DIR")
+fi
+"${env_cmd[@]}" "$BACKEND_BIN" >"$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 
 ok=0
@@ -178,5 +199,39 @@ if [[ "$ok" -ne 1 ]]; then
   exit 1
 fi
 
+if ! curl -fsS "http://127.0.0.1:${PORT}/api/smiles-mz" \
+  -H 'Content-Type: application/json' \
+  -d '{"smiles":"CCO"}' >"$SMILES_JSON" 2>/dev/null; then
+  echo "Smoke test failed: packaged backend did not answer /api/smiles-mz" >&2
+  echo "Backend log:" >&2
+  cat "$BACKEND_LOG" >&2 || true
+  exit 1
+fi
+
+if ! python3 - "$SMILES_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+formula = str(payload.get("formula", "")).strip()
+exact_mass = float(payload.get("exact_mass", 0.0))
+average_mass = float(payload.get("average_mass", 0.0))
+
+if not formula or exact_mass <= 0 or average_mass <= 0:
+    raise SystemExit(1)
+PY
+then
+  echo "Smoke test failed: /api/smiles-mz returned an invalid payload" >&2
+  cat "$SMILES_JSON" >&2 || true
+  echo "Backend log:" >&2
+  cat "$BACKEND_LOG" >&2 || true
+  exit 1
+fi
+
 echo "Health response:"
 cat "$HEALTH_JSON"
+echo
+echo "SMILES response:"
+cat "$SMILES_JSON"

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.30">
+  <link rel="stylesheet" href="css/style.css?v=0.2.31">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -188,6 +188,7 @@
       <button class="tab-btn" data-tab="tab-progression">Time Progression</button>
       <button class="tab-btn" data-tab="tab-uptake-assay-cc">Uptake Assay CC</button>
       <button class="tab-btn" data-tab="tab-time-change-ms">Time Change MS</button>
+      <button class="tab-btn" data-tab="tab-sequence-mod">Protein Mod Mass</button>
       <button class="tab-btn" data-tab="tab-masscalc">Mass Calculator</button>
       <button class="tab-btn" data-tab="tab-report">Report Export</button>
       <button class="tab-btn" data-tab="tab-run-router">Transfer Router</button>
@@ -444,6 +445,7 @@
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="png">Download PNG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="svg">Download SVG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf">Download PDF</button>
+                <button class="btn btn-sm btn-export-deconv-masses deconv-expert-only hidden" data-format="pdf-dense">Download Dense PDF</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-wide">Download Wide PDF</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-side-by-side">Download Side-by-Side PDF</button>
               </div>
@@ -506,6 +508,124 @@
         <div id="timechange-ms-plot" class="plot-container"></div>
         <div id="timechange-ms-offset-plot" class="plot-container"></div>
         <div id="timechange-ms-table-container"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Protein Modification Mass -->
+    <div id="tab-sequence-mod" class="tab-panel hidden">
+      <div class="tab-toolbar">
+        <button id="btn-seqmod-load-default" class="btn btn-primary">Load Default GFP</button>
+        <span class="toolbar-note">Click a residue in the viewer to select the edited site. The main deconvolution target is the average intact mass rounded to 2 decimals.</span>
+      </div>
+      <div class="sequence-mod-layout">
+        <div class="sequence-mod-main">
+          <div class="molecule-tools">
+            <div class="molecule-tools-row">
+              <label class="sequence-mod-sequence-label">Protein Sequence
+                <textarea id="seqmod-sequence-input" rows="7" spellcheck="false" placeholder="Paste a protein sequence. Use * for stop codons or placeholder sites."></textarea>
+              </label>
+            </div>
+            <div class="molecule-tools-row">
+              <span id="seqmod-sequence-status" class="toolbar-note">Loaded with the default GFP sequence. The internal stop-codon example is preselected.</span>
+            </div>
+          </div>
+
+          <div class="plot-container sequence-mod-sequence-card">
+            <div class="sequence-mod-sequence-header">
+              <div id="seqmod-selected-site" class="sequence-mod-site-chip">Selected site: none</div>
+              <div class="toolbar-note">Positions are marked every 5 residues and each residue is clickable.</div>
+            </div>
+            <div id="seqmod-sequence-viewer" class="sequence-mod-sequence-viewer">
+              <p class="placeholder-msg">Load a sequence to start.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="sequence-mod-side">
+          <div class="molecule-tools">
+            <div class="sequence-mod-mode-switch">
+              <div class="sequence-mod-mode-title">Replacement Input</div>
+              <div class="sequence-mod-mode-grid">
+                <label class="sequence-mod-mode-card is-active" data-mode="standard">
+                  <input type="radio" name="seqmod-replacement-mode" value="standard" checked>
+                  <span class="sequence-mod-mode-card-title">Standard Amino Acid</span>
+                  <span class="sequence-mod-mode-card-note">Use the dropdown for canonical one-letter residue replacements.</span>
+                </label>
+                <label class="sequence-mod-mode-card" data-mode="custom">
+                  <input type="radio" name="seqmod-replacement-mode" value="custom">
+                  <span class="sequence-mod-mode-card-title">Custom Residue</span>
+                  <span class="sequence-mod-mode-card-note">Paste SMILES, draw a residue, or enter a manual residue mass for a noncanonical replacement.</span>
+                </label>
+              </div>
+            </div>
+            <div id="seqmod-standard-panel" class="molecule-tools-row">
+              <label class="sequence-mod-inline-label">Standard Replacement Residue
+                <select id="seqmod-replacement-residue">
+                  <option value="">No change</option>
+                  <option value="A">A (Ala)</option>
+                  <option value="R">R (Arg)</option>
+                  <option value="N">N (Asn)</option>
+                  <option value="D">D (Asp)</option>
+                  <option value="C">C (Cys)</option>
+                  <option value="E">E (Glu)</option>
+                  <option value="Q">Q (Gln)</option>
+                  <option value="G">G (Gly)</option>
+                  <option value="H">H (His)</option>
+                  <option value="I">I (Ile)</option>
+                  <option value="L">L (Leu)</option>
+                  <option value="K">K (Lys)</option>
+                  <option value="M">M (Met)</option>
+                  <option value="F">F (Phe)</option>
+                  <option value="P">P (Pro)</option>
+                  <option value="S">S (Ser)</option>
+                  <option value="T">T (Thr)</option>
+                  <option value="W">W (Trp)</option>
+                  <option value="Y">Y (Tyr)</option>
+                  <option value="V">V (Val)</option>
+                  <option value="*">* (Stop)</option>
+                </select>
+              </label>
+              <span class="toolbar-note">Choose this mode when you want to replace the selected site with a usual amino acid from the dropdown.</span>
+            </div>
+            <div id="seqmod-custom-panel" class="hidden">
+              <div class="molecule-tools-row">
+                <label class="sequence-mod-inline-label">Custom Residue Label
+                <input type="text" id="seqmod-mod-label" value="Custom residue" placeholder="e.g. BocK, AzF, custom ncAA">
+                </label>
+                <label class="sequence-mod-inline-label">Custom Residue Mass Input (Da)
+                <input type="number" id="seqmod-mod-delta" value="0" step="0.00001">
+                </label>
+              </div>
+              <div class="molecule-tools-row">
+                <label class="sequence-mod-smiles-label">SMILES For Custom Replacement Residue
+                  <input type="text" id="seqmod-smiles-input" spellcheck="false" placeholder="Paste the custom residue or precursor you want to replace the selected site with">
+                </label>
+                <button id="btn-seqmod-use-smiles" class="btn btn-sm btn-primary">Use SMILES Residue</button>
+                <button id="btn-seqmod-toggle-sketcher" class="btn btn-sm">Draw Residue</button>
+                <button id="btn-seqmod-use-drawn" class="btn btn-sm">Use Drawn Residue</button>
+                <button id="btn-seqmod-clear-mod" class="btn btn-sm">Clear Custom Residue</button>
+              </div>
+              <div id="seqmod-smiles-result" class="toolbar-note">Use the drawn or pasted structure as the replacement residue for the selected site. A peptide-style -H2O insertion correction is applied automatically for custom replacement residues.</div>
+              <div id="seqmod-sketcher-wrap" class="hidden">
+                <iframe id="seqmod-sketcher-frame" src="jsme-frame.html" style="width:100%;height:420px;border:none;background:#e0e0e0;"></iframe>
+              </div>
+            </div>
+            <div class="molecule-tools-row">
+              <label class="sequence-mod-inline-label">FP Maturation
+                <select id="seqmod-maturation-mode">
+                  <option value="auto" selected>Auto</option>
+                  <option value="none">None</option>
+                  <option value="gfp-like">GFP-like / CFP / YFP (-20.03 Da)</option>
+                  <option value="red-fp">Red FP-like (-22.05 Da)</option>
+                </select>
+              </label>
+              <span class="toolbar-note">This processing model is applied after the selected residue replacement is defined.</span>
+            </div>
+          </div>
+
+          <div id="seqmod-summary" class="metrics-bar"></div>
+          <div id="seqmod-mass-table-container"></div>
+        </div>
       </div>
     </div>
 
@@ -642,9 +762,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.30"></script>
-  <script src="js/charts.js?v=0.2.30"></script>
-  <script src="js/quotes.js?v=0.2.30"></script>
-  <script src="js/app.js?v=0.2.30"></script>
+  <script src="js/api.js?v=0.2.31"></script>
+  <script src="js/charts.js?v=0.2.31"></script>
+  <script src="js/quotes.js?v=0.2.31"></script>
+  <script src="js/app.js?v=0.2.31"></script>
 </body>
 </html>
