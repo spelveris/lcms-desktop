@@ -73,10 +73,19 @@ const state = {
   batchDeconvAutoRunInFlight: false,
   eicCollapsedSections: {},
   timeChangeMSData: null,
-  sequenceModSelectedIndex: 149,
+  sequenceModSelectedIndices: [149],
+  sequenceModActiveIndex: 149,
   sequenceModReplacementMode: 'standard',
-  sequenceModSmilesResult: null,
+  sequenceModCustomMods: {},
   browseItems: [],
+  fileSearchQuery: '',
+  fileSearchResults: [],
+  fileSearchScopePath: '',
+  fileSearchInFlight: false,
+  fileSearchError: '',
+  fileSearchTruncated: false,
+  fileSearchRequestId: 0,
+  fileSearchDebounceId: null,
   watchInterval: null,
   watchKnownPaths: new Set(),
   runRouterResults: [],
@@ -90,6 +99,9 @@ const state = {
   emptyQuoteIndexes: {},
 };
 
+const FILE_BROWSER_SEARCH_MIN_CHARS = 2;
+const FILE_BROWSER_SEARCH_DEBOUNCE_MS = 250;
+const FILE_BROWSER_SEARCH_LIMIT = 200;
 const DECONV_DISPLAY_TOP_N = 5;
 const NPG_COLOR_PALETTE = [
   '#E64B35',
@@ -1313,6 +1325,8 @@ function renderMzTargets() {
 
 // ===== File Browser =====
 function initFileBrowser() {
+  const searchInput = document.getElementById('file-search-input');
+
   document.getElementById('btn-go').addEventListener('click', () => {
     const path = document.getElementById('path-input').value.trim();
     if (path) browseTo(path, { rememberMountCandidate: true, sourcePath: path });
@@ -1350,6 +1364,26 @@ function initFileBrowser() {
   document.getElementById('sort-select').addEventListener('change', (e) => {
     state.sortMode = e.target.value;
     renderFileList();
+  });
+
+  searchInput.addEventListener('input', (e) => {
+    state.fileSearchQuery = e.target.value.trim();
+    state.fileSearchError = '';
+    state.fileSearchTruncated = false;
+    scheduleFileSearch();
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    state.fileSearchQuery = e.target.value.trim();
+    state.fileSearchError = '';
+    state.fileSearchTruncated = false;
+    scheduleFileSearch({ immediate: true });
+  });
+
+  document.getElementById('file-search-clear').addEventListener('click', () => {
+    resetFileSearchState();
   });
 
   document.getElementById('btn-clear-all').addEventListener('click', () => {
@@ -1400,6 +1434,112 @@ async function loadVolumes() {
   }
 }
 
+function getFileSearchQuery() {
+  return String(state.fileSearchQuery || '').trim();
+}
+
+function isRecursiveFileSearchActive() {
+  return getFileSearchQuery().length >= FILE_BROWSER_SEARCH_MIN_CHARS;
+}
+
+function clearPendingFileSearch() {
+  if (state.fileSearchDebounceId) {
+    clearTimeout(state.fileSearchDebounceId);
+    state.fileSearchDebounceId = null;
+  }
+}
+
+function resetFileSearchState(options = {}) {
+  const render = options.render !== false;
+  const input = document.getElementById('file-search-input');
+  clearPendingFileSearch();
+  state.fileSearchRequestId += 1;
+  state.fileSearchQuery = '';
+  state.fileSearchResults = [];
+  state.fileSearchScopePath = '';
+  state.fileSearchInFlight = false;
+  state.fileSearchError = '';
+  state.fileSearchTruncated = false;
+  if (input) input.value = '';
+  if (render) renderFileList();
+}
+
+function scheduleFileSearch(options = {}) {
+  const immediate = options.immediate === true;
+  const query = getFileSearchQuery();
+
+  clearPendingFileSearch();
+
+  if (!query) {
+    state.fileSearchRequestId += 1;
+    state.fileSearchResults = [];
+    state.fileSearchScopePath = '';
+    state.fileSearchInFlight = false;
+    state.fileSearchError = '';
+    state.fileSearchTruncated = false;
+    renderFileList();
+    return;
+  }
+
+  if (query.length < FILE_BROWSER_SEARCH_MIN_CHARS) {
+    state.fileSearchRequestId += 1;
+    state.fileSearchResults = [];
+    state.fileSearchScopePath = '';
+    state.fileSearchInFlight = false;
+    state.fileSearchError = '';
+    state.fileSearchTruncated = false;
+    renderFileList();
+    return;
+  }
+
+  if (immediate) {
+    runFileSearch();
+    return;
+  }
+
+  state.fileSearchDebounceId = setTimeout(() => {
+    runFileSearch();
+  }, FILE_BROWSER_SEARCH_DEBOUNCE_MS);
+}
+
+async function runFileSearch() {
+  const query = getFileSearchQuery();
+  if (query.length < FILE_BROWSER_SEARCH_MIN_CHARS) {
+    renderFileList();
+    return;
+  }
+
+  clearPendingFileSearch();
+
+  const requestId = state.fileSearchRequestId + 1;
+  state.fileSearchRequestId = requestId;
+  state.fileSearchResults = [];
+  state.fileSearchScopePath = state.currentPath;
+  state.fileSearchInFlight = true;
+  state.fileSearchError = '';
+  state.fileSearchTruncated = false;
+  renderFileList();
+
+  try {
+    const data = await api.searchBrowser(state.currentPath, query, FILE_BROWSER_SEARCH_LIMIT);
+    if (requestId !== state.fileSearchRequestId) return;
+    state.fileSearchResults = Array.isArray(data.items) ? data.items : [];
+    state.fileSearchScopePath = data.path || state.currentPath;
+    state.fileSearchInFlight = false;
+    state.fileSearchError = '';
+    state.fileSearchTruncated = data.truncated === true;
+    renderFileList();
+  } catch (err) {
+    if (requestId !== state.fileSearchRequestId) return;
+    state.fileSearchResults = [];
+    state.fileSearchScopePath = state.currentPath;
+    state.fileSearchInFlight = false;
+    state.fileSearchError = err.message || 'Search failed';
+    state.fileSearchTruncated = false;
+    renderFileList();
+  }
+}
+
 async function browseTo(path, options = {}) {
   const targetPath = normalizeEnteredPath(path);
   const silent = !!options.silent;
@@ -1417,7 +1557,11 @@ async function browseTo(path, options = {}) {
     if (rememberMountCandidate) {
       rememberCustomMountPath(data.path, sourcePath);
     }
-    renderFileList();
+    if (isRecursiveFileSearchActive()) {
+      scheduleFileSearch({ immediate: true });
+    } else {
+      renderFileList();
+    }
     return data;
   } catch (err) {
     if (!silent) toast(`Browse failed: ${err.message}`, 'error');
@@ -1453,29 +1597,122 @@ async function initializeBrowsePath() {
   toast('Browse failed: could not open any default path', 'error');
 }
 
+function describeFileSearchItem(item) {
+  switch (item?.kind) {
+    case 'sample-folder':
+      return 'Sample';
+    case 'rslt-run':
+    case 'olax-run':
+      return 'Run';
+    case 'rslt-container':
+    case 'olax-container':
+      return 'Container';
+    case 'directory':
+      return 'Folder';
+    case 'file':
+      return 'File';
+    default:
+      if (item?.is_d_folder) return 'Sample';
+      if (item?.is_dir) return 'Folder';
+      return 'File';
+  }
+}
+
+function formatFileSearchMeta(item) {
+  const parent = String(item?.parent || '.');
+  return `${describeFileSearchItem(item)} • ${parent}`;
+}
+
+function renderFileSearchStatus() {
+  const el = document.getElementById('file-search-status');
+  if (!el) return;
+
+  const query = getFileSearchQuery();
+  if (!query) {
+    el.textContent = '';
+    el.classList.remove('is-error');
+    el.style.display = 'none';
+    return;
+  }
+
+  let text = '';
+  let isError = false;
+  if (query.length < FILE_BROWSER_SEARCH_MIN_CHARS) {
+    text = `Type at least ${FILE_BROWSER_SEARCH_MIN_CHARS} characters to search recursively under ${state.currentPath}`;
+  } else if (state.fileSearchInFlight) {
+    text = `Searching for "${query}" under ${state.currentPath}...`;
+  } else if (state.fileSearchError) {
+    text = `Search failed: ${state.fileSearchError}`;
+    isError = true;
+  } else {
+    const count = state.fileSearchResults.length;
+    const countLabel = state.fileSearchTruncated ? `Showing first ${count}` : String(count);
+    text = `${countLabel} match${count === 1 ? '' : 'es'} for "${query}" under ${state.fileSearchScopePath || state.currentPath}`;
+  }
+
+  el.textContent = text;
+  el.classList.toggle('is-error', isError);
+  el.style.display = 'block';
+}
+
 function renderFileList() {
   const container = document.getElementById('file-list');
-  let items = [...state.browseItems].filter((item) => {
-    if (!item || item.is_dir || item.is_d_folder) return true;
-    return !String(item.name || '').toLowerCase().endsWith('.pdf');
-  });
+  const searchMode = isRecursiveFileSearchActive();
+  renderFileSearchStatus();
+
+  let items = searchMode
+    ? [...state.fileSearchResults]
+    : [...state.browseItems].filter((item) => {
+        if (!item || item.is_dir || item.is_d_folder) return true;
+        return !String(item.name || '').toLowerCase().endsWith('.pdf');
+      });
 
   // Sort
   items = sortItems(items, state.sortMode);
 
   container.innerHTML = '';
 
-  if (items.length === 0) {
-    container.innerHTML = '<p class="muted" style="padding:12px;">Empty directory</p>';
+  if (searchMode && state.fileSearchError) {
+    container.innerHTML = `<p class="muted" style="padding:12px;">Search failed: ${escapeHtml(state.fileSearchError)}</p>`;
     return;
   }
 
-  // Separate: directories first, then .D folders
-  const dirs = items.filter(i => i.is_dir && !i.is_d_folder);
-  const dFolders = items.filter(i => i.is_d_folder);
-  const others = items.filter(i => !i.is_dir && !i.is_d_folder);
+  if (items.length === 0) {
+    if (searchMode && state.fileSearchInFlight) {
+      container.innerHTML = '<p class="muted" style="padding:12px;">Searching...</p>';
+    } else if (searchMode) {
+      container.innerHTML = '<p class="muted" style="padding:12px;">No matching items under this path</p>';
+    } else {
+      container.innerHTML = '<p class="muted" style="padding:12px;">Empty directory</p>';
+    }
+    return;
+  }
 
-  [...dirs, ...dFolders, ...others].forEach(item => {
+  const renderLabelHtml = (item) => {
+    const titlePath = escapeAttr(String(item.path || ''));
+    const name = escapeHtml(String(item.name || ''));
+    if (!searchMode) {
+      return `<span class="file-name" title="${titlePath}">${name}</span>`;
+    }
+    const metaTitle = escapeAttr(String(item.parent_path || item.path || ''));
+    const meta = escapeHtml(formatFileSearchMeta(item));
+    return `
+      <div class="file-item-text">
+        <span class="file-name" title="${titlePath}">${name}</span>
+        <span class="file-item-meta" title="${metaTitle}">${meta}</span>
+      </div>
+    `;
+  };
+
+  const orderedItems = searchMode
+    ? items
+    : [
+        ...items.filter((item) => item.is_dir && !item.is_d_folder),
+        ...items.filter((item) => item.is_d_folder),
+        ...items.filter((item) => !item.is_dir && !item.is_d_folder),
+      ];
+
+  orderedItems.forEach(item => {
     const el = document.createElement('div');
     el.className = 'file-item';
 
@@ -1488,7 +1725,7 @@ function renderFileList() {
       el.innerHTML = `
         <input type="checkbox" class="d-folder-check" data-path="${escapeAttr(item.path)}" data-name="${escapeAttr(item.name)}" ${isSelected ? 'checked' : ''}>
         <span class="file-icon d-folder">&#9670;</span>
-        <span class="file-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</span>
+        ${renderLabelHtml(item)}
         ${isWashPosition ? `<span class="file-item-badge" title="Autosampler location ${escapeAttr(String(item.sample_location || '91'))}">Wash ${escapeHtml(String(item.sample_location || '91'))}</span>` : ''}
       `;
       const checkbox = el.querySelector('.d-folder-check');
@@ -1508,16 +1745,27 @@ function renderFileList() {
     } else if (item.is_dir) {
       el.innerHTML = `
         <span class="file-icon folder">&#128193;</span>
-        <span class="file-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</span>
+        ${renderLabelHtml(item)}
       `;
-      el.addEventListener('click', () => browseTo(item.path));
+      el.addEventListener('click', () => {
+        if (searchMode) resetFileSearchState({ render: false });
+        browseTo(item.path);
+      });
       el.style.cursor = 'pointer';
     } else {
       el.innerHTML = `
         <span class="file-icon">&#128196;</span>
-        <span class="file-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</span>
+        ${renderLabelHtml(item)}
       `;
-      el.style.opacity = '0.5';
+      if (searchMode) {
+        el.addEventListener('click', () => {
+          resetFileSearchState({ render: false });
+          browseTo(item.parent_path || state.currentPath);
+        });
+        el.style.cursor = 'pointer';
+      } else {
+        el.style.opacity = '0.5';
+      }
     }
 
     container.appendChild(el);
@@ -2437,7 +2685,7 @@ async function toggleSequenceModSketcher() {
   const opening = wrap.classList.contains('hidden');
   if (!opening) {
     wrap.classList.add('hidden');
-    btn.textContent = 'Draw Modification';
+    btn.textContent = 'Draw Residue';
     return;
   }
 
@@ -2450,7 +2698,7 @@ async function toggleSequenceModSketcher() {
       await _initSeqmodJsmeInFrame();
     } catch (err) {
       wrap.classList.add('hidden');
-      btn.textContent = 'Draw Modification';
+      btn.textContent = 'Draw Residue';
       toast(`Molecule drawer failed: ${err.message}`, 'error');
     } finally {
       hideLoading();
@@ -2469,9 +2717,16 @@ async function useDrawnStructureForSequenceMod() {
       toast('Draw a modification first', 'warning');
       return;
     }
-    const smilesInput = document.getElementById('seqmod-smiles-input');
+    const context = getSequenceModContext();
+    const targetIndex = context.activeIndex;
+    if (!Number.isInteger(targetIndex) || targetIndex < 0) {
+      toast('Select a target residue first', 'warning');
+      return;
+    }
+    const smilesInput = document.querySelector(`.seqmod-custom-smiles-input[data-index="${targetIndex}"]`);
     if (smilesInput) smilesInput.value = smiles;
-    await applySequenceModSmilesMass(smiles);
+    patchSequenceModCustomEntry(targetIndex, { smiles, smilesResult: null });
+    await applySequenceModSmilesMass(smiles, targetIndex);
   } catch (err) {
     toast(`Could not use drawn modification: ${err.message}`, 'error');
   }
@@ -7943,6 +8198,7 @@ const WATER_MONO_MASS = 18.010564684;
 const DEFAULT_SEQUENCE_MOD_SEQUENCE =
   'MPSKGEELFTGVVPILVELDGDVNGHKFSVRGEGEGDATNGKLTLKFICTTGKLPVPWPTLVTTLTYGVQCFSRYPDHMKRHDFFKSAMPEGYVQERTISFKDDGTYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNFNSH*VYITADKQKNGIKANFKIRHNVEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSVLSKDPNEKRDHMVLLEFVTAAGITHGMDELYKGSHHHHHH*';
 const DEFAULT_SEQUENCE_MOD_SELECTED_INDEX = 149;
+const DEFAULT_SEQUENCE_MOD_SELECTED_INDICES = [DEFAULT_SEQUENCE_MOD_SELECTED_INDEX];
 const SEQUENCE_MOD_LINE_LENGTH = 50;
 const SEQUENCE_MOD_GROUP_SIZE = 5;
 const RESIDUE_LABELS = {
@@ -8029,7 +8285,7 @@ const DEFAULT_GFP_CHROMOPHORE_START = (() => {
 })();
 const GFP_REFERENCE_SIMILARITY_THRESHOLD = 0.8;
 const GFP_CHROMOPHORE_LOCAL_SIMILARITY_THRESHOLD = 0.55;
-const SEQUENCE_MOD_SMILES_HELP_TEXT = 'Use the drawn or pasted structure as the replacement residue for the selected site. A peptide-style residue insertion correction of -H2O is applied automatically for custom replacement residues.';
+const SEQUENCE_MOD_SMILES_HELP_TEXT = 'Use the drawn or pasted structure as the replacement residue for the active selected site. A peptide-style residue insertion correction of -H2O is applied automatically for custom replacement residues.';
 
 // ===== Protein Modification Mass Tab =====
 function getSequenceModReplacementMode() {
@@ -8040,6 +8296,172 @@ function getSequenceModReplacementMode() {
   return state.sequenceModReplacementMode === 'custom' ? 'custom' : 'standard';
 }
 
+function createSequenceModCustomEntry() {
+  return {
+    label: 'Custom residue',
+    mass: '0',
+    smiles: '',
+    smilesResult: null,
+  };
+}
+
+function getSequenceModCustomEntry(index) {
+  const existing = state.sequenceModCustomMods?.[String(index)];
+  return existing
+    ? { ...createSequenceModCustomEntry(), ...existing }
+    : createSequenceModCustomEntry();
+}
+
+function setSequenceModCustomEntry(index, entry) {
+  const key = String(index);
+  const normalized = {
+    ...createSequenceModCustomEntry(),
+    ...(entry || {}),
+  };
+  state.sequenceModCustomMods = {
+    ...(state.sequenceModCustomMods || {}),
+    [key]: normalized,
+  };
+  return normalized;
+}
+
+function patchSequenceModCustomEntry(index, patch) {
+  return setSequenceModCustomEntry(index, {
+    ...getSequenceModCustomEntry(index),
+    ...(patch || {}),
+  });
+}
+
+function ensureSequenceModCustomEntry(index) {
+  return setSequenceModCustomEntry(index, getSequenceModCustomEntry(index));
+}
+
+function normalizeSequenceModSelectedIndices(sequenceLength) {
+  const maxLength = Math.max(0, Number(sequenceLength) || 0);
+  const raw = Array.isArray(state.sequenceModSelectedIndices) ? state.sequenceModSelectedIndices : [];
+  const seen = new Set();
+  const normalized = raw
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isInteger(value) && value >= 0 && value < maxLength && !seen.has(value) && seen.add(value))
+    .sort((a, b) => a - b);
+  state.sequenceModSelectedIndices = normalized;
+
+  let active = Number.isInteger(state.sequenceModActiveIndex) ? state.sequenceModActiveIndex : -1;
+  if (!normalized.includes(active)) {
+    active = normalized.length > 0 ? normalized[normalized.length - 1] : -1;
+  }
+  state.sequenceModActiveIndex = active;
+
+  const nextCustomMods = {};
+  Object.entries(state.sequenceModCustomMods || {}).forEach(([key, value]) => {
+    const index = Number.parseInt(key, 10);
+    if (!Number.isInteger(index) || index < 0 || index >= maxLength) return;
+    nextCustomMods[String(index)] = {
+      ...createSequenceModCustomEntry(),
+      ...(value || {}),
+    };
+  });
+  state.sequenceModCustomMods = nextCustomMods;
+
+  return normalized;
+}
+
+function summarizeSequenceModTokens(tokens, maxVisible = 4) {
+  const values = (Array.isArray(tokens) ? tokens : []).filter(Boolean);
+  if (values.length === 0) return 'none';
+  if (values.length <= maxVisible) return values.join(', ');
+  return `${values.slice(0, maxVisible).join(', ')} +${values.length - maxVisible} more`;
+}
+
+function formatSequenceModSiteBaseToken(site) {
+  return site ? `${site.originalResidue}${site.position}` : 'none';
+}
+
+function formatSequenceModSiteChangeToken(site) {
+  if (!site) return 'None';
+  if (site.hasCustomReplacement) {
+    return `${site.originalResidue}${site.position}->${site.effectiveReplacementLabel}`;
+  }
+  if (site.replacementMode === 'standard' && site.canonicalReplacementResidue && site.canonicalReplacementResidue !== site.originalResidue) {
+    return `${site.originalResidue}${site.position}${site.canonicalReplacementResidue}`;
+  }
+  return formatSequenceModSiteBaseToken(site);
+}
+
+function buildSequenceModSelectionChipText(context) {
+  if (!context?.sequence || context.selectedSiteCount === 0) {
+    return 'Selected sites: none';
+  }
+  const activeLabel = context.activeSite ? formatSequenceModSiteBaseToken(context.activeSite) : 'none';
+  return `Selected sites: ${context.selectedSiteLabel} | Active: ${activeLabel}`;
+}
+
+function getSequenceModGlobalSmilesStatus(context) {
+  if (!context?.sequence || context.selectedSiteCount === 0) {
+    return {
+      message: 'Select one or more residues in the viewer to create custom modification inputs.',
+      tone: 'muted',
+    };
+  }
+  if (context.activeSite?.smilesResult) {
+    return buildSequenceModCustomEntryStatus(context.activeSite);
+  }
+  return {
+    message: `Active site ${formatSequenceModSiteBaseToken(context.activeSite)}. ${SEQUENCE_MOD_SMILES_HELP_TEXT}`,
+    tone: 'muted',
+  };
+}
+
+function buildSequenceModCustomEntryStatus(site) {
+  if (!site) {
+    return {
+      message: SEQUENCE_MOD_SMILES_HELP_TEXT,
+      tone: 'muted',
+    };
+  }
+  if (site.smilesResult) {
+    const chargeNote = site.smilesResult.netCharge !== 0
+      ? ` | normalized from formal charge ${site.smilesResult.netCharge > 0 ? `+${site.smilesResult.netCharge}` : String(site.smilesResult.netCharge)}`
+      : '';
+    const insertionNote = site.residueInsertionMessage ? ` | ${site.residueInsertionMessage}` : '';
+    return {
+      message: `${site.smilesResult.formula || 'Formula n/a'} | Average ${site.rawCustomResidueAverageMass.toFixed(5)} Da | Monoisotopic ${site.rawCustomResidueMonoMass.toFixed(5)} Da${chargeNote}${insertionNote}`,
+      tone: 'success',
+    };
+  }
+  if (Math.abs(site.rawCustomResidueAverageMass) > 0.0000001) {
+    return {
+      message: `${site.customResidueLabel} manual mass loaded: ${site.rawCustomResidueAverageMass.toFixed(5)} Da average. The monoisotopic value is approximated from the entered residue mass.`,
+      tone: 'muted',
+    };
+  }
+  return {
+    message: `Site ${formatSequenceModSiteBaseToken(site)} is selected. Paste SMILES, draw a residue, or enter a residue mass to change this site.`,
+    tone: 'muted',
+  };
+}
+
+function applySequenceModToneToElement(el, tone) {
+  if (!el) return;
+  if (tone === 'error') {
+    el.style.color = 'var(--danger)';
+  } else if (tone === 'success') {
+    el.style.color = 'var(--success)';
+  } else {
+    el.style.color = 'var(--text-muted)';
+  }
+}
+
+function syncSequenceModCustomEntryStatusElement(index, context = null) {
+  const el = document.querySelector(`.sequence-mod-custom-entry-status[data-index="${index}"]`);
+  if (!el) return;
+  const resolvedContext = context || getSequenceModContext();
+  const site = (resolvedContext.siteEdits || []).find((item) => item.index === index);
+  const status = buildSequenceModCustomEntryStatus(site);
+  el.textContent = status.message;
+  applySequenceModToneToElement(el, status.tone);
+}
+
 function syncSequenceModReplacementModeUI() {
   const mode = getSequenceModReplacementMode();
   state.sequenceModReplacementMode = mode;
@@ -8047,21 +8469,15 @@ function syncSequenceModReplacementModeUI() {
   const standardPanel = document.getElementById('seqmod-standard-panel');
   const customPanel = document.getElementById('seqmod-custom-panel');
   const replacementSelect = document.getElementById('seqmod-replacement-residue');
-  const modLabelInput = document.getElementById('seqmod-mod-label');
-  const modDeltaInput = document.getElementById('seqmod-mod-delta');
-  const smilesInput = document.getElementById('seqmod-smiles-input');
-  const smilesBtn = document.getElementById('btn-seqmod-use-smiles');
-  const clearBtn = document.getElementById('btn-seqmod-clear-mod');
-  const sketcherToggleBtn = document.getElementById('btn-seqmod-toggle-sketcher');
-  const useDrawnBtn = document.getElementById('btn-seqmod-use-drawn');
 
   if (standardPanel) standardPanel.classList.toggle('hidden', mode !== 'standard');
-  if (customPanel) customPanel.classList.toggle('hidden', mode !== 'custom');
+  if (customPanel) {
+    customPanel.classList.toggle('hidden', mode !== 'custom');
+    customPanel.querySelectorAll('input, button, textarea, select').forEach((el) => {
+      el.disabled = mode !== 'custom';
+    });
+  }
   if (replacementSelect) replacementSelect.disabled = mode !== 'standard';
-  [modLabelInput, modDeltaInput, smilesInput, smilesBtn, clearBtn, sketcherToggleBtn, useDrawnBtn].forEach((el) => {
-    if (!el) return;
-    el.disabled = mode !== 'custom';
-  });
 
   document.querySelectorAll('.sequence-mod-mode-card').forEach((card) => {
     const cardMode = card.dataset.mode === 'custom' ? 'custom' : 'standard';
@@ -8079,20 +8495,89 @@ function setSequenceModReplacementMode(mode, { render = true } = {}) {
   if (render) renderSequenceModTool();
 }
 
+function focusSequenceModSite(index, { addIfMissing = true, renderCustomEditors = true } = {}) {
+  if (!Number.isInteger(index) || index < 0) return;
+  const current = Array.isArray(state.sequenceModSelectedIndices) ? [...state.sequenceModSelectedIndices] : [];
+  if (!current.includes(index) && addIfMissing) {
+    current.push(index);
+    current.sort((a, b) => a - b);
+    state.sequenceModSelectedIndices = current;
+    ensureSequenceModCustomEntry(index);
+  }
+  state.sequenceModActiveIndex = index;
+  renderSequenceModTool({ renderCustomEditors });
+}
+
+function removeSequenceModSelectedSite(index, { render = true } = {}) {
+  if (!Number.isInteger(index)) return;
+  const current = Array.isArray(state.sequenceModSelectedIndices) ? state.sequenceModSelectedIndices : [];
+  state.sequenceModSelectedIndices = current.filter((value) => value !== index);
+  if (state.sequenceModActiveIndex === index) {
+    const next = state.sequenceModSelectedIndices;
+    state.sequenceModActiveIndex = next.length > 0 ? next[next.length - 1] : -1;
+  }
+  if (render) renderSequenceModTool();
+}
+
+function renderSequenceModCustomEditors(context) {
+  const container = document.getElementById('seqmod-custom-list');
+  if (!container) return;
+
+  if (!context?.sequence || context.selectedSiteCount === 0) {
+    container.innerHTML = '<p class="placeholder-msg">Select one or more residues in the viewer to create custom modification inputs.</p>';
+    const status = getSequenceModGlobalSmilesStatus(context);
+    setSequenceModSmilesResult(status.message, status.tone);
+    return;
+  }
+
+  container.innerHTML = context.siteEdits.map((site) => {
+    const status = buildSequenceModCustomEntryStatus(site);
+    const isActive = site.index === context.activeIndex;
+    return `
+      <div class="sequence-mod-custom-entry${isActive ? ' is-active' : ''}" data-index="${site.index}">
+        <div class="sequence-mod-custom-entry-header">
+          <div>
+            <div class="sequence-mod-custom-entry-title">Site ${escapeHtml(formatSequenceModSiteBaseToken(site))}</div>
+            <div class="sequence-mod-custom-entry-subtitle">${escapeHtml(describeResidue(site.originalResidue))} at position ${site.position}${isActive ? ' | active editor' : ''}</div>
+          </div>
+          <div class="sequence-mod-custom-entry-actions">
+            <button type="button" class="btn btn-sm btn-seqmod-clear-site" data-index="${site.index}">Clear</button>
+            <button type="button" class="btn btn-sm btn-seqmod-remove-site" data-index="${site.index}">Remove Site</button>
+          </div>
+        </div>
+        <div class="molecule-tools-row">
+          <label class="sequence-mod-inline-label">Custom Residue Label
+            <input type="text" class="seqmod-custom-label-input" data-index="${site.index}" value="${escapeAttr(site.customResidueLabel)}" placeholder="e.g. BocK, AzF, custom ncAA">
+          </label>
+          <label class="sequence-mod-inline-label">Custom Residue Mass Input (Da)
+            <input type="number" class="seqmod-custom-mass-input" data-index="${site.index}" value="${escapeAttr(site.customMassInput)}" step="0.00001">
+          </label>
+        </div>
+        <div class="molecule-tools-row">
+          <label class="sequence-mod-smiles-label">SMILES For Custom Replacement Residue
+            <input type="text" class="seqmod-custom-smiles-input" data-index="${site.index}" spellcheck="false" value="${escapeAttr(site.smilesInput)}" placeholder="Paste the custom residue or precursor you want to insert at this site">
+          </label>
+          <button type="button" class="btn btn-sm btn-primary btn-seqmod-use-site-smiles" data-index="${site.index}">Use SMILES</button>
+        </div>
+        <div class="sequence-mod-custom-entry-status" data-index="${site.index}">${escapeHtml(status.message)}</div>
+      </div>
+    `;
+  }).join('');
+
+  const status = getSequenceModGlobalSmilesStatus(context);
+  setSequenceModSmilesResult(status.message, status.tone);
+}
+
 function initSequenceModTool() {
   const sequenceInput = document.getElementById('seqmod-sequence-input');
   const loadDefaultBtn = document.getElementById('btn-seqmod-load-default');
   const replacementModeInputs = Array.from(document.querySelectorAll('input[name="seqmod-replacement-mode"]'));
   const replacementSelect = document.getElementById('seqmod-replacement-residue');
-  const modLabelInput = document.getElementById('seqmod-mod-label');
-  const modDeltaInput = document.getElementById('seqmod-mod-delta');
   const maturationSelect = document.getElementById('seqmod-maturation-mode');
-  const smilesInput = document.getElementById('seqmod-smiles-input');
-  const smilesBtn = document.getElementById('btn-seqmod-use-smiles');
-  const clearBtn = document.getElementById('btn-seqmod-clear-mod');
   const sketcherToggleBtn = document.getElementById('btn-seqmod-toggle-sketcher');
   const useDrawnBtn = document.getElementById('btn-seqmod-use-drawn');
   const viewer = document.getElementById('seqmod-sequence-viewer');
+  const customList = document.getElementById('seqmod-custom-list');
 
   if (sequenceInput && !sequenceInput.value.trim()) {
     sequenceInput.value = DEFAULT_SEQUENCE_MOD_SEQUENCE;
@@ -8100,7 +8585,8 @@ function initSequenceModTool() {
   if (replacementSelect && !replacementSelect.value) {
     replacementSelect.value = 'K';
   }
-  state.sequenceModSelectedIndex = DEFAULT_SEQUENCE_MOD_SELECTED_INDEX;
+  state.sequenceModSelectedIndices = DEFAULT_SEQUENCE_MOD_SELECTED_INDICES.slice();
+  state.sequenceModActiveIndex = DEFAULT_SEQUENCE_MOD_SELECTED_INDEX;
   if (replacementModeInputs.length > 0) {
     const desiredMode = state.sequenceModReplacementMode === 'custom' ? 'custom' : 'standard';
     replacementModeInputs.forEach((input) => {
@@ -8124,58 +8610,114 @@ function initSequenceModTool() {
   }
   [replacementSelect, maturationSelect].forEach((el) => {
     if (!el) return;
-    el.addEventListener('input', () => renderSequenceModTool());
-    el.addEventListener('change', () => renderSequenceModTool());
+    el.addEventListener('input', () => renderSequenceModTool({ renderCustomEditors: false }));
+    el.addEventListener('change', () => renderSequenceModTool({ renderCustomEditors: false }));
   });
-  [modLabelInput, modDeltaInput].forEach((el) => {
-    if (!el) return;
-    el.addEventListener('input', () => {
-      if (getSequenceModReplacementMode() !== 'custom') {
-        setSequenceModReplacementMode('custom', { render: false });
-      }
-      renderSequenceModTool();
-    });
-    el.addEventListener('change', () => {
-      if (getSequenceModReplacementMode() !== 'custom') {
-        setSequenceModReplacementMode('custom', { render: false });
-      }
-      renderSequenceModTool();
-    });
-  });
-  if (smilesInput) {
-    smilesInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        if (getSequenceModReplacementMode() !== 'custom') {
-          setSequenceModReplacementMode('custom', { render: false });
-        }
-        applySequenceModSmilesMass();
-      }
-    });
-    smilesInput.addEventListener('input', () => {
-      if (String(smilesInput.value || '').trim() && getSequenceModReplacementMode() !== 'custom') {
-        setSequenceModReplacementMode('custom', { render: false });
-      }
-      const current = String(smilesInput.value || '').trim();
-      if (state.sequenceModSmilesResult && current !== state.sequenceModSmilesResult.smiles) {
-        state.sequenceModSmilesResult = null;
-        setSequenceModSmilesResult(SEQUENCE_MOD_SMILES_HELP_TEXT, 'muted');
-        renderSequenceModTool();
-      }
-    });
-  }
-  if (smilesBtn) smilesBtn.addEventListener('click', () => applySequenceModSmilesMass());
-  if (clearBtn) clearBtn.addEventListener('click', () => clearSequenceModExternalModification());
   if (sketcherToggleBtn) sketcherToggleBtn.addEventListener('click', () => toggleSequenceModSketcher());
   if (useDrawnBtn) useDrawnBtn.addEventListener('click', () => useDrawnStructureForSequenceMod());
+
   if (viewer) {
     viewer.addEventListener('click', (event) => {
       const btn = event.target.closest('.sequence-mod-residue');
       if (!btn) return;
-      const idx = parseInt(btn.dataset.index, 10);
+      const idx = Number.parseInt(btn.dataset.index, 10);
       if (!Number.isFinite(idx)) return;
-      state.sequenceModSelectedIndex = idx;
-      renderSequenceModTool();
+      if ((event.metaKey || event.ctrlKey || event.altKey) && state.sequenceModSelectedIndices.includes(idx)) {
+        removeSequenceModSelectedSite(idx);
+        return;
+      }
+      focusSequenceModSite(idx, { addIfMissing: true, renderCustomEditors: true });
+    });
+  }
+
+  if (customList) {
+    customList.addEventListener('focusin', (event) => {
+      const entry = event.target.closest('.sequence-mod-custom-entry');
+      if (!entry) return;
+      const idx = Number.parseInt(entry.dataset.index, 10);
+      if (!Number.isFinite(idx) || idx === state.sequenceModActiveIndex) return;
+      state.sequenceModActiveIndex = idx;
+      renderSequenceModTool({ renderCustomEditors: false });
+    });
+
+    customList.addEventListener('click', (event) => {
+      const actionEl = event.target.closest('[data-index]');
+      const entry = event.target.closest('.sequence-mod-custom-entry');
+      const rawIndex = actionEl?.dataset.index || entry?.dataset.index;
+      const idx = Number.parseInt(rawIndex, 10);
+      if (!Number.isFinite(idx)) return;
+
+      state.sequenceModActiveIndex = idx;
+
+      if (event.target.closest('.btn-seqmod-remove-site')) {
+        removeSequenceModSelectedSite(idx);
+        return;
+      }
+      if (event.target.closest('.btn-seqmod-clear-site')) {
+        clearSequenceModExternalModification(idx);
+        return;
+      }
+      if (event.target.closest('.btn-seqmod-use-site-smiles')) {
+        applySequenceModSmilesMass('', idx);
+        return;
+      }
+      if (entry && !event.target.closest('input, button, textarea, select')) {
+        renderSequenceModTool({ renderCustomEditors: true });
+      }
+    });
+
+    customList.addEventListener('keydown', (event) => {
+      const smilesInput = event.target.closest('.seqmod-custom-smiles-input');
+      if (!smilesInput || event.key !== 'Enter') return;
+      event.preventDefault();
+      const idx = Number.parseInt(smilesInput.dataset.index, 10);
+      if (!Number.isFinite(idx)) return;
+      applySequenceModSmilesMass('', idx);
+    });
+
+    customList.addEventListener('input', (event) => {
+      const target = event.target;
+      const index = Number.parseInt(target?.dataset?.index, 10);
+      if (!Number.isFinite(index)) return;
+      state.sequenceModActiveIndex = index;
+
+      if (target.matches('.seqmod-custom-label-input')) {
+        patchSequenceModCustomEntry(index, { label: target.value });
+        renderSequenceModTool({ renderCustomEditors: false });
+        syncSequenceModCustomEntryStatusElement(index);
+        return;
+      }
+
+      if (target.matches('.seqmod-custom-mass-input')) {
+        const current = getSequenceModCustomEntry(index);
+        const nextMass = String(target.value ?? '');
+        const parsedMass = Number.parseFloat(nextMass || '0');
+        const smilesResult = current.smilesResult;
+        const smilesMatchesMass = Boolean(
+          smilesResult
+          && Number.isFinite(smilesResult.normalizedAverageMass)
+          && Number.isFinite(parsedMass)
+          && Math.abs(parsedMass - smilesResult.normalizedAverageMass) < 0.0001
+        );
+        patchSequenceModCustomEntry(index, {
+          mass: nextMass,
+          smilesResult: smilesMatchesMass ? smilesResult : null,
+        });
+        renderSequenceModTool({ renderCustomEditors: false });
+        syncSequenceModCustomEntryStatusElement(index);
+        return;
+      }
+
+      if (target.matches('.seqmod-custom-smiles-input')) {
+        const current = getSequenceModCustomEntry(index);
+        const nextSmiles = String(target.value || '').trim();
+        patchSequenceModCustomEntry(index, {
+          smiles: nextSmiles,
+          smilesResult: current.smilesResult && nextSmiles === current.smilesResult.smiles ? current.smilesResult : null,
+        });
+        renderSequenceModTool({ renderCustomEditors: false });
+        syncSequenceModCustomEntryStatusElement(index);
+      }
     });
   }
 
@@ -8185,20 +8727,15 @@ function initSequenceModTool() {
 function loadDefaultSequenceModSequence() {
   const sequenceInput = document.getElementById('seqmod-sequence-input');
   const replacementSelect = document.getElementById('seqmod-replacement-residue');
-  const modLabelInput = document.getElementById('seqmod-mod-label');
-  const modDeltaInput = document.getElementById('seqmod-mod-delta');
   const maturationSelect = document.getElementById('seqmod-maturation-mode');
-  const smilesInput = document.getElementById('seqmod-smiles-input');
 
   if (sequenceInput) sequenceInput.value = DEFAULT_SEQUENCE_MOD_SEQUENCE;
   if (replacementSelect) replacementSelect.value = 'K';
-  if (modLabelInput) modLabelInput.value = 'Custom residue';
-  if (modDeltaInput) modDeltaInput.value = '0';
   if (maturationSelect) maturationSelect.value = 'auto';
-  if (smilesInput) smilesInput.value = '';
-  state.sequenceModSelectedIndex = DEFAULT_SEQUENCE_MOD_SELECTED_INDEX;
+  state.sequenceModSelectedIndices = DEFAULT_SEQUENCE_MOD_SELECTED_INDICES.slice();
+  state.sequenceModActiveIndex = DEFAULT_SEQUENCE_MOD_SELECTED_INDEX;
   state.sequenceModReplacementMode = 'standard';
-  state.sequenceModSmilesResult = null;
+  state.sequenceModCustomMods = {};
   setSequenceModReplacementMode('standard', { render: false });
   setSequenceModSmilesResult(SEQUENCE_MOD_SMILES_HELP_TEXT, 'muted');
   renderSequenceModTool();
@@ -8209,26 +8746,14 @@ function setSequenceModStatus(message, tone = 'muted') {
   const el = document.getElementById('seqmod-sequence-status');
   if (!el) return;
   el.textContent = message;
-  if (tone === 'error') {
-    el.style.color = 'var(--danger)';
-  } else if (tone === 'success') {
-    el.style.color = 'var(--success)';
-  } else {
-    el.style.color = 'var(--text-muted)';
-  }
+  applySequenceModToneToElement(el, tone);
 }
 
 function setSequenceModSmilesResult(message, tone = 'muted') {
   const el = document.getElementById('seqmod-smiles-result');
   if (!el) return;
   el.textContent = message;
-  if (tone === 'error') {
-    el.style.color = 'var(--danger)';
-  } else if (tone === 'success') {
-    el.style.color = 'var(--success)';
-  } else {
-    el.style.color = 'var(--text-muted)';
-  }
+  applySequenceModToneToElement(el, tone);
 }
 
 function normalizeProteinSequenceInput(rawInput) {
@@ -8485,72 +9010,132 @@ function resolveSequenceModChemistry(hasCustomReplacement) {
 function getSequenceModContext() {
   const sequenceInput = document.getElementById('seqmod-sequence-input');
   const replacementSelect = document.getElementById('seqmod-replacement-residue');
-  const modLabelInput = document.getElementById('seqmod-mod-label');
-  const modDeltaInput = document.getElementById('seqmod-mod-delta');
   const maturationSelect = document.getElementById('seqmod-maturation-mode');
 
   const sequence = normalizeProteinSequenceInput(sequenceInput?.value || '');
   const replacementMode = getSequenceModReplacementMode();
   const replacementResidue = String(replacementSelect?.value || '').trim().toUpperCase();
-  const customResidueLabel = String(modLabelInput?.value || '').trim() || 'Custom residue';
-  const customResidueMassAvgInput = Number.parseFloat(modDeltaInput?.value || '0');
-  const safeCustomResidueMassAvg = Number.isFinite(customResidueMassAvgInput) ? customResidueMassAvgInput : 0;
   const maturationMode = String(maturationSelect?.value || 'auto').trim().toLowerCase();
 
-  let selectedIndex = Number.isInteger(state.sequenceModSelectedIndex) ? state.sequenceModSelectedIndex : 0;
-  if (sequence.length === 0) selectedIndex = -1;
-  if (sequence.length > 0) selectedIndex = Math.max(0, Math.min(sequence.length - 1, selectedIndex));
-  state.sequenceModSelectedIndex = selectedIndex;
-
+  const selectedIndices = normalizeSequenceModSelectedIndices(sequence.length);
+  const activeIndex = state.sequenceModActiveIndex;
+  const selectedIndexSet = new Set(selectedIndices);
   const baseAverage = computeProteinSequenceMass(sequence, 'average');
   const baseMono = computeProteinSequenceMass(sequence, 'mono');
-  const originalResidue = selectedIndex >= 0 ? sequence[selectedIndex] : '';
-  const originalAverageMass = getResidueMass(originalResidue, 'average');
-  const originalMonoMass = getResidueMass(originalResidue, 'mono');
 
-  const smilesResult = state.sequenceModSmilesResult;
-  const smilesMatch = Boolean(
-    smilesResult
-    && Number.isFinite(smilesResult.normalizedAverageMass)
-    && Math.abs(safeCustomResidueMassAvg - smilesResult.normalizedAverageMass) < 0.0001
-  );
-  const rawCustomResidueMonoMass = smilesMatch
-    ? Number(smilesResult.normalizedExactMass || 0)
-    : safeCustomResidueMassAvg;
-  const hasCustomReplacement = replacementMode === 'custom' && (
-    smilesMatch
-    || Math.abs(safeCustomResidueMassAvg) > 0.0000001
-  );
-  const chemistry = resolveSequenceModChemistry(hasCustomReplacement);
-  const customResidueNetAverageMass = safeCustomResidueMassAvg + chemistry.averageDelta;
-  const customResidueNetMonoMass = rawCustomResidueMonoMass + chemistry.monoDelta;
+  const siteEdits = selectedIndices.map((index) => {
+    const originalResidue = sequence[index] || '';
+    const originalAverageMass = getResidueMass(originalResidue, 'average');
+    const originalMonoMass = getResidueMass(originalResidue, 'mono');
+    const customEntry = getSequenceModCustomEntry(index);
+    const customResidueLabel = String(customEntry.label || '').trim() || 'Custom residue';
+    const customMassInput = String(customEntry.mass ?? '0');
+    const customResidueMassAvgInput = Number.parseFloat(customMassInput || '0');
+    const safeCustomResidueMassAvg = Number.isFinite(customResidueMassAvgInput) ? customResidueMassAvgInput : 0;
+    const smilesInput = String(customEntry.smiles || '').trim();
+    const rawSmilesResult = customEntry.smilesResult || null;
+    const smilesMatch = Boolean(
+      rawSmilesResult
+      && Number.isFinite(rawSmilesResult.normalizedAverageMass)
+      && Math.abs(safeCustomResidueMassAvg - rawSmilesResult.normalizedAverageMass) < 0.0001
+    );
+    const smilesResult = smilesMatch ? rawSmilesResult : null;
+    const rawCustomResidueMonoMass = smilesResult
+      ? Number(smilesResult.normalizedExactMass || 0)
+      : safeCustomResidueMassAvg;
+    const hasCustomReplacement = replacementMode === 'custom' && (
+      smilesMatch
+      || Math.abs(safeCustomResidueMassAvg) > 0.0000001
+    );
+    const chemistry = resolveSequenceModChemistry(hasCustomReplacement);
+    const customResidueNetAverageMass = safeCustomResidueMassAvg + chemistry.averageDelta;
+    const customResidueNetMonoMass = rawCustomResidueMonoMass + chemistry.monoDelta;
+    const canonicalReplacementResidue = replacementMode === 'standard'
+      ? (replacementResidue || originalResidue)
+      : originalResidue;
+    const canonicalReplacementAverageMass = getResidueMass(canonicalReplacementResidue, 'average');
+    const canonicalReplacementMonoMass = getResidueMass(canonicalReplacementResidue, 'mono');
+    const effectiveReplacementAverageMass = hasCustomReplacement ? customResidueNetAverageMass : canonicalReplacementAverageMass;
+    const effectiveReplacementMonoMass = hasCustomReplacement ? customResidueNetMonoMass : canonicalReplacementMonoMass;
+    const replacementDeltaAvg = hasCustomReplacement
+      ? (effectiveReplacementAverageMass - originalAverageMass)
+      : (replacementMode === 'standard' ? (canonicalReplacementAverageMass - originalAverageMass) : 0);
+    const replacementDeltaMono = hasCustomReplacement
+      ? (effectiveReplacementMonoMass - originalMonoMass)
+      : (replacementMode === 'standard' ? (canonicalReplacementMonoMass - originalMonoMass) : 0);
+    const displayedResidue = replacementMode === 'standard' ? (canonicalReplacementResidue || originalResidue) : originalResidue;
+    const hasSiteEdit = hasCustomReplacement || (replacementMode === 'standard' && canonicalReplacementResidue !== originalResidue);
+    const residueInsertionPossible = Boolean(smilesResult?.residueInsertionPossible);
+    const residueInsertionMessage = String(smilesResult?.residueInsertionMessage || '').trim();
+    const effectiveReplacementLabel = hasCustomReplacement
+      ? customResidueLabel
+      : describeResidue(canonicalReplacementResidue || originalResidue);
 
-  const canonicalReplacementResidue = replacementMode === 'standard'
-    ? (replacementResidue || originalResidue)
-    : originalResidue;
-  const canonicalReplacementAverageMass = getResidueMass(canonicalReplacementResidue, 'average');
-  const canonicalReplacementMonoMass = getResidueMass(canonicalReplacementResidue, 'mono');
-  const effectiveReplacementAverageMass = hasCustomReplacement ? customResidueNetAverageMass : canonicalReplacementAverageMass;
-  const effectiveReplacementMonoMass = hasCustomReplacement ? customResidueNetMonoMass : canonicalReplacementMonoMass;
-  const residueInsertionPossible = Boolean(smilesResult?.residueInsertionPossible);
-  const residueInsertionMessage = String(smilesResult?.residueInsertionMessage || '').trim();
-  const effectiveReplacementLabel = hasCustomReplacement
-    ? customResidueLabel
-    : (replacementMode === 'standard' ? describeResidue(canonicalReplacementResidue) : 'No custom residue loaded');
-  const displayedResidue = hasCustomReplacement
-    ? originalResidue
-    : (replacementMode === 'standard' ? canonicalReplacementResidue : originalResidue);
-  const editedSequence = replacementMode === 'standard'
-    ? applySequenceResidueReplacement(sequence, selectedIndex, replacementResidue)
-    : sequence;
-  const startsWithMet = !(hasCustomReplacement && selectedIndex === 0) && editedSequence.startsWith('M');
-  const maturationProbeSequence = (hasCustomReplacement && selectedIndex >= 64 && selectedIndex <= 66)
-    ? applySequenceResidueReplacement(sequence, selectedIndex, '*')
-    : editedSequence;
-  const replacementDeltaAvg = selectedIndex >= 0 ? (effectiveReplacementAverageMass - originalAverageMass) : 0;
-  const replacementDeltaMono = selectedIndex >= 0 ? (effectiveReplacementMonoMass - originalMonoMass) : 0;
-  const editedAverageMass = baseAverage.mass + replacementDeltaAvg;
-  const editedMonoMass = baseMono.mass + replacementDeltaMono;
+    return {
+      index,
+      position: index + 1,
+      replacementMode,
+      originalResidue,
+      originalAverageMass,
+      originalMonoMass,
+      customResidueLabel,
+      customMassInput,
+      smilesInput,
+      smilesResult,
+      rawCustomResidueAverageMass: safeCustomResidueMassAvg,
+      rawCustomResidueMonoMass,
+      hasCustomReplacement,
+      chemistry,
+      customResidueNetAverageMass,
+      customResidueNetMonoMass,
+      canonicalReplacementResidue,
+      effectiveReplacementLabel,
+      effectiveReplacementAverageMass,
+      effectiveReplacementMonoMass,
+      replacementDeltaAvg,
+      replacementDeltaMono,
+      displayedResidue,
+      hasSiteEdit,
+      residueInsertionPossible,
+      residueInsertionMessage,
+    };
+  });
+
+  const activeSite = siteEdits.find((site) => site.index === activeIndex) || null;
+  const editedSites = siteEdits.filter((site) => site.hasSiteEdit);
+  const selectedSiteLabel = summarizeSequenceModTokens(siteEdits.map((site) => formatSequenceModSiteBaseToken(site)));
+  const editedSiteLabel = editedSites.length > 0
+    ? summarizeSequenceModTokens(editedSites.map((site) => formatSequenceModSiteChangeToken(site)))
+    : 'None';
+  const changeToken = editedSites.length > 0
+    ? editedSites.map((site) => formatSequenceModSiteChangeToken(site)).join('; ')
+    : (siteEdits.length > 0 ? siteEdits.map((site) => formatSequenceModSiteBaseToken(site)).join(', ') : 'None');
+  const totalReplacementDeltaAvg = siteEdits.reduce((sum, site) => sum + site.replacementDeltaAvg, 0);
+  const totalReplacementDeltaMono = siteEdits.reduce((sum, site) => sum + site.replacementDeltaMono, 0);
+
+  let editedSequence = sequence;
+  if (replacementMode === 'standard' && siteEdits.length > 0) {
+    const chars = sequence.split('');
+    siteEdits.forEach((site) => {
+      if (site.index >= 0 && site.index < chars.length) {
+        chars[site.index] = site.canonicalReplacementResidue || chars[site.index];
+      }
+    });
+    editedSequence = chars.join('');
+  }
+
+  let maturationProbeSequence = editedSequence;
+  if (replacementMode === 'custom' && siteEdits.length > 0) {
+    maturationProbeSequence = siteEdits.reduce((currentSequence, site) => {
+      if (!site.hasCustomReplacement || site.index < 64 || site.index > 66) return currentSequence;
+      return applySequenceResidueReplacement(currentSequence, site.index, '*');
+    }, sequence);
+  }
+
+  const hasCustomReplacementAtStart = siteEdits.some((site) => site.hasCustomReplacement && site.index === 0);
+  const editedAverageMass = baseAverage.mass + totalReplacementDeltaAvg;
+  const editedMonoMass = baseMono.mass + totalReplacementDeltaMono;
+  const startsWithMet = !hasCustomReplacementAtStart && editedSequence.startsWith('M');
   const initiatorMetDeltaAvg = startsWithMet ? -getResidueMass('M', 'average') : 0;
   const initiatorMetDeltaMono = startsWithMet ? -getResidueMass('M', 'mono') : 0;
   const maturation = resolveSequenceModMaturation(maturationProbeSequence, maturationMode);
@@ -8565,19 +9150,7 @@ function getSequenceModContext() {
     ? editedMonoMass + initiatorMetDeltaMono + maturation.monoDelta
     : null;
   const unknownResidues = Array.from(new Set([...(baseAverage.unknownResidues || []), ...(baseMono.unknownResidues || [])]));
-  const position = selectedIndex >= 0 ? selectedIndex + 1 : 0;
-  let changeToken = 'None';
-  if (selectedIndex >= 0) {
-    if (hasCustomReplacement) {
-      changeToken = `${originalResidue}${position}->${effectiveReplacementLabel}`;
-    } else if (replacementMode === 'custom') {
-      changeToken = `${originalResidue}${position}`;
-    } else if (canonicalReplacementResidue && canonicalReplacementResidue !== originalResidue) {
-      changeToken = `${originalResidue}${position}${canonicalReplacementResidue}`;
-    } else {
-      changeToken = `${originalResidue}${position}`;
-    }
-  }
+
   let primaryTargetLabel = 'Edited Full-Length Target';
   let primaryTargetAverageMass = editedAverageMass;
   let primaryTargetMonoMass = editedMonoMass;
@@ -8598,33 +9171,24 @@ function getSequenceModContext() {
   return {
     sequence,
     editedSequence,
-    selectedIndex,
-    position,
+    selectedIndices,
+    selectedIndexSet,
+    selectedSiteCount: siteEdits.length,
+    editedSiteCount: editedSites.length,
+    selectedSiteLabel,
+    editedSiteLabel,
+    siteEdits,
+    activeIndex,
+    activeSite,
     replacementMode,
-    originalResidue,
-    editedResidue: displayedResidue,
     replacementResidue,
-    canonicalReplacementResidue,
-    effectiveReplacementLabel,
-    effectiveReplacementAverageMass,
-    effectiveReplacementMonoMass,
-    hasCustomReplacement,
-    residueInsertionPossible,
-    residueInsertionMessage,
-    chemistry,
     maturationMode,
     maturation,
-    customResidueLabel,
-    rawCustomResidueAverageMass: safeCustomResidueMassAvg,
-    rawCustomResidueMonoMass,
+    totalReplacementDeltaAvg,
+    totalReplacementDeltaMono,
+    hasAnyCustomReplacement: siteEdits.some((site) => site.hasCustomReplacement),
     baseAverageMass: baseAverage.mass,
     baseMonoMass: baseMono.mass,
-    originalAverageMass,
-    originalMonoMass,
-    editedAverageMass: effectiveReplacementAverageMass,
-    editedMonoMass: effectiveReplacementMonoMass,
-    replacementDeltaAvg,
-    replacementDeltaMono,
     fullLengthAverageMass: editedAverageMass,
     fullLengthMonoMass: editedMonoMass,
     initiatorMetDeltaAvg,
@@ -8641,7 +9205,26 @@ function getSequenceModContext() {
     primaryTargetMonoMass,
     changeToken,
     unknownResidues,
-    smilesResult: smilesMatch ? smilesResult : null,
+    selectedIndex: activeSite ? activeSite.index : -1,
+    position: activeSite ? activeSite.position : 0,
+    originalResidue: activeSite ? activeSite.originalResidue : '',
+    editedResidue: activeSite ? activeSite.displayedResidue : '',
+    canonicalReplacementResidue: activeSite ? activeSite.canonicalReplacementResidue : '',
+    effectiveReplacementLabel: activeSite ? activeSite.effectiveReplacementLabel : 'None',
+    effectiveReplacementAverageMass: activeSite ? activeSite.effectiveReplacementAverageMass : 0,
+    effectiveReplacementMonoMass: activeSite ? activeSite.effectiveReplacementMonoMass : 0,
+    hasCustomReplacement: activeSite ? activeSite.hasCustomReplacement : false,
+    residueInsertionPossible: activeSite ? activeSite.residueInsertionPossible : false,
+    residueInsertionMessage: activeSite ? activeSite.residueInsertionMessage : '',
+    chemistry: activeSite ? activeSite.chemistry : resolveSequenceModChemistry(false),
+    customResidueLabel: activeSite ? activeSite.customResidueLabel : 'Custom residue',
+    rawCustomResidueAverageMass: activeSite ? activeSite.rawCustomResidueAverageMass : 0,
+    rawCustomResidueMonoMass: activeSite ? activeSite.rawCustomResidueMonoMass : 0,
+    originalAverageMass: activeSite ? activeSite.originalAverageMass : 0,
+    originalMonoMass: activeSite ? activeSite.originalMonoMass : 0,
+    replacementDeltaAvg: activeSite ? activeSite.replacementDeltaAvg : 0,
+    replacementDeltaMono: activeSite ? activeSite.replacementDeltaMono : 0,
+    smilesResult: activeSite ? activeSite.smilesResult : null,
   };
 }
 
@@ -8655,6 +9238,7 @@ function renderSequenceModViewer(context) {
   }
 
   const lines = [];
+  const siteByIndex = new Map((context.siteEdits || []).map((site) => [site.index, site]));
   for (let lineStart = 0; lineStart < context.sequence.length; lineStart += SEQUENCE_MOD_LINE_LENGTH) {
     const lineSequence = context.sequence.slice(lineStart, lineStart + SEQUENCE_MOD_LINE_LENGTH);
     const rulerGroups = [];
@@ -8667,21 +9251,23 @@ function renderSequenceModViewer(context) {
 
       const residueHtml = groupSequence.split('').map((residue, offset) => {
         const index = lineStart + groupStart + offset;
-        const isSelected = index === context.selectedIndex;
-        const displayResidue = isSelected && !context.hasCustomReplacement && context.replacementResidue ? context.editedResidue : residue;
-        const isEdited = isSelected && (
-          context.hasCustomReplacement
-          || (context.replacementResidue && context.editedResidue !== residue)
-        );
+        const site = siteByIndex.get(index);
+        const isSelected = context.selectedIndexSet.has(index);
+        const isActive = index === context.activeIndex;
+        const displayResidue = site ? site.displayedResidue : residue;
+        const isEdited = Boolean(site?.hasSiteEdit);
         const classes = ['sequence-mod-residue'];
         if (displayResidue === '*') classes.push('is-stop');
         if (isEdited) classes.push('is-edited');
         if (isSelected) classes.push('is-selected');
-        const title = context.hasCustomReplacement && isSelected
-          ? `Position ${index + 1}: ${residue} -> ${context.effectiveReplacementLabel}`
-          : (isEdited
-            ? `Position ${index + 1}: ${residue} -> ${displayResidue}`
-            : `Position ${index + 1}: ${displayResidue}`);
+        if (isActive) classes.push('is-active');
+        const title = site
+          ? (site.hasCustomReplacement
+            ? `Position ${index + 1}: ${residue} -> ${site.effectiveReplacementLabel}`
+            : (site.hasSiteEdit
+              ? `Position ${index + 1}: ${residue} -> ${displayResidue}`
+              : `Position ${index + 1}: ${displayResidue} (selected site)`))
+          : `Position ${index + 1}: ${displayResidue}`;
         return `<button type="button" class="${classes.join(' ')}" data-index="${index}" title="${escapeAttr(title)}">${escapeHtml(displayResidue)}</button>`;
       }).join('');
 
@@ -8713,12 +9299,16 @@ function renderSequenceModSummary(context) {
 
   container.innerHTML = `
     <div class="metric-card">
-      <span class="metric-label">Recognized Site</span>
-      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.changeToken)}</span>
+      <span class="metric-label">Selected Sites</span>
+      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.selectedSiteCount > 0 ? context.selectedSiteLabel : 'None')}</span>
+    </div>
+    <div class="metric-card">
+      <span class="metric-label">Applied Site Changes</span>
+      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.editedSiteCount > 0 ? context.editedSiteLabel : 'No mass-changing edits')}</span>
     </div>
     <div class="metric-card">
       <span class="metric-label">Replacement Input</span>
-      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.replacementMode === 'custom' ? 'Custom residue' : 'Standard amino acid')}</span>
+      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.replacementMode === 'custom' ? 'Custom residues per selected site' : 'Standard amino acid across selected sites')}</span>
     </div>
     <div class="metric-card metric-card-primary">
       <span class="metric-label">Primary Deconv Mass</span>
@@ -8737,29 +9327,26 @@ function renderSequenceModMassTable(context) {
   if (!container || !siteChip) return;
 
   if (!context.sequence) {
-    siteChip.textContent = 'Selected site: none';
+    siteChip.textContent = 'Selected sites: none';
     container.innerHTML = '<p class="placeholder-msg">Load a sequence to see the mass breakdown.</p>';
     return;
   }
 
-  siteChip.textContent = `Selected site: ${context.changeToken}`;
+  siteChip.textContent = buildSequenceModSelectionChipText(context);
 
-  const replacementDescription = context.hasCustomReplacement
-    ? (context.smilesResult
-      ? `${context.customResidueLabel} loaded from SMILES (${context.smilesResult.formula || 'formula n/a'})`
-      : `${context.customResidueLabel} mass entered manually`)
-    : (context.replacementMode === 'custom'
-      ? 'Custom residue mode is selected, but no custom residue mass is loaded yet'
-      : `Using the standard amino-acid dropdown with ${describeResidue(context.canonicalReplacementResidue)}`);
-  const chemistryDescription = context.chemistry.applies
-    ? `${context.chemistry.description} Adjustment: ${formatSignedMass(context.chemistry.averageDelta, 5)} Da average / ${formatSignedMass(context.chemistry.monoDelta, 5)} Da mono.`
-    : context.chemistry.reason;
-  const monoDescription = context.hasCustomReplacement
-    ? (context.smilesResult
-      ? 'Monoisotopic total uses the SMILES-derived exact mass for the custom replacement residue.'
-      : 'Monoisotopic total uses the entered custom residue mass as an approximation because no exact custom-residue mass was supplied.')
-    : 'Monoisotopic total follows the currently selected residue-replacement model.';
-  const hasSiteEdit = context.hasCustomReplacement || context.editedResidue !== context.originalResidue;
+  const replacementDescription = context.replacementMode === 'custom'
+    ? (context.hasAnyCustomReplacement
+      ? `Custom residue mode is active with ${context.editedSiteCount} mass-changing site-specific edit${context.editedSiteCount === 1 ? '' : 's'} loaded`
+      : 'Custom residue mode is active, but no selected site has a loaded custom residue mass yet')
+    : (context.selectedSiteCount > 0
+      ? `Using the standard amino-acid dropdown with ${describeResidue(context.replacementResidue || context.activeSite?.canonicalReplacementResidue)} across ${context.selectedSiteCount} selected site${context.selectedSiteCount === 1 ? '' : 's'}`
+      : 'No sites selected yet');
+  const chemistryDescription = context.hasAnyCustomReplacement
+    ? 'Automatic residue insertion correction (-H2O) is applied independently to each custom residue with a loaded mass.'
+    : 'No custom replacement residue mass was supplied, so no automatic residue correction was applied.';
+  const monoDescription = context.hasAnyCustomReplacement
+    ? 'Monoisotopic total uses SMILES-derived exact masses for custom sites where available; manual custom entries use the entered residue mass as an approximation.'
+    : 'Monoisotopic total follows the current site-replacement model.';
   let primaryDescription = `${context.primaryTargetLabel}.`;
   if (context.primaryTargetLabel === 'Edited -Initiator Met + Matured Target') {
     primaryDescription += ' This processed target is shown first because it is usually the best mass to match in deconvolution.';
@@ -8776,29 +9363,29 @@ function renderSequenceModMassTable(context) {
 
   const overviewRows = [
     {
-      term: 'Recognized Edited Site',
-      value: context.changeToken,
-      description: `${describeResidue(context.originalResidue)} at position ${context.position}. Click another residue in the sequence viewer to move the edit site.`,
+      term: 'Selected Sites',
+      value: context.selectedSiteCount > 0 ? context.selectedSiteLabel : 'None',
+      description: context.selectedSiteCount > 0
+        ? `Currently tracking ${context.selectedSiteCount} selected site${context.selectedSiteCount === 1 ? '' : 's'}. Click residues in the viewer to add more sites or remove them from the custom editor list.`
+        : 'No sites selected yet. Click one or more residues in the viewer to add editable positions.',
     },
     {
-      term: 'Replacement Residue',
-      value: context.effectiveReplacementLabel,
-      description: `${replacementDescription}. ${context.replacementMode === 'custom' ? 'Custom residue mode is active for this calculation.' : 'Standard amino-acid mode is active for this calculation.'}`,
+      term: 'Applied Site Changes',
+      value: context.editedSiteCount > 0 ? context.changeToken : 'No mass-changing edits',
+      description: context.editedSiteCount > 0
+        ? `Mass-changing edits are currently applied at ${context.editedSiteCount} site${context.editedSiteCount === 1 ? '' : 's'}.`
+        : 'Selected sites are tracked, but none of them currently changes the theoretical mass.',
     },
     {
-      term: 'Replacement Delta',
-      value: formatSignedMass(context.replacementDeltaAvg, 2),
-      description: `${replacementDescription}. ${chemistryDescription}`,
+      term: 'Replacement Input',
+      value: context.replacementMode === 'custom' ? 'Custom residues per site' : 'Standard amino acid',
+      description: `${replacementDescription}. ${context.replacementMode === 'custom' ? chemistryDescription : 'Each selected site uses the same canonical residue chosen in the dropdown.'}`,
     },
-  ];
-  if (context.replacementMode === 'custom' && context.smilesResult) {
-    overviewRows.push({
-      term: 'Residue Insertability',
-      value: context.residueInsertionPossible ? 'Likely Yes' : 'Needs Review',
-      description: context.residueInsertionMessage || 'No residue-insertability assessment was returned for this SMILES.',
-    });
-  }
-  overviewRows.push(
+    {
+      term: 'Combined Site Delta',
+      value: formatSignedMass(context.totalReplacementDeltaAvg, 2),
+      description: `${context.editedSiteCount > 0 ? `Summed delta across ${context.editedSiteCount} edited site${context.editedSiteCount === 1 ? '' : 's'}.` : 'No summed site delta yet because no mass-changing edit is loaded.'} ${chemistryDescription}`,
+    },
     {
       term: 'Primary Theoretical Deconv Mass',
       value: context.primaryTargetAverageMass.toFixed(2),
@@ -8809,11 +9396,14 @@ function renderSequenceModMassTable(context) {
       term: 'Primary Reference Mono Mass',
       value: context.primaryTargetMonoMass.toFixed(5),
       description: monoDescription,
-    }
-  );
-
-  if (hasSiteEdit) {
-    overviewRows[0].description = `${describeResidue(context.originalResidue)} at position ${context.position}. The highlighted site is the edited location.`;
+    },
+  ];
+  if (context.activeSite?.smilesResult) {
+    overviewRows.splice(3, 0, {
+      term: 'Active Site Insertability',
+      value: context.activeSite.residueInsertionPossible ? 'Likely Yes' : 'Needs Review',
+      description: context.activeSite.residueInsertionMessage || 'No residue-insertability assessment was returned for the active-site SMILES.',
+    });
   }
 
   const detailRows = [
@@ -8824,25 +9414,32 @@ function renderSequenceModMassTable(context) {
       description: 'Average intact protein mass from the current sequence. Any * characters are shown in the viewer but contribute 0 Da until replaced.',
       final: false,
     },
+    ...context.siteEdits.map((site) => {
+      let description = `${describeResidue(site.originalResidue)} at position ${site.position}. `;
+      if (site.hasCustomReplacement) {
+        description += site.smilesResult
+          ? `${site.effectiveReplacementLabel} loaded from SMILES${site.smilesResult.formula ? ` (${site.smilesResult.formula})` : ''}. Net inserted mass ${site.effectiveReplacementAverageMass.toFixed(5)} Da average / ${site.effectiveReplacementMonoMass.toFixed(5)} Da mono.`
+          : `${site.effectiveReplacementLabel} loaded from manual residue mass. Net inserted mass ${site.effectiveReplacementAverageMass.toFixed(5)} Da average / ${site.effectiveReplacementMonoMass.toFixed(5)} Da mono.`;
+      } else if (context.replacementMode === 'custom') {
+        description += 'Selected but unchanged. Load a custom residue mass or SMILES for this site to change the mass.';
+      } else if (site.hasSiteEdit) {
+        description += `Replaced with ${describeResidue(site.canonicalReplacementResidue)} across the standard-mode selection.`;
+      } else {
+        description += `Selected but unchanged because the current dropdown leaves this site as ${describeResidue(site.canonicalReplacementResidue)}.`;
+      }
+      return {
+        term: `Site ${formatSequenceModSiteBaseToken(site)} Delta`,
+        avgValue: formatSignedMass(site.replacementDeltaAvg, 5),
+        monoValue: formatSignedMass(site.replacementDeltaMono, 5),
+        description,
+        final: false,
+      };
+    }),
     {
-      term: 'Original Selected Site',
-      avgValue: context.originalAverageMass.toFixed(5),
-      monoValue: context.originalMonoMass.toFixed(5),
-      description: `${describeResidue(context.originalResidue)} at position ${context.position}.`,
-      final: false,
-    },
-    {
-      term: 'Replacement Residue Mass',
-      avgValue: context.editedAverageMass.toFixed(5),
-      monoValue: context.editedMonoMass.toFixed(5),
-      description: `${context.effectiveReplacementLabel} used as the residue mass at the selected site.`,
-      final: false,
-    },
-    {
-      term: 'Residue Replacement Delta',
-      avgValue: formatSignedMass(context.replacementDeltaAvg, 5),
-      monoValue: formatSignedMass(context.replacementDeltaMono, 5),
-      description: 'Difference between the edited site residue and the original selected residue.',
+      term: 'Combined Site Delta',
+      avgValue: formatSignedMass(context.totalReplacementDeltaAvg, 5),
+      monoValue: formatSignedMass(context.totalReplacementDeltaMono, 5),
+      description: 'Summed mass shift from all selected site edits.',
       final: false,
     },
     {
@@ -8853,32 +9450,6 @@ function renderSequenceModMassTable(context) {
       final: context.primaryTargetLabel === 'Edited Full-Length Target',
     },
   ];
-
-  if (context.hasCustomReplacement) {
-    detailRows.splice(4, 0,
-      {
-        term: `${context.customResidueLabel} Raw Mass`,
-        avgValue: formatSignedMass(context.rawCustomResidueAverageMass, 5),
-        monoValue: formatSignedMass(context.rawCustomResidueMonoMass, 5),
-        description: `${replacementDescription}. ${monoDescription}`,
-        final: false,
-      },
-      {
-        term: 'Chemistry Correction',
-        avgValue: formatSignedMass(context.chemistry.averageDelta, 5),
-        monoValue: formatSignedMass(context.chemistry.monoDelta, 5),
-        description: chemistryDescription,
-        final: false,
-      },
-      {
-        term: `${context.customResidueLabel} Net Inserted Mass`,
-        avgValue: context.effectiveReplacementAverageMass.toFixed(5),
-        monoValue: context.effectiveReplacementMonoMass.toFixed(5),
-        description: 'Net custom residue mass after chemistry correction is applied.',
-        final: false,
-      }
-    );
-  }
 
   if (editedSequenceStartsWithMet(context)) {
     detailRows.push({
@@ -8937,13 +9508,13 @@ function renderSequenceModMassTable(context) {
   if (context.unknownResidues.length > 0) {
     html += `<div class="sequence-mod-inline-note">Unknown residues ignored in mass calculation: ${escapeHtml(context.unknownResidues.join(', '))}</div>`;
   }
-  if (context.hasCustomReplacement) {
-    html += `<div class="sequence-mod-inline-note">Custom replacement residue mode is active. ${escapeHtml(context.chemistry.reason)} ${escapeHtml(context.chemistry.description)}</div>`;
+  if (context.hasAnyCustomReplacement) {
+    html += `<div class="sequence-mod-inline-note">Custom replacement residue mode is active. ${escapeHtml(chemistryDescription)}</div>`;
   } else if (context.replacementMode === 'custom') {
-    html += '<div class="sequence-mod-inline-note">Custom residue mode is selected. Load a SMILES, drawn residue, or manual residue mass to replace the highlighted site.</div>';
+    html += '<div class="sequence-mod-inline-note">Custom residue mode is selected. Load site-specific SMILES, drawn residues, or manual residue masses to change the selected sites.</div>';
   }
-  if (context.replacementMode === 'custom' && context.smilesResult && context.residueInsertionMessage) {
-    html += `<div class="sequence-mod-inline-note">${escapeHtml(context.residueInsertionMessage)}</div>`;
+  if (context.activeSite?.smilesResult && context.activeSite.residueInsertionMessage) {
+    html += `<div class="sequence-mod-inline-note">Active site ${escapeHtml(formatSequenceModSiteBaseToken(context.activeSite))}: ${escapeHtml(context.activeSite.residueInsertionMessage)}</div>`;
   }
   if (!context.maturation.applies) {
     html += `<div class="sequence-mod-inline-note">${escapeHtml(context.maturation.reason)}</div>`;
@@ -8951,8 +9522,14 @@ function renderSequenceModMassTable(context) {
   container.innerHTML = html;
 }
 
-function renderSequenceModTool() {
+function renderSequenceModTool(options = {}) {
   const context = getSequenceModContext();
+  if (options.renderCustomEditors !== false) {
+    renderSequenceModCustomEditors(context);
+  } else if (context.replacementMode === 'custom') {
+    const status = getSequenceModGlobalSmilesStatus(context);
+    setSequenceModSmilesResult(status.message, status.tone);
+  }
   renderSequenceModViewer(context);
   renderSequenceModSummary(context);
   renderSequenceModMassTable(context);
@@ -8967,29 +9544,43 @@ function renderSequenceModTool() {
     return;
   }
 
-  const chemistryStatus = context.hasCustomReplacement
-    ? ` ${context.chemistry.reason}`
+  const chemistryStatus = context.hasAnyCustomReplacement
+    ? ' Automatic residue insertion correction is applied to each custom residue with a loaded mass.'
     : '';
-  const insertionStatus = context.replacementMode === 'custom' && context.smilesResult && context.residueInsertionMessage
-    ? ` ${context.residueInsertionMessage}`
+  const insertionStatus = context.activeSite?.smilesResult && context.activeSite.residueInsertionMessage
+    ? ` Active site ${formatSequenceModSiteBaseToken(context.activeSite)}: ${context.activeSite.residueInsertionMessage}`
     : '';
   const maturationStatus = ` ${context.maturation.reason}`;
+  const selectionStatus = context.selectedSiteCount > 0
+    ? ` Selected ${context.selectedSiteCount} site${context.selectedSiteCount === 1 ? '' : 's'}: ${context.selectedSiteLabel}.`
+    : ' No edit sites selected yet.';
+  const editStatus = context.editedSiteCount > 0
+    ? ` ${context.editedSiteCount} site-specific edit${context.editedSiteCount === 1 ? '' : 's'} currently change the theoretical mass.`
+    : ' No mass-changing site edits are currently loaded.';
   const replacementModeStatus = context.replacementMode === 'custom'
-    ? (context.hasCustomReplacement
-      ? ' Custom residue mode is active for the selected site.'
-      : ' Custom residue mode is selected. Load a SMILES, drawn residue, or manual residue mass to replace the selected site.')
-    : ' Standard amino-acid dropdown mode is active for the selected site.';
-  const status = `${context.sequence.length} sequence characters loaded. Selected ${context.changeToken}. Terminal or internal * sites stay at 0 Da until replaced.${replacementModeStatus}${chemistryStatus}${insertionStatus}${maturationStatus}`;
+    ? (context.selectedSiteCount > 0
+      ? ' Custom residue mode is active with one editor row per selected site.'
+      : ' Custom residue mode is selected. Click residues in the viewer to create per-site editors.')
+    : (context.selectedSiteCount > 0
+      ? ' Standard amino-acid dropdown mode is active across the selected sites.'
+      : ' Standard amino-acid dropdown mode is active, but no site is selected.');
+  const status = `${context.sequence.length} sequence characters loaded.${selectionStatus}${editStatus} Terminal or internal * sites stay at 0 Da until replaced.${replacementModeStatus}${chemistryStatus}${insertionStatus}${maturationStatus}`;
   setSequenceModStatus(status, 'success');
 }
 
-async function applySequenceModSmilesMass(smilesOverride = '') {
-  const smilesInput = document.getElementById('seqmod-smiles-input');
-  const modDeltaInput = document.getElementById('seqmod-mod-delta');
-  const modLabelInput = document.getElementById('seqmod-mod-label');
-  if (!smilesInput || !modDeltaInput || !modLabelInput) return;
+async function applySequenceModSmilesMass(smilesOverride = '', targetIndex = null) {
+  const context = getSequenceModContext();
+  const resolvedIndex = Number.isInteger(targetIndex) ? targetIndex : context.activeIndex;
+  if (!Number.isInteger(resolvedIndex) || resolvedIndex < 0) {
+    toast('Select a target residue first', 'warning');
+    return;
+  }
 
-  const smiles = String(smilesOverride || smilesInput.value || '').trim();
+  const smilesInput = document.querySelector(`.seqmod-custom-smiles-input[data-index="${resolvedIndex}"]`);
+  const modDeltaInput = document.querySelector(`.seqmod-custom-mass-input[data-index="${resolvedIndex}"]`);
+  const modLabelInput = document.querySelector(`.seqmod-custom-label-input[data-index="${resolvedIndex}"]`);
+  const currentEntry = getSequenceModCustomEntry(resolvedIndex);
+  const smiles = String(smilesOverride || smilesInput?.value || currentEntry.smiles || '').trim();
   if (!smiles) {
     toast('Enter a SMILES string for the replacement residue first', 'warning');
     return;
@@ -9000,6 +9591,7 @@ async function applySequenceModSmilesMass(smilesOverride = '') {
     if (getSequenceModReplacementMode() !== 'custom') {
       setSequenceModReplacementMode('custom', { render: false });
     }
+    state.sequenceModActiveIndex = resolvedIndex;
     const props = await api.computeSmiles(smiles);
     const formula = String(props.formula || '');
     const exactMass = Number(props.exact_mass);
@@ -9015,38 +9607,50 @@ async function applySequenceModSmilesMass(smilesOverride = '') {
 
     const normalizedAverageMass = normalizeMassForFormalCharge(averageMass, netCharge);
     const normalizedExactMass = normalizeMassForFormalCharge(exactMass, netCharge);
+    const nextLabel = (!String(currentEntry.label || '').trim() || String(currentEntry.label || '').trim() === 'Custom residue')
+      ? (formula || 'SMILES residue')
+      : String(currentEntry.label || '').trim();
 
-    modDeltaInput.value = normalizedAverageMass.toFixed(5);
-    if (!modLabelInput.value.trim() || modLabelInput.value.trim() === 'Custom residue') {
-      modLabelInput.value = formula || 'SMILES residue';
-    }
-
-    state.sequenceModSmilesResult = {
+    const nextEntry = patchSequenceModCustomEntry(resolvedIndex, {
+      label: nextLabel,
+      mass: normalizedAverageMass.toFixed(5),
       smiles,
-      formula,
-      exactMass,
-      averageMass,
-      normalizedAverageMass,
-      normalizedExactMass,
-      netCharge,
-      freeCarboxylCount,
-      freeAmineCount,
-      residueInsertionPossible,
-      residueInsertionMessage,
-    };
+      smilesResult: {
+        smiles,
+        formula,
+        exactMass,
+        averageMass,
+        normalizedAverageMass,
+        normalizedExactMass,
+        netCharge,
+        freeCarboxylCount,
+        freeAmineCount,
+        residueInsertionPossible,
+        residueInsertionMessage,
+      },
+    });
 
+    if (smilesInput) smilesInput.value = smiles;
+    if (modDeltaInput) modDeltaInput.value = nextEntry.mass;
+    if (modLabelInput) modLabelInput.value = nextEntry.label;
+
+    renderSequenceModTool();
     const chargeNote = netCharge !== 0
       ? ` | normalized from formal charge ${netCharge > 0 ? `+${netCharge}` : String(netCharge)}`
       : '';
     const insertionNote = residueInsertionMessage ? ` | ${residueInsertionMessage}` : '';
     setSequenceModSmilesResult(
-      `${formula || 'Formula n/a'} | Average ${normalizedAverageMass.toFixed(5)} Da | Monoisotopic ${normalizedExactMass.toFixed(5)} Da${chargeNote}${insertionNote}`,
+      `Active site ${(context.sequence?.[resolvedIndex] || '')}${resolvedIndex + 1}: ${formula || 'Formula n/a'} | Average ${normalizedAverageMass.toFixed(5)} Da | Monoisotopic ${normalizedExactMass.toFixed(5)} Da${chargeNote}${insertionNote}`,
       'success'
     );
-    renderSequenceModTool();
     toast(`Loaded replacement residue mass ${normalizedAverageMass.toFixed(2)} Da from SMILES`, 'success');
   } catch (err) {
-    state.sequenceModSmilesResult = null;
+    patchSequenceModCustomEntry(resolvedIndex, {
+      smiles,
+      smilesResult: null,
+    });
+    renderSequenceModTool({ renderCustomEditors: false });
+    syncSequenceModCustomEntryStatusElement(resolvedIndex);
     setSequenceModSmilesResult(`SMILES calculation failed: ${err.message}`, 'error');
     toast(`SMILES calculation failed: ${err.message}`, 'error');
   } finally {
@@ -9054,16 +9658,19 @@ async function applySequenceModSmilesMass(smilesOverride = '') {
   }
 }
 
-function clearSequenceModExternalModification() {
-  const smilesInput = document.getElementById('seqmod-smiles-input');
-  const modDeltaInput = document.getElementById('seqmod-mod-delta');
-  const modLabelInput = document.getElementById('seqmod-mod-label');
-  if (smilesInput) smilesInput.value = '';
-  if (modDeltaInput) modDeltaInput.value = '0';
-  if (modLabelInput) modLabelInput.value = 'Custom residue';
-  state.sequenceModSmilesResult = null;
-  setSequenceModSmilesResult(SEQUENCE_MOD_SMILES_HELP_TEXT, 'muted');
-  renderSequenceModTool();
+function clearSequenceModExternalModification(targetIndex = null, { render = true } = {}) {
+  const context = getSequenceModContext();
+  const resolvedIndex = Number.isInteger(targetIndex) ? targetIndex : context.activeIndex;
+  if (!Number.isInteger(resolvedIndex) || resolvedIndex < 0) return;
+
+  patchSequenceModCustomEntry(resolvedIndex, createSequenceModCustomEntry());
+  if (render) {
+    renderSequenceModTool();
+  } else {
+    syncSequenceModCustomEntryStatusElement(resolvedIndex);
+  }
+  const siteLabel = `${context.sequence?.[resolvedIndex] || ''}${resolvedIndex + 1}`;
+  setSequenceModSmilesResult(`Active site ${siteLabel}. ${SEQUENCE_MOD_SMILES_HELP_TEXT}`, 'muted');
 }
 
 function initMassCalc() {

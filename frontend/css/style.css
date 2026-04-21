@@ -108,6 +108,7 @@ select {
 }
 input[type="text"]:focus,
 input[type="number"]:focus,
+input[type="search"]:focus,
 textarea:focus,
 select:focus {
   border-color: var(--accent);
@@ -288,12 +289,28 @@ input[type="radio"] {
 .sort-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
   font-size: 12px;
   color: var(--text-secondary);
 }
 .sort-bar select { width: auto; font-size: 12px; padding: 3px 6px; }
+.sort-bar input[type="search"] {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.file-search-status {
+  margin: -2px 0 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.file-search-status.is-error {
+  color: #ffb3b3;
+}
 
 /* File list */
 .file-list {
@@ -334,6 +351,22 @@ input[type="radio"] {
 
 .file-name {
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -791,6 +824,58 @@ input[type="radio"] {
   width: 100%;
 }
 
+.sequence-mod-custom-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sequence-mod-custom-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.sequence-mod-custom-entry.is-active {
+  border-color: rgba(95, 168, 255, 0.65);
+  background: linear-gradient(135deg, rgba(31, 86, 158, 0.18), rgba(255, 255, 255, 0.03));
+}
+
+.sequence-mod-custom-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sequence-mod-custom-entry-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sequence-mod-custom-entry-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sequence-mod-custom-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sequence-mod-custom-entry-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .sequence-mod-sequence-card {
   min-height: 0;
   padding: 16px;
@@ -902,6 +987,11 @@ input[type="radio"] {
   background: rgba(33, 92, 175, 0.28);
   color: #ffffff;
   font-weight: 700;
+}
+
+.sequence-mod-residue.is-active {
+  outline: 1px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 1px;
 }
 
 .sequence-mod-residue.is-selected.is-edited {

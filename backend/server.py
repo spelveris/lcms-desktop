@@ -49,6 +49,7 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
 # Import existing modules
 from data_reader import (
     OLAX_CONTAINER_SUFFIX,
+    RSLT_CONTAINER_SUFFIX,
     SampleData,
     SUPPORTED_SAMPLE_SUFFIXES,
     build_virtual_sample_path,
@@ -100,6 +101,7 @@ _router_log_lock = Lock()
 _router_logged_item_state: dict[str, str] = {}
 _router_last_window_signature = ""
 ROUTER_LOG_RETENTION_DAYS = 2
+DEFAULT_BROWSER_SEARCH_LIMIT = 200
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +718,212 @@ def _iter_d_folder_paths(base_path: Union[str, Path], recursive: bool = True) ->
             folders.append(Path(current_root) / dirname)
         dirs[:] = [d for d in visible_dirs if not _is_supported_sample_folder(Path(current_root) / d)]
     return folders
+
+
+def _safe_path_mtime(path: Path) -> float:
+    try:
+        return float(path.stat().st_mtime)
+    except (OSError, PermissionError):
+        return 0.0
+
+
+def _browser_search_name_matches(name: str, search: str) -> bool:
+    return search.lower() in str(name or "").lower()
+
+
+def _browser_search_parent_label(parent_path: Path, search_root: Path) -> str:
+    try:
+        relative = parent_path.relative_to(search_root)
+        label = str(relative)
+        return label if label else "."
+    except ValueError:
+        return str(parent_path)
+
+
+def _make_browser_search_item(
+    *,
+    name: str,
+    path: str,
+    parent_path: Path,
+    search_root: Path,
+    is_dir: bool,
+    is_d_folder: bool,
+    kind: str,
+    modified: float,
+) -> dict:
+    return {
+        "name": name,
+        "path": path,
+        "parent": _browser_search_parent_label(parent_path, search_root),
+        "parent_path": str(parent_path),
+        "is_dir": is_dir,
+        "is_d_folder": is_d_folder,
+        "kind": kind,
+        "modified": modified,
+    }
+
+
+def _search_browser_items(
+    path: Union[str, Path],
+    search: str,
+    limit: int = DEFAULT_BROWSER_SEARCH_LIMIT,
+) -> dict:
+    root = Path(_normalize_filesystem_path(str(path)))
+    query = str(search or "").strip()
+    capped_limit = max(1, min(int(limit or DEFAULT_BROWSER_SEARCH_LIMIT), 500))
+
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+    if not query:
+        return {"path": str(root), "items": [], "truncated": False}
+
+    results: list[dict] = []
+    max_results = capped_limit + 1
+
+    def append_item(item: dict) -> bool:
+        results.append(item)
+        return len(results) < max_results
+
+    def _collect_container_runs(container_path: Path, kind: str) -> bool:
+        runs = list_rslt_runs(str(container_path)) if kind == "rslt-run" else list_olax_runs(str(container_path))
+        modified = _safe_path_mtime(container_path)
+        for run in runs:
+            if not _browser_search_name_matches(run.get("name", ""), query):
+                continue
+            if not append_item(
+                _make_browser_search_item(
+                    name=str(run.get("name") or ""),
+                    path=str(run.get("path") or ""),
+                    parent_path=container_path,
+                    search_root=root,
+                    is_dir=False,
+                    is_d_folder=True,
+                    kind=kind,
+                    modified=modified,
+                )
+            ):
+                return False
+        return True
+
+    if root.is_file():
+        if root.suffix.lower() != OLAX_CONTAINER_SUFFIX:
+            raise HTTPException(status_code=400, detail="Not a searchable directory or container")
+        _collect_container_runs(root, "olax-run")
+        truncated = len(results) > capped_limit
+        return {"path": str(root), "items": results[:capped_limit], "truncated": truncated}
+
+    if root.suffix.lower() == RSLT_CONTAINER_SUFFIX:
+        _collect_container_runs(root, "rslt-run")
+        truncated = len(results) > capped_limit
+        return {"path": str(root), "items": results[:capped_limit], "truncated": truncated}
+
+    def _on_walk_error(exc):
+        if isinstance(exc, PermissionError):
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    for current_root, dirs, files in os.walk(root, onerror=_on_walk_error):
+        current_root_path = Path(current_root)
+        next_dirs: list[str] = []
+
+        for dirname in sorted((d for d in dirs if not d.startswith(".")), key=lambda value: value.lower()):
+            entry_path = current_root_path / dirname
+            modified = _safe_path_mtime(entry_path)
+
+            if _is_supported_sample_folder(entry_path):
+                if _browser_search_name_matches(dirname, query) and not append_item(
+                    _make_browser_search_item(
+                        name=dirname,
+                        path=str(entry_path),
+                        parent_path=current_root_path,
+                        search_root=root,
+                        is_dir=True,
+                        is_d_folder=True,
+                        kind="sample-folder",
+                        modified=modified,
+                    )
+                ):
+                    break
+                continue
+
+            if entry_path.suffix.lower() == RSLT_CONTAINER_SUFFIX:
+                if _browser_search_name_matches(dirname, query) and not append_item(
+                    _make_browser_search_item(
+                        name=dirname,
+                        path=str(entry_path),
+                        parent_path=current_root_path,
+                        search_root=root,
+                        is_dir=True,
+                        is_d_folder=False,
+                        kind="rslt-container",
+                        modified=modified,
+                    )
+                ):
+                    break
+                if not _collect_container_runs(entry_path, "rslt-run"):
+                    break
+                continue
+
+            if _browser_search_name_matches(dirname, query) and not append_item(
+                _make_browser_search_item(
+                    name=dirname,
+                    path=str(entry_path),
+                    parent_path=current_root_path,
+                    search_root=root,
+                    is_dir=True,
+                    is_d_folder=False,
+                    kind="directory",
+                    modified=modified,
+                )
+            ):
+                break
+
+            next_dirs.append(dirname)
+
+        dirs[:] = next_dirs
+        if len(results) >= max_results:
+            break
+
+        for filename in sorted((f for f in files if not f.startswith(".")), key=lambda value: value.lower()):
+            entry_path = current_root_path / filename
+            modified = _safe_path_mtime(entry_path)
+
+            if _is_supported_sample_container(entry_path):
+                if _browser_search_name_matches(filename, query) and not append_item(
+                    _make_browser_search_item(
+                        name=filename,
+                        path=str(entry_path),
+                        parent_path=current_root_path,
+                        search_root=root,
+                        is_dir=True,
+                        is_d_folder=False,
+                        kind="olax-container",
+                        modified=modified,
+                    )
+                ):
+                    break
+                if not _collect_container_runs(entry_path, "olax-run"):
+                    break
+                continue
+
+            if _browser_search_name_matches(filename, query) and not append_item(
+                _make_browser_search_item(
+                    name=filename,
+                    path=str(entry_path),
+                    parent_path=current_root_path,
+                    search_root=root,
+                    is_dir=False,
+                    is_d_folder=False,
+                    kind="file",
+                    modified=modified,
+                )
+            ):
+                break
+
+        if len(results) >= max_results:
+            break
+
+    truncated = len(results) > capped_limit
+    return {"path": str(root), "items": results[:capped_limit], "truncated": truncated}
 
 
 def _recent_sequence_date_tokens(lookback_days: int) -> list[str]:
@@ -2134,12 +2342,14 @@ def browse_folder(
         raise HTTPException(status_code=404, detail="Path not found")
     if p.is_file() and p.suffix.lower() == OLAX_CONTAINER_SUFFIX:
         items = []
+        modified = _safe_path_mtime(p)
         for run in list_olax_runs(str(p)):
             item = {
                 "name": run["name"],
                 "path": run["path"],
                 "is_dir": False,
                 "is_d_folder": True,
+                "modified": modified,
             }
             items.append(item)
         return {"path": str(p), "items": items}
@@ -2148,12 +2358,14 @@ def browse_folder(
 
     items = []
     if p.suffix.lower() == ".rslt":
+        modified = _safe_path_mtime(p)
         for run in list_rslt_runs(str(p)):
             item = {
                 "name": run["name"],
                 "path": run["path"],
                 "is_dir": False,
                 "is_d_folder": True,
+                "modified": modified,
             }
             items.append(item)
         return {"path": str(p), "items": items}
@@ -2169,6 +2381,7 @@ def browse_folder(
                 "path": str(entry),
                 "is_dir": entry.is_dir() or is_container,
                 "is_d_folder": is_d,
+                "modified": _safe_path_mtime(entry),
             }
             if is_d and include_state:
                 item.update(_inspect_sample_run_state(entry))
@@ -2177,6 +2390,16 @@ def browse_folder(
         raise HTTPException(status_code=403, detail="Permission denied")
 
     return {"path": str(p), "items": items}
+
+
+@app.get("/api/search-browser")
+def search_browser(
+    path: str = Query(..., description="Directory or container to search"),
+    search: str = Query(..., description="Name fragment to match"),
+    limit: int = Query(DEFAULT_BROWSER_SEARCH_LIMIT, ge=1, le=500),
+):
+    """Recursively search browser-visible items under a path."""
+    return _search_browser_items(path, search, limit=limit)
 
 
 @app.get("/api/find-d-folders")

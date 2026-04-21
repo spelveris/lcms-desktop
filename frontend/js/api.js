@@ -54,6 +54,10 @@ const api = {
     })}`);
   },
 
+  searchBrowser(path, search, limit) {
+    return apiFetch(`/api/search-browser?${qs({ path, search, limit })}`);
+  },
+
   findDFolders(path, search) {
     return apiFetch(`/api/find-d-folders?${qs({ path, search })}`);
   },

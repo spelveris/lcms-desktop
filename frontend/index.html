@@ -47,14 +47,18 @@
         </div>
         <div id="mount-buttons" class="mount-buttons" style="display:none;"></div>
         <div class="sort-bar">
-          <label>Sort:</label>
+          <label for="sort-select">Sort:</label>
           <select id="sort-select">
             <option value="date-desc">Date Newest</option>
             <option value="date-asc">Date Oldest</option>
             <option value="name-asc">Name A-Z</option>
             <option value="name-desc">Name Z-A</option>
           </select>
+          <label for="file-search-input">Search:</label>
+          <input type="search" id="file-search-input" placeholder="Find names under this path" spellcheck="false">
+          <button id="file-search-clear" class="btn btn-sm" type="button">Clear</button>
         </div>
+        <div id="file-search-status" class="file-search-status" style="display:none;"></div>
         <div id="file-list" class="file-list"></div>
       </div>
     </div>
@@ -515,7 +519,7 @@
     <div id="tab-sequence-mod" class="tab-panel hidden">
       <div class="tab-toolbar">
         <button id="btn-seqmod-load-default" class="btn btn-primary">Load Default GFP</button>
-        <span class="toolbar-note">Click a residue in the viewer to select the edited site. The main deconvolution target is the average intact mass rounded to 2 decimals.</span>
+        <span class="toolbar-note">Click residues in the viewer to add edited sites. Standard mode applies one residue to every selected site; custom mode gives each selected site its own SMILES and mass input. The main deconvolution target is the average intact mass rounded to 2 decimals.</span>
       </div>
       <div class="sequence-mod-layout">
         <div class="sequence-mod-main">
@@ -532,8 +536,8 @@
 
           <div class="plot-container sequence-mod-sequence-card">
             <div class="sequence-mod-sequence-header">
-              <div id="seqmod-selected-site" class="sequence-mod-site-chip">Selected site: none</div>
-              <div class="toolbar-note">Positions are marked every 5 residues and each residue is clickable.</div>
+              <div id="seqmod-selected-site" class="sequence-mod-site-chip">Selected sites: none</div>
+              <div class="toolbar-note">Positions are marked every 5 residues. Click to add or focus a site; remove sites from the custom editor list.</div>
             </div>
             <div id="seqmod-sequence-viewer" class="sequence-mod-sequence-viewer">
               <p class="placeholder-msg">Load a sequence to start.</p>
@@ -585,27 +589,17 @@
                   <option value="*">* (Stop)</option>
                 </select>
               </label>
-              <span class="toolbar-note">Choose this mode when you want to replace the selected site with a usual amino acid from the dropdown.</span>
+              <span class="toolbar-note">Choose this mode when you want to replace every selected site with the same canonical residue from the dropdown.</span>
             </div>
             <div id="seqmod-custom-panel" class="hidden">
-              <div class="molecule-tools-row">
-                <label class="sequence-mod-inline-label">Custom Residue Label
-                <input type="text" id="seqmod-mod-label" value="Custom residue" placeholder="e.g. BocK, AzF, custom ncAA">
-                </label>
-                <label class="sequence-mod-inline-label">Custom Residue Mass Input (Da)
-                <input type="number" id="seqmod-mod-delta" value="0" step="0.00001">
-                </label>
+              <div id="seqmod-custom-list" class="sequence-mod-custom-list">
+                <p class="placeholder-msg">Select one or more residues in the viewer to create custom modification inputs.</p>
               </div>
               <div class="molecule-tools-row">
-                <label class="sequence-mod-smiles-label">SMILES For Custom Replacement Residue
-                  <input type="text" id="seqmod-smiles-input" spellcheck="false" placeholder="Paste the custom residue or precursor you want to replace the selected site with">
-                </label>
-                <button id="btn-seqmod-use-smiles" class="btn btn-sm btn-primary">Use SMILES Residue</button>
                 <button id="btn-seqmod-toggle-sketcher" class="btn btn-sm">Draw Residue</button>
-                <button id="btn-seqmod-use-drawn" class="btn btn-sm">Use Drawn Residue</button>
-                <button id="btn-seqmod-clear-mod" class="btn btn-sm">Clear Custom Residue</button>
+                <button id="btn-seqmod-use-drawn" class="btn btn-sm">Use Drawn Residue For Active Site</button>
               </div>
-              <div id="seqmod-smiles-result" class="toolbar-note">Use the drawn or pasted structure as the replacement residue for the selected site. A peptide-style -H2O insertion correction is applied automatically for custom replacement residues.</div>
+              <div id="seqmod-smiles-result" class="toolbar-note">Use the drawn or pasted structure as the replacement residue for the active selected site. A peptide-style -H2O insertion correction is applied automatically for custom replacement residues.</div>
               <div id="seqmod-sketcher-wrap" class="hidden">
                 <iframe id="seqmod-sketcher-frame" src="jsme-frame.html" style="width:100%;height:420px;border:none;background:#e0e0e0;"></iframe>
               </div>
