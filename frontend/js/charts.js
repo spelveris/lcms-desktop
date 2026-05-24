@@ -87,6 +87,146 @@ function downsamplePair(x, y, maxPoints = 8000) {
   return { x: xs, y: ys };
 }
 
+function finiteNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function gaussianSmoothProfile(raw, sigmaBins) {
+  const n = raw.length;
+  const sigma = Number(sigmaBins);
+  if (n === 0 || !Number.isFinite(sigma) || sigma <= 0) return raw;
+
+  const radius = Math.max(1, Math.ceil(sigma * 4.0));
+  const kernel = new Float64Array((radius * 2) + 1);
+  let kernelSum = 0;
+  for (let i = -radius; i <= radius; i++) {
+    const v = Math.exp(-0.5 * (i / sigma) ** 2);
+    kernel[i + radius] = v;
+    kernelSum += v;
+  }
+  if (kernelSum <= 0) return raw;
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= kernelSum;
+
+  const smoothed = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const start = Math.max(0, i - radius);
+    const end = Math.min(n - 1, i + radius);
+    let total = 0;
+    for (let j = start; j <= end; j++) {
+      total += raw[j] * kernel[j - i + radius];
+    }
+    smoothed[i] = total;
+  }
+  return smoothed;
+}
+
+function buildDenseZeroChargeProfile(mzValues, intensityValues, options = {}) {
+  const mzLength = mzValues && typeof mzValues.length === 'number' ? mzValues.length : 0;
+  const intensityLength = intensityValues && typeof intensityValues.length === 'number' ? intensityValues.length : 0;
+  const nInput = Math.min(mzLength, intensityLength);
+  if (nInput <= 0) return { massKDa: [], relativeIntensity: [] };
+
+  let massMin = finiteNumber(options.massMinDa, 1000.0);
+  let massMax = finiteNumber(options.massMaxDa, 50000.0);
+  if (massMax <= massMin) {
+    massMin = 1000.0;
+    massMax = 50000.0;
+  }
+
+  const mz = [];
+  const intensities = [];
+  for (let i = 0; i < nInput; i++) {
+    const m = Number(mzValues[i]);
+    const y = Number(intensityValues[i]);
+    if (Number.isFinite(m) && Number.isFinite(y) && y > 0) {
+      mz.push(m);
+      intensities.push(y);
+    }
+  }
+  if (mz.length === 0) return { massKDa: [], relativeIntensity: [] };
+
+  const requestedBinDa = Math.max(0.01, finiteNumber(options.binDa, 0.1));
+  const maxBins = Math.max(1000, Math.floor(finiteNumber(options.maxBins, 800000)));
+  const binDa = Math.max(requestedBinDa, (massMax - massMin) / maxBins);
+  const binCount = Math.max(1, Math.ceil((massMax - massMin) / binDa));
+  const rawProfile = new Float64Array(binCount);
+
+  const minCharge = Math.trunc(finiteNumber(options.minCharge, 1));
+  const maxCharge = Math.trunc(finiteNumber(options.maxCharge, 50));
+  const chargeLow = Math.max(1, Math.min(minCharge, maxCharge));
+  const chargeHigh = Math.max(chargeLow, Math.max(minCharge, maxCharge));
+  const protonMass = options.useMonoisotopic === true ? 1.007276 : 1.00784;
+
+  for (let charge = chargeLow; charge <= chargeHigh; charge++) {
+    const invCharge = 1 / charge;
+    for (let i = 0; i < mz.length; i++) {
+      const mass = (mz[i] - protonMass) * charge;
+      if (mass < massMin || mass > massMax) continue;
+      let binIndex = Math.floor((mass - massMin) / binDa);
+      if (binIndex < 0) binIndex = 0;
+      else if (binIndex >= binCount) binIndex = binCount - 1;
+      rawProfile[binIndex] += intensities[i] * invCharge;
+    }
+  }
+
+  const smoothSigmaDa = Math.max(0, finiteNumber(options.smoothSigmaDa, 2.0));
+  const smoothed = gaussianSmoothProfile(rawProfile, binDa > 0 ? smoothSigmaDa / binDa : 0);
+  let maxY = 0;
+  for (let i = 0; i < smoothed.length; i++) {
+    if (smoothed[i] > maxY) maxY = smoothed[i];
+  }
+  if (maxY <= 0) return { massKDa: [], relativeIntensity: [] };
+
+  const massKDa = new Float64Array(binCount);
+  const relativeIntensity = new Float64Array(binCount);
+  const scale = 100 / maxY;
+  for (let i = 0; i < binCount; i++) {
+    massKDa[i] = (massMin + ((i + 0.5) * binDa)) / 1000.0;
+    relativeIntensity[i] = smoothed[i] * scale;
+  }
+  return { massKDa, relativeIntensity };
+}
+
+function downsampleProfileEnvelope(xValues, yValues, maxPoints = 80000) {
+  const n = xValues && typeof xValues.length === 'number' ? xValues.length : 0;
+  if (n === 0 || n !== (yValues && yValues.length) || n <= maxPoints) {
+    return { x: xValues || [], y: yValues || [] };
+  }
+
+  const bucketSize = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(maxPoints / 2))));
+  const x = [];
+  const y = [];
+  let lastIndex = -1;
+
+  const pushIndex = (idx) => {
+    if (idx === lastIndex) return;
+    x.push(xValues[idx]);
+    y.push(yValues[idx]);
+    lastIndex = idx;
+  };
+
+  pushIndex(0);
+  for (let start = 0; start < n; start += bucketSize) {
+    const end = Math.min(n, start + bucketSize);
+    let minIdx = start;
+    let maxIdx = start;
+    for (let i = start + 1; i < end; i++) {
+      if (yValues[i] < yValues[minIdx]) minIdx = i;
+      if (yValues[i] > yValues[maxIdx]) maxIdx = i;
+    }
+    if (minIdx < maxIdx) {
+      pushIndex(minIdx);
+      pushIndex(maxIdx);
+    } else {
+      pushIndex(maxIdx);
+      pushIndex(minIdx);
+    }
+  }
+  pushIndex(n - 1);
+  return { x, y };
+}
+
 function clonePlotConfig(extra = {}) {
   const base = { ...PLOT_CONFIG };
   if (Array.isArray(PLOT_CONFIG.modeBarButtonsToRemove)) {
@@ -1191,6 +1331,96 @@ const charts = {
       };
     }
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+  },
+
+  plotDenseDeconvolutedMassProfile(divId, spectrum, options = {}) {
+    const style = options.style || {};
+    let massMinDa = finiteNumber(style.deconv_x_min_da ?? options.massMinDa, 1000.0);
+    let massMaxDa = finiteNumber(style.deconv_x_max_da ?? options.massMaxDa, 50000.0);
+    if (massMaxDa <= massMinDa) {
+      massMinDa = 1000.0;
+      massMaxDa = 50000.0;
+    }
+    const profile = buildDenseZeroChargeProfile(
+      spectrum?.mz || [],
+      spectrum?.intensities || [],
+      {
+        massMinDa,
+        massMaxDa,
+        minCharge: style.deconv_profile_min_charge ?? options.minCharge,
+        maxCharge: style.deconv_profile_max_charge ?? options.maxCharge,
+        useMonoisotopic: style.deconv_profile_use_monoisotopic === true,
+        binDa: style.deconv_profile_bin_da ?? options.binDa,
+        smoothSigmaDa: style.deconv_profile_smooth_sigma_da ?? options.smoothSigmaDa,
+      },
+    );
+
+    const plotHeight = getContainerHeight(divId, Number(options.height) || 340);
+    const showTitle = style.deconv_show_title !== false;
+    const layout = mergeLayout({
+      title: { text: showTitle ? (options.title || 'Deconvoluted Masses') : '', font: { size: 14 } },
+      xaxis: {
+        title: 'Mass (kDa)',
+        range: [massMinDa / 1000.0, massMaxDa / 1000.0],
+        showgrid: false,
+        showline: true,
+        linecolor: '#000000',
+        ticks: 'outside',
+        mirror: false,
+        zeroline: false,
+        color: '#000000',
+        automargin: true,
+      },
+      yaxis: {
+        title: 'Relative Intensity (%)',
+        range: [0, 100],
+        showgrid: false,
+        showline: true,
+        linecolor: '#000000',
+        ticks: 'outside',
+        mirror: false,
+        zeroline: false,
+        color: '#000000',
+        automargin: true,
+      },
+      showlegend: false,
+      height: plotHeight,
+      margin: { l: 64, r: 44, t: showTitle ? 40 : 18, b: 66 },
+      dragmode: 'zoom',
+    });
+    layout.xaxis.showgrid = false;
+    layout.yaxis.showgrid = false;
+    applyExplicitPlotHeight(divId, plotHeight);
+
+    if (!profile.massKDa.length || !profile.relativeIntensity.length) {
+      layout.annotations = [{
+        xref: 'paper',
+        yref: 'paper',
+        x: 0.5,
+        y: 0.5,
+        showarrow: false,
+        text: 'No masses detected',
+        font: { size: 12, color: '#555555' },
+      }];
+      Plotly.newPlot(divId, [], layout, PLOT_CONFIG);
+      return;
+    }
+
+    const displayed = downsampleProfileEnvelope(profile.massKDa, profile.relativeIntensity, 80000);
+    const trace = {
+      x: displayed.x,
+      y: displayed.y,
+      type: displayed.x.length > 40000 ? 'scattergl' : 'scatter',
+      mode: 'lines',
+      line: {
+        color: '#000000',
+        width: Math.max(0.5, finiteNumber(style.line_width, getLineWidth())),
+      },
+      hovertemplate: 'Mass: %{x:.4f} kDa<br>Relative Intensity: %{y:.2f}%<extra></extra>',
+      showlegend: false,
+    };
+
+    Plotly.newPlot(divId, [trace], layout, PLOT_CONFIG);
   },
 
   plotIonDetail(divId, component) {

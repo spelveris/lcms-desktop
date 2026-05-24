@@ -59,6 +59,7 @@ const state = {
   deconvSamplePath: null,
   deconvTimeRange: null,
   deconvIonSelectionObjectUrl: null,
+  deconvDenseProfileRenderId: 0,
   deconvAutoRunSignature: '',
   deconvAutoRunInFlight: false,
   deconvSelectedComponentIndex: null,
@@ -899,6 +900,7 @@ function resetDeconvolutionView() {
   const ion = document.getElementById('deconv-ion-selection-plot');
   const detail = document.getElementById('deconv-ion-detail');
   const mass = document.getElementById('deconv-mass-plot');
+  const densePreview = document.getElementById('deconv-dense-mass-preview');
   const spectrum = document.getElementById('deconv-spectrum-plot');
   if (uv) uv.innerHTML = '';
   if (tic) tic.innerHTML = '';
@@ -906,6 +908,11 @@ function resetDeconvolutionView() {
   if (ion) ion.innerHTML = '';
   if (detail) detail.innerHTML = '';
   if (mass) mass.innerHTML = '';
+  if (densePreview) {
+    state.deconvDenseProfileRenderId += 1;
+    try { charts.clearPlot('deconv-dense-mass-preview'); } catch (_) {}
+    densePreview.innerHTML = '<p class="placeholder-msg">Run deconvolution to render the full dense mass profile.</p>';
+  }
   if (spectrum) spectrum.innerHTML = '';
   setDeconvEmptyState(true);
 }
@@ -1052,6 +1059,7 @@ function schedulePlotlyResize(plotIds = []) {
     : [
       'deconv-spectrum-plot',
       'deconv-mass-plot',
+      'deconv-dense-mass-preview',
       'deconv-uv-plot',
       'deconv-tic-plot',
       'deconv-ion-selection-plot',
@@ -1078,7 +1086,7 @@ function schedulePlotlyResize(plotIds = []) {
       'timechange-ms-plot',
       'timechange-ms-offset-plot',
     ];
-  const includesDeconvBottom = ids.includes('deconv-spectrum-plot') || ids.includes('deconv-mass-plot');
+  const includesDeconvBottom = ids.includes('deconv-spectrum-plot') || ids.includes('deconv-mass-plot') || ids.includes('deconv-dense-mass-preview');
   [0, 120, 280].forEach((delayMs) => {
     setTimeout(() => {
       if (includesDeconvBottom) syncDeconvBottomLayout();
@@ -6989,8 +6997,10 @@ function renderDeconvResults(data) {
     document.getElementById('deconv-mass-plot').innerHTML = '<p class="placeholder-msg">No masses deconvoluted</p>';
   }
 
+  void renderDeconvDenseMassPreview();
+
   // Ensure both side-by-side Plotly canvases reflow to container width.
-  schedulePlotlyResize(['deconv-spectrum-plot', 'deconv-mass-plot']);
+  schedulePlotlyResize(['deconv-spectrum-plot', 'deconv-mass-plot', 'deconv-dense-mass-preview']);
 
   // Results table
   const tableContainer = document.getElementById('deconv-results-table-container');
@@ -7055,6 +7065,18 @@ function buildCurrentDeconvStyle() {
   };
 }
 
+function applyDenseDeconvProfileStyle(style = {}) {
+  const params = getCurrentDeconvolutionParameters();
+  style.deconv_export_variant = 'dense-profile';
+  style.deconv_profile_bin_da = 0.10;
+  style.deconv_profile_smooth_sigma_da = 2.0;
+  style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
+  style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
+  style.deconv_profile_use_monoisotopic = params.monoisotopic === true;
+  style.show_grid = false;
+  return style;
+}
+
 function getSelectedDeconvComponent() {
   const components = getDeconvDisplayComponents();
   if (!Array.isArray(components) || components.length === 0) return null;
@@ -7071,6 +7093,59 @@ function getDeconvDisplayComponents() {
     expertMode: document.getElementById('expert-mode-toggle')?.checked === true,
     topN: DECONV_DISPLAY_TOP_N,
   });
+}
+
+function resetDeconvDenseMassProfile(message = 'Run deconvolution to render the full dense mass profile.') {
+  const container = document.getElementById('deconv-dense-mass-preview');
+  if (!container) return;
+  state.deconvDenseProfileRenderId += 1;
+  try { charts.clearPlot('deconv-dense-mass-preview'); } catch (_) {}
+  container.innerHTML = `<p class="placeholder-msg">${escapeHtml(message)}</p>`;
+}
+
+function renderDeconvDenseMassPreview() {
+  const container = document.getElementById('deconv-dense-mass-preview');
+  if (!container) return;
+
+  const samplePath = state.deconvSamplePath;
+  const spectrum = state.deconvResults?.spectrum || null;
+  const hasSpectrum = (
+    spectrum &&
+    Array.isArray(spectrum.mz) &&
+    spectrum.mz.length > 0 &&
+    Array.isArray(spectrum.intensities) &&
+    spectrum.intensities.length > 0
+  );
+
+  if (!samplePath || !hasSpectrum) {
+    resetDeconvDenseMassProfile();
+    return;
+  }
+
+  const renderId = state.deconvDenseProfileRenderId + 1;
+  state.deconvDenseProfileRenderId = renderId;
+  try { charts.clearPlot('deconv-dense-mass-preview'); } catch (_) {}
+  container.innerHTML = '<p class="muted" style="padding:10px 0;">Rendering dense mass profile...</p>';
+
+  setTimeout(() => {
+    if (
+      renderId !== state.deconvDenseProfileRenderId ||
+      state.deconvSamplePath !== samplePath ||
+      state.deconvResults?.spectrum !== spectrum
+    ) {
+      return;
+    }
+    try {
+      charts.plotDenseDeconvolutedMassProfile('deconv-dense-mass-preview', spectrum, {
+        style: applyDenseDeconvProfileStyle(buildCurrentDeconvStyle()),
+        height: 340,
+      });
+      schedulePlotlyResize(['deconv-dense-mass-preview']);
+    } catch (err) {
+      if (renderId !== state.deconvDenseProfileRenderId) return;
+      resetDeconvDenseMassProfile(`Dense plot failed: ${err.message || String(err)}`);
+    }
+  }, 0);
 }
 
 async function renderDeconvIonSelectionGraph() {
@@ -7194,14 +7269,7 @@ async function exportDeconvMasses(format) {
     style.deconv_selected_component = getSelectedDeconvComponent();
   }
   if (isDensePdf) {
-    const params = getCurrentDeconvolutionParameters();
-    style.deconv_export_variant = 'dense-profile';
-    style.deconv_profile_bin_da = 0.10;
-    style.deconv_profile_smooth_sigma_da = 2.0;
-    style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
-    style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
-    style.deconv_profile_use_monoisotopic = params.monoisotopic === true;
-    style.show_grid = false;
+    applyDenseDeconvProfileStyle(style);
   }
 
   const exportLabel = isDensePdf

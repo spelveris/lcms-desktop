@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.31">
+  <link rel="stylesheet" href="css/style.css?v=0.2.33">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -439,10 +439,18 @@
       </div>
       <div id="deconv-results" class="hidden">
         <div class="two-col deconv-results-grid">
-          <div class="col">
+          <div class="col deconv-spectrum-stack">
             <div id="deconv-spectrum-plot" class="plot-container" style="border-color:transparent;"></div>
+            <div class="deconv-dense-preview-card">
+              <div class="tab-toolbar" style="margin:0 0 8px 0;">
+                <span class="toolbar-note">Full Deconvoluted Spectrum</span>
+              </div>
+              <div id="deconv-dense-mass-preview" class="deconv-dense-preview">
+                <p class="placeholder-msg">Run deconvolution to render the full dense mass profile.</p>
+              </div>
+            </div>
           </div>
-          <div class="col">
+          <div class="col deconv-mass-stack">
             <div class="deconv-mass-card">
               <div id="deconv-mass-plot" class="deconv-mass-plot-inner"></div>
               <div class="deconv-mass-download-row">
@@ -756,9 +764,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.31"></script>
-  <script src="js/charts.js?v=0.2.31"></script>
-  <script src="js/quotes.js?v=0.2.31"></script>
-  <script src="js/app.js?v=0.2.31"></script>
+  <script src="js/api.js?v=0.2.33"></script>
+  <script src="js/charts.js?v=0.2.33"></script>
+  <script src="js/quotes.js?v=0.2.33"></script>
+  <script src="js/app.js?v=0.2.33"></script>
 </body>
 </html>

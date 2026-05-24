@@ -1400,9 +1400,58 @@ input[type="radio"] {
   min-width: 0;
 }
 
+.deconv-spectrum-stack {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deconv-mass-stack {
+  flex-direction: column;
+  gap: 12px;
+}
+
 .deconv-results-grid > .col > #deconv-spectrum-plot,
-.deconv-results-grid > .col > .deconv-mass-card {
+.deconv-results-grid > .col > .deconv-mass-card,
+.deconv-results-grid > .col > .deconv-dense-preview-card {
   width: 100%;
+}
+
+.deconv-dense-preview-card {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.deconv-dense-preview {
+  background: #ffffff;
+  border: 1px solid #d8d8d8;
+  border-radius: var(--radius);
+  padding: 8px;
+  width: 100%;
+  min-height: 340px;
+  height: 340px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.deconv-dense-preview.js-plotly-plot {
+  display: block;
+  padding: 0;
+}
+
+.deconv-dense-preview img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
 /* ===== Progression Assignments ===== */
