@@ -8034,7 +8034,7 @@ function getTimeChangePlotSpectra(data) {
 }
 
 function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength) {
-  const spacingMultiplier = 1.5;
+  const spacingMultiplier = 2.25;
   const xOffsetStep = (kind === 'uv' ? 0.10 : 20.0) * spacingMultiplier;
   let yOffsetStep = 10.0 * spacingMultiplier;
   if (!normalize) {
