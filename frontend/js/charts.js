@@ -1219,13 +1219,19 @@ const charts = {
       type: 'scatter',
       mode: 'lines',
       name: s.label || `Sample ${i + 1}`,
-      line: { color: getColor(i), width: getLineWidth() },
+      line: {
+        color: s.color || getColor(i),
+        width: s.width || getLineWidth(),
+        dash: s.dash || 'solid',
+      },
+      showlegend: s.showLegend !== false,
+      hoverinfo: s.hoverInfo || undefined,
     }));
 
     const layout = mergeLayout({
       title: { text: options.title || 'Summed Mass Spectra', font: { size: 14 } },
-      xaxis: { title: 'm/z' },
-      yaxis: { title: options.normalize ? 'Relative Intensity' : 'Intensity' },
+      xaxis: { title: options.xTitle || 'm/z' },
+      yaxis: { title: options.yTitle || (options.normalize ? 'Relative Intensity' : 'Intensity') },
       showlegend: true, height: getContainerHeight(divId, 350),
     });
 

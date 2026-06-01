@@ -7859,9 +7859,10 @@ function exportBatchDeconvCSV() {
   toast('Batch deconvolution CSV exported', 'success');
 }
 
-// ===== Time Change MS Tab =====
+// ===== Time Change Tab =====
 function initTimeChangeMS() {
-  document.getElementById('btn-run-time-change-ms').addEventListener('click', runTimeChangeMS);
+  document.getElementById('btn-run-time-change-ms').addEventListener('click', () => runTimeChangeMS('ms'));
+  document.getElementById('btn-run-time-change-uv')?.addEventListener('click', () => runTimeChangeMS('uv'));
   document.getElementById('timechange-normalize').addEventListener('change', async () => {
     if (!state.timeChangeMSData) return;
     const panel = document.getElementById('tab-time-change-ms');
@@ -7871,81 +7872,254 @@ function initTimeChangeMS() {
     try {
       renderTimeChangeMS(state.timeChangeMSData);
     } catch (err) {
-      toast(`Time Change MS render failed: ${err.message}`, 'error');
+      toast(`Time Change render failed: ${err.message}`, 'error');
     } finally {
       if (panel) panel.classList.remove('is-busy');
       hideLoading();
     }
   });
   document.querySelectorAll('.btn-export-timechange').forEach(btn => {
-    btn.addEventListener('click', () => exportAllPlots('tab-time-change-ms', 'time_change_ms', btn.dataset.format));
+    btn.addEventListener('click', () => exportTimeChangeOffset(btn.dataset.format));
   });
 }
 
-async function runTimeChangeMS() {
+function getTimeChangeSignalKind() {
+  return state.timeChangeMSData?.kind === 'uv' ? 'uv' : 'ms';
+}
+
+function getTimeChangeSignalLabel(kind = getTimeChangeSignalKind()) {
+  return kind === 'uv' ? 'UV' : 'Mass';
+}
+
+async function resolveTimeChangeUvWavelength() {
+  const checked = getSelectedWavelengths().find((wl) => Number.isFinite(Number(wl)));
+  if (Number.isFinite(Number(checked))) return Number(checked);
+
+  for (const file of state.selectedFiles) {
+    let meta = state.loadedSamples[file.path];
+    if (!meta) {
+      try {
+        meta = await loadSampleMeta(file.path, { silent: true });
+      } catch (_) {
+        meta = null;
+      }
+    }
+    const wavelengths = Array.isArray(meta?.uv_wavelengths)
+      ? meta.uv_wavelengths
+      : (Array.isArray(meta?.wavelengths) ? meta.wavelengths : []);
+    const first = wavelengths.map((wl) => Number(wl)).find((wl) => Number.isFinite(wl));
+    if (Number.isFinite(first)) return first;
+  }
+
+  return NaN;
+}
+
+async function runTimeChangeMS(kind = 'ms') {
   if (state.selectedFiles.length < 2) {
-    toast('Select at least 2 samples for Time Change MS', 'warning');
+    toast('Select at least 2 samples for Time Change', 'warning');
     return;
   }
 
-  showLoading('Generating summed spectra...');
+  kind = kind === 'uv' ? 'uv' : 'ms';
+  const signalLabel = getTimeChangeSignalLabel(kind);
+  const wavelength = kind === 'uv' ? await resolveTimeChangeUvWavelength() : null;
+  if (kind === 'uv' && !Number.isFinite(wavelength)) {
+    toast('Select a UV wavelength in Settings first', 'warning');
+    return;
+  }
+
+  showLoading(kind === 'uv' ? 'Generating UV traces...' : 'Generating mass spectra...');
   try {
     const spectra = [];
     for (const file of state.selectedFiles) {
-      let start = parseFloat(document.getElementById('deconv-start').value) || 0;
-      let end = parseFloat(document.getElementById('deconv-end').value) || (start + 1);
-
-      try {
-        const autoWindow = await api.autoDetectWindow(file.path);
-        if (Number.isFinite(autoWindow.start) && Number.isFinite(autoWindow.end) && autoWindow.end > autoWindow.start) {
-          start = autoWindow.start;
-          end = autoWindow.end;
+      if (kind === 'uv') {
+        try {
+          const uv = await api.getUVChromatogram(
+            file.path,
+            wavelength,
+            parseInt(document.getElementById('uv-smoothing')?.value, 10) || 0,
+          );
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            wavelength,
+            status: 'ok',
+            error: '',
+            times: uv.times || [],
+            intensities: uv.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            wavelength,
+            status: 'error',
+            error: err.message || String(err),
+            times: [],
+            intensities: [],
+          });
         }
-      } catch (_) {
-        // Keep fallback window for this sample
-      }
+      } else {
+        let start = parseFloat(document.getElementById('deconv-start').value) || 0;
+        let end = parseFloat(document.getElementById('deconv-end').value) || (start + 1);
 
-      try {
-        const summed = await api.getSummedSpectrum(file.path, start, end);
-        spectra.push({
-          name: file.name,
-          path: file.path,
-          start,
-          end,
-          status: 'ok',
-          error: '',
-          mz: summed.mz || [],
-          intensities: summed.intensities || [],
-        });
-      } catch (err) {
-        spectra.push({
-          name: file.name,
-          path: file.path,
-          start,
-          end,
-          status: 'error',
-          error: err.message || String(err),
-          mz: [],
-          intensities: [],
-        });
+        try {
+          const autoWindow = await api.autoDetectWindow(file.path);
+          if (Number.isFinite(autoWindow.start) && Number.isFinite(autoWindow.end) && autoWindow.end > autoWindow.start) {
+            start = autoWindow.start;
+            end = autoWindow.end;
+          }
+        } catch (_) {
+          // Keep fallback window for this sample
+        }
+
+        try {
+          const summed = await api.getSummedSpectrum(file.path, start, end);
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            start,
+            end,
+            status: 'ok',
+            error: '',
+            mz: summed.mz || [],
+            intensities: summed.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            start,
+            end,
+            status: 'error',
+            error: err.message || String(err),
+            mz: [],
+            intensities: [],
+          });
+        }
       }
     }
 
-    state.timeChangeMSData = { generatedAt: new Date().toISOString(), spectra };
+    state.timeChangeMSData = { generatedAt: new Date().toISOString(), kind, wavelength, spectra };
     renderTimeChangeMS(state.timeChangeMSData);
     renderReportSummary();
 
     const okCount = spectra.filter(s => s.status === 'ok').length;
-    toast(`Time Change MS complete (${okCount}/${spectra.length} succeeded)`, okCount > 0 ? 'success' : 'warning');
+    toast(`Time Change ${signalLabel} complete (${okCount}/${spectra.length} succeeded)`, okCount > 0 ? 'success' : 'warning');
   } catch (err) {
-    toast(`Time Change MS failed: ${err.message}`, 'error');
+    toast(`Time Change failed: ${err.message}`, 'error');
   } finally {
     hideLoading();
   }
 }
 
+function getTimeChangePlotSpectra(data) {
+  const kind = data?.kind === 'uv' ? 'uv' : 'ms';
+  return (data?.spectra || [])
+    .filter((s) => {
+      const xValues = kind === 'uv' ? s.times : s.mz;
+      return Array.isArray(xValues) && Array.isArray(s.intensities) && xValues.length > 0 && s.intensities.length > 0;
+    })
+    .map((s) => ({
+      label: s.name,
+      x: kind === 'uv' ? s.times : s.mz,
+      mz: kind === 'uv' ? s.times : s.mz,
+      intensities: s.intensities,
+      maxIntensity: maxFiniteValue(s.intensities),
+    }));
+}
+
+function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength) {
+  const spacingMultiplier = 1.5;
+  const xOffsetStep = (kind === 'uv' ? 0.10 : 20.0) * spacingMultiplier;
+  let yOffsetStep = 10.0 * spacingMultiplier;
+  if (!normalize) {
+    const globalYMax = plotSpectra.reduce((acc, s) => Math.max(acc, s.maxIntensity || 0), 0);
+    yOffsetStep = (globalYMax > 0 ? globalYMax * 0.10 : 1.0) * spacingMultiplier;
+  }
+  const wavelengthLabel = Number.isFinite(Number(wavelength)) ? Number(wavelength).toFixed(0) : '';
+  const xTitle = kind === 'uv' ? 'Time (min)' : 'm/z';
+  const yTitle = kind === 'uv'
+    ? `Absorbance${wavelengthLabel ? ` (${wavelengthLabel} nm)` : ''}`
+    : (normalize ? 'Relative Intensity + offset' : 'Intensity + offset');
+  const baseTitle = kind === 'uv'
+    ? `UV ${wavelengthLabel} nm`
+    : 'Summed Mass Spectrum';
+  return {
+    xOffsetStep,
+    yOffsetStep,
+    xTitle,
+    yTitle,
+    overlapTitle: `${baseTitle} Overlap`,
+    exportTitle: `${baseTitle} Offset`,
+    offsetTitle: `${baseTitle} (Diagonal Offset: +${xOffsetStep.toFixed(kind === 'uv' ? 2 : 0)} ${xTitle}, +${normalize ? yOffsetStep.toFixed(0) : yOffsetStep.toPrecision(2)} intensity units per trace)`,
+  };
+}
+
+function interpolateTimeChangeY(xValues, yValues, targetX) {
+  const n = Math.min(
+    Array.isArray(xValues) ? xValues.length : 0,
+    Array.isArray(yValues) ? yValues.length : 0,
+  );
+  if (n <= 0) return 0;
+  if (n === 1) return Number(yValues[0]) || 0;
+  const x = Number(targetX);
+  if (!Number.isFinite(x)) return Number(yValues[0]) || 0;
+  const firstX = Number(xValues[0]);
+  const lastX = Number(xValues[n - 1]);
+  if (!Number.isFinite(firstX) || x <= firstX) return Number(yValues[0]) || 0;
+  if (!Number.isFinite(lastX) || x >= lastX) return Number(yValues[n - 1]) || 0;
+  for (let i = 1; i < n; i++) {
+    const x0 = Number(xValues[i - 1]);
+    const x1 = Number(xValues[i]);
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) continue;
+    if (x <= x1) {
+      const y0 = Number(yValues[i - 1]) || 0;
+      const y1 = Number(yValues[i]) || 0;
+      const t = (x - x0) / (x1 - x0);
+      return y0 + ((y1 - y0) * t);
+    }
+  }
+  return Number(yValues[n - 1]) || 0;
+}
+
+function buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, kind) {
+  if (!Array.isArray(plotSpectra) || plotSpectra.length < 2) return null;
+  const finiteStarts = plotSpectra
+    .map((s) => Number(Array.isArray(s.x) && s.x.length > 0 ? s.x[0] : NaN))
+    .filter((v) => Number.isFinite(v));
+  if (finiteStarts.length === 0) return null;
+  const anchorX = kind === 'uv' ? 0 : Math.min(...finiteStarts);
+  const baseTrace = plotSpectra[0];
+  const baseRawY = interpolateTimeChangeY(baseTrace.x || [], baseTrace.intensities || [], anchorX);
+  const baseY = normalize
+    ? (baseTrace.maxIntensity > 0 ? (baseRawY * (100 / baseTrace.maxIntensity)) : baseRawY)
+    : baseRawY;
+  const guideX = [];
+  const guideY = [];
+  plotSpectra.forEach((_s, i) => {
+    guideX.push(anchorX + (i * offsetConfig.xOffsetStep));
+    guideY.push(baseY + (i * offsetConfig.yOffsetStep));
+  });
+  return {
+    label: 'Offset guide',
+    color: '#8c8c8c',
+    dash: 'dash',
+    width: 1,
+    showLegend: false,
+    hoverInfo: 'skip',
+    mz: guideX,
+    intensities: guideY,
+  };
+}
+
 function renderTimeChangeMS(data) {
   const spectra = data.spectra || [];
+  const kind = data.kind === 'uv' ? 'uv' : 'ms';
   const normalize = document.getElementById('timechange-normalize').checked;
   const plotContainer = document.getElementById('timechange-ms-plot');
   const offsetPlotContainer = document.getElementById('timechange-ms-offset-plot');
@@ -7957,66 +8131,130 @@ function renderTimeChangeMS(data) {
   }
   setTimeChangeEmptyState(false);
 
-  const plotSpectra = spectra
-    .filter(s => Array.isArray(s.mz) && Array.isArray(s.intensities) && s.mz.length > 0 && s.intensities.length > 0)
-    .map((s) => ({
-      label: s.name,
-      mz: s.mz,
-      intensities: s.intensities,
-      maxIntensity: maxFiniteValue(s.intensities),
-    }));
+  const plotSpectra = getTimeChangePlotSpectra(data);
 
   if (plotSpectra.length === 0) {
-    plotContainer.innerHTML = '<p class="placeholder-msg">No summed spectra available</p>';
-    offsetPlotContainer.innerHTML = '<p class="placeholder-msg">No offset spectra available</p>';
+    plotContainer.innerHTML = '<p class="placeholder-msg">No time-change data available</p>';
+    offsetPlotContainer.innerHTML = '<p class="placeholder-msg">No offset data available</p>';
   } else {
+    const offsetConfig = getTimeChangeOffsetConfig(plotSpectra, normalize, kind, data.wavelength);
     charts.plotMassSpectraOverlay('timechange-ms-plot', plotSpectra, {
       normalize,
-      title: 'Summed Mass Spectrum',
+      title: offsetConfig.overlapTitle,
+      xTitle: offsetConfig.xTitle,
+      yTitle: kind === 'uv' ? offsetConfig.yTitle : (normalize ? 'Relative Intensity' : 'Intensity'),
     });
-
-    const xOffsetStep = 20.0;
-    let yOffsetStep = 10.0;
-    if (!normalize) {
-      const globalYMax = plotSpectra.reduce((acc, s) => Math.max(acc, s.maxIntensity || 0), 0);
-      yOffsetStep = globalYMax > 0 ? globalYMax * 0.10 : 1.0;
-    }
 
     const shifted = plotSpectra.map((s, i) => ({
       label: s.label,
-      mz: (s.mz || []).map(v => v + i * xOffsetStep),
+      color: charts.getColor(i),
+      mz: (s.x || []).map(v => v + i * offsetConfig.xOffsetStep),
       intensities: (s.intensities || []).map((v) => {
         const raw = Number(v);
         const base = Number.isFinite(raw) ? raw : 0;
-        if (!normalize) return base + i * yOffsetStep;
+        if (!normalize) return base + i * offsetConfig.yOffsetStep;
         const scale = s.maxIntensity > 0 ? (100 / s.maxIntensity) : 1;
-        return base * scale + i * yOffsetStep;
+        return base * scale + i * offsetConfig.yOffsetStep;
       }),
     }));
+    const guideTrace = buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, kind);
+    const shiftedBackToFront = guideTrace ? [guideTrace, ...[...shifted].reverse()] : [...shifted].reverse();
 
-    charts.plotMassSpectraOverlay('timechange-ms-offset-plot', shifted, {
+    charts.plotMassSpectraOverlay('timechange-ms-offset-plot', shiftedBackToFront, {
       normalize: false,
-      title: `Summed Mass Spectrum (Diagonal Offset: +${xOffsetStep.toFixed(0)} m/z, +${normalize ? yOffsetStep.toFixed(0) : yOffsetStep.toPrecision(2)} intensity units per trace)`,
+      title: offsetConfig.offsetTitle,
+      xTitle: offsetConfig.xTitle,
+      yTitle: offsetConfig.yTitle,
     });
   }
 
+  const contextHeading = kind === 'uv' ? 'Signal' : 'Window (min)';
   let html = `<div class="data-table-wrapper"><table class="data-table">
     <thead><tr>
-      <th>Sample</th><th>Status</th><th>Window (min)</th><th>Points</th><th>Error</th>
+      <th>Sample</th><th>Status</th><th>${contextHeading}</th><th>Points</th><th>Error</th>
     </tr></thead><tbody>`;
 
   spectra.forEach((s) => {
-    const pointCount = Array.isArray(s.mz) ? s.mz.length : 0;
+    const xValues = kind === 'uv' ? s.times : s.mz;
+    const pointCount = Array.isArray(xValues) ? xValues.length : 0;
+    const contextValue = kind === 'uv'
+      ? `UV ${Number.isFinite(Number(s.wavelength)) ? Number(s.wavelength).toFixed(0) : ''} nm`
+      : `${Number.isFinite(s.start) ? s.start.toFixed(2) : '-'} - ${Number.isFinite(s.end) ? s.end.toFixed(2) : '-'}`;
     html += `<tr>
       <td>${escapeHtml(s.name)}</td>
       <td>${s.status}</td>
-      <td>${Number.isFinite(s.start) ? s.start.toFixed(2) : '-'} - ${Number.isFinite(s.end) ? s.end.toFixed(2) : '-'}</td>
+      <td>${contextValue}</td>
       <td>${pointCount}</td>
       <td>${escapeHtml(s.error || '')}</td>
     </tr>`;
   });
   html += '</tbody></table></div>';
   tableContainer.innerHTML = html;
+}
+
+async function exportTimeChangeOffset(format) {
+  if (!state.timeChangeMSData) {
+    toast('Generate Time Change first', 'warning');
+    return;
+  }
+
+  const kind = state.timeChangeMSData.kind === 'uv' ? 'uv' : 'ms';
+  const normalize = document.getElementById('timechange-normalize')?.checked === true;
+  const plotSpectra = getTimeChangePlotSpectra(state.timeChangeMSData);
+  if (plotSpectra.length === 0) {
+    toast('No offset plot available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+  const offsetConfig = getTimeChangeOffsetConfig(plotSpectra, normalize, kind, state.timeChangeMSData.wavelength);
+  const baseStyle = buildCurrentDeconvStyle();
+  const filenameBase = kind === 'uv'
+    ? `time_change_uv_${Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength).toFixed(0) + 'nm' : 'offset'}`
+    : 'time_change_mass_offset';
+
+  showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
+  try {
+    const response = await api.exportTimeChange({
+      format,
+      dpi,
+      filename_base: filenameBase,
+      traces: plotSpectra.map((trace) => ({
+        label: trace.label,
+        x: trace.x,
+        intensities: trace.intensities,
+      })),
+      style: {
+        fig_width: baseStyle.fig_width,
+        line_width: baseStyle.line_width,
+        show_grid: false,
+        show_title: baseStyle.deconv_show_title !== false,
+        signal_kind: kind,
+        normalize,
+        x_axis_width_multiplier: 2.0,
+        offset_angle_degrees: 45.0,
+        offset_guide: true,
+        offset_guide_anchor_x: kind === 'uv' ? 0.0 : null,
+        uv_wavelength_nm: Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength) : null,
+        x_offset_step: offsetConfig.xOffsetStep,
+        y_offset_step: offsetConfig.yOffsetStep,
+        title: offsetConfig.exportTitle,
+        x_label: offsetConfig.xTitle,
+        y_label: offsetConfig.yTitle,
+      },
+    });
+    const blob = await backendResponseToBlob(response);
+    const filename = getFilenameFromContentDisposition(
+      response.headers.get('content-disposition'),
+      `${sanitizeFilename(filenameBase)}.${format}`
+    );
+    downloadBlob(blob, filename);
+    toast(`Exported ${String(format || '').toUpperCase()}`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
 }
 
 // ===== Report Export Tab =====
@@ -8067,7 +8305,7 @@ function renderReportSummary() {
   lines.push(`<p><strong>Deconvolution:</strong> ${state.deconvResults ? 'ready' : 'not run'}</p>`);
   lines.push(`<p><strong>Batch deconvolution:</strong> ${state.batchDeconvData ? 'ready' : 'not run'}</p>`);
   lines.push(`<p><strong>Time progression:</strong> ${state.progressionData ? 'ready' : 'not run'}</p>`);
-  lines.push(`<p><strong>Time Change MS:</strong> ${state.timeChangeMSData ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Time Change:</strong> ${state.timeChangeMSData ? 'ready' : 'not run'}</p>`);
   container.innerHTML = lines.join('');
 }
 
@@ -8083,7 +8321,7 @@ function exportSessionJSON() {
       eic_batch: state.eicBatchData,
       deconvolution: state.deconvResults,
       batch_deconvolution: state.batchDeconvData,
-      time_change_ms: state.timeChangeMSData,
+      time_change: state.timeChangeMSData,
     },
   };
   downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), 'lcms_session_report.json');
@@ -8098,7 +8336,7 @@ function exportReportSummaryCSV() {
   rows.push(['Deconvolution', state.deconvResults ? 'ok' : 'not_run', state.deconvResults ? `${(state.deconvResults.components || []).length} components` : '']);
   rows.push(['Batch Deconvolution', state.batchDeconvData ? 'ok' : 'not_run', state.batchDeconvData ? `${(state.batchDeconvData.samples || []).length} samples` : '']);
   rows.push(['Time Progression', state.progressionData ? 'ok' : 'not_run', '']);
-  rows.push(['Time Change MS', state.timeChangeMSData ? 'ok' : 'not_run', state.timeChangeMSData ? `${(state.timeChangeMSData.spectra || []).length} spectra` : '']);
+  rows.push(['Time Change', state.timeChangeMSData ? 'ok' : 'not_run', state.timeChangeMSData ? `${(state.timeChangeMSData.spectra || []).length} traces` : '']);
 
   const csv = rows.map(r => r.join(',')).join('\n');
   downloadBlob(new Blob([csv], { type: 'text/csv' }), 'lcms_report_summary.csv');

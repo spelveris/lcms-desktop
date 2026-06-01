@@ -138,10 +138,14 @@ function run() {
     lcmsAppPath,
     "--add-data",
     `${lcmsAppPath}${dataSep}lcms_app`,
-    "--hidden-import",
-    "uvicorn",
-    serverPath
-  );
+	    "--hidden-import",
+	    "uvicorn",
+	    "--hidden-import",
+	    "matplotlib.backends.backend_svg",
+	    "--hidden-import",
+	    "matplotlib.backends.backend_pdf",
+	    serverPath
+	  );
 
   console.log(`Building backend with ${python} ...`);
 

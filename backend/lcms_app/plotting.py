@@ -1709,6 +1709,209 @@ def create_dense_deconvoluted_mass_profile_figure(
     return fig
 
 
+def _normalize_time_change_trace_payload(traces: list) -> list[dict]:
+    """Normalize time-change overlay traces for export rendering."""
+    normalized: list[dict] = []
+    for index, trace in enumerate(traces or []):
+        if not isinstance(trace, dict):
+            continue
+        raw_x = trace.get('x')
+        if raw_x is None:
+            raw_x = trace.get('mz')
+        if raw_x is None:
+            raw_x = trace.get('times')
+        raw_y = trace.get('intensities')
+        if raw_y is None:
+            raw_y = trace.get('y')
+
+        try:
+            x_count = len(raw_x) if raw_x is not None else 0
+            y_count = len(raw_y) if raw_y is not None else 0
+            count = min(x_count, y_count)
+        except Exception:
+            count = 0
+        if count <= 0:
+            continue
+
+        x_values = np.asarray(list(raw_x)[:count], dtype=float)
+        y_values = np.asarray(list(raw_y)[:count], dtype=float)
+        finite_mask = np.isfinite(x_values) & np.isfinite(y_values)
+        if not np.any(finite_mask):
+            continue
+
+        x_values = x_values[finite_mask]
+        y_values = y_values[finite_mask]
+        if x_values.size == 0:
+            continue
+
+        order = np.argsort(x_values)
+        label = str(trace.get('label') or trace.get('name') or f"Trace {index + 1}")
+        normalized.append({
+            'label': label,
+            'x': x_values[order],
+            'y': y_values[order],
+        })
+    return normalized
+
+
+def create_time_change_offset_figure(
+    traces: list,
+    style: Optional[dict] = None,
+) -> matplotlib.figure.Figure:
+    """Create the Time Change diagonal offset export with deconvolution panel sizing."""
+    style = style or {}
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    x_axis_width_multiplier = max(1.0, _coerce_finite_float(style.get('x_axis_width_multiplier', 2.0), 2.0))
+    fig, ax = plt.subplots(1, 1, figsize=(panel_width_in * x_axis_width_multiplier, panel_height_in))
+    _apply_locked_deconvolution_export_layout(fig)
+
+    normalized_traces = _normalize_time_change_trace_payload(traces)
+    signal_kind = str(style.get('signal_kind', 'ms') or 'ms').lower()
+    normalize = _coerce_bool(style.get('normalize', False), False)
+    line_width = max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
+    show_grid = _coerce_bool(style.get('show_grid', False), False)
+    show_title = _coerce_bool(style.get('show_title', True), True)
+    colors = ['#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
+              '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+
+    default_x_offset = 0.10 if signal_kind == 'uv' else 20.0
+    x_offset_step = _coerce_finite_float(style.get('x_offset_step'), default_x_offset)
+
+    global_y_max = 0.0
+    for trace in normalized_traces:
+        if trace['y'].size > 0:
+            global_y_max = max(global_y_max, float(np.nanmax(trace['y'])))
+    default_y_offset = 10.0 if normalize else (global_y_max * 0.10 if global_y_max > 0 else 1.0)
+    y_offset_step = _coerce_finite_float(style.get('y_offset_step'), default_y_offset)
+    show_offset_guide = _coerce_bool(style.get('offset_guide', True), True)
+
+    def _interp_trace_y(trace: dict, x_value: float) -> float:
+        x_values = trace['x']
+        y_values = trace['y']
+        if x_values.size == 0 or y_values.size == 0:
+            return 0.0
+        if x_values.size == 1:
+            return float(y_values[0])
+        if x_value <= float(x_values[0]):
+            return float(y_values[0])
+        if x_value >= float(x_values[-1]):
+            return float(y_values[-1])
+        return float(np.interp(x_value, x_values, y_values))
+
+    def _offset_guide_anchor_x() -> float:
+        starts = [float(trace['x'][0]) for trace in normalized_traces if trace['x'].size > 0]
+        default_anchor = 0.0 if signal_kind == 'uv' else (min(starts) if starts else 0.0)
+        return _coerce_finite_float(style.get('offset_guide_anchor_x'), default_anchor)
+
+    def _plot_offset_traces(current_y_offset: float) -> dict[int, object]:
+        ax.cla()
+        legend_handles = {}
+        for index, trace in reversed(list(enumerate(normalized_traces))):
+            x_values = trace['x'] + (index * x_offset_step)
+            y_values = trace['y'].astype(float, copy=True)
+            if normalize:
+                trace_max = float(np.nanmax(y_values)) if y_values.size > 0 else 0.0
+                if trace_max > 0:
+                    y_values = (y_values / trace_max) * 100.0
+            y_values = y_values + (index * current_y_offset)
+            (line,) = ax.plot(
+                x_values,
+                y_values,
+                linewidth=line_width,
+                color=colors[index % len(colors)],
+                label=trace['label'],
+                zorder=len(normalized_traces) - index,
+            )
+            legend_handles[index] = line
+        if show_offset_guide and len(normalized_traces) > 1:
+            anchor_x = _offset_guide_anchor_x()
+            base_trace = normalized_traces[0]
+            base_y = _interp_trace_y(base_trace, anchor_x)
+            if normalize:
+                base_trace_max = float(np.nanmax(base_trace['y'])) if base_trace['y'].size > 0 else 0.0
+                if base_trace_max > 0:
+                    base_y = (base_y / base_trace_max) * 100.0
+            guide_x = []
+            guide_y = []
+            for index, _trace in enumerate(normalized_traces):
+                guide_x.append(anchor_x + (index * x_offset_step))
+                guide_y.append(base_y + (index * current_y_offset))
+            ax.plot(
+                guide_x,
+                guide_y,
+                color='#8c8c8c',
+                linewidth=0.8,
+                linestyle='--',
+                alpha=0.75,
+                zorder=0.5,
+            )
+        return legend_handles
+
+    target_angle = _coerce_finite_float(style.get('offset_angle_degrees'), np.nan)
+    if normalized_traces and np.isfinite(target_angle) and 0.0 < target_angle < 90.0 and x_offset_step > 0:
+        target_tan = float(np.tan(np.deg2rad(target_angle)))
+        for _ in range(4):
+            _plot_offset_traces(y_offset_step)
+            fig.canvas.draw()
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            x_span = float(xlim[1] - xlim[0])
+            y_span = float(ylim[1] - ylim[0])
+            axis_bounds = ax.get_position().bounds
+            fig_width_in, fig_height_in = fig.get_size_inches()
+            axis_width_in = float(axis_bounds[2] * fig_width_in)
+            axis_height_in = float(axis_bounds[3] * fig_height_in)
+            if x_span <= 0 or y_span <= 0 or axis_height_in <= 0:
+                break
+            next_y_offset = target_tan * x_offset_step * (y_span / x_span) * (axis_width_in / axis_height_in)
+            if not np.isfinite(next_y_offset) or next_y_offset <= 0:
+                break
+            if abs(next_y_offset - y_offset_step) <= max(1e-9, abs(y_offset_step) * 1e-6):
+                y_offset_step = next_y_offset
+                break
+            y_offset_step = next_y_offset
+
+    legend_handles = _plot_offset_traces(y_offset_step)
+
+    if not normalized_traces:
+        ax.text(0.5, 0.5, "No time-change data", ha='center', va='center', transform=ax.transAxes)
+
+    title = str(style.get('title') or 'Time Change')
+    x_label = str(style.get('x_label') or ('Time (min)' if signal_kind == 'uv' else 'm/z'))
+    wavelength_nm = _coerce_finite_float(style.get('uv_wavelength_nm'), np.nan)
+    absorbance_label = f"Absorbance ({wavelength_nm:.0f} nm)" if np.isfinite(wavelength_nm) else "Absorbance"
+    default_y_label = absorbance_label if signal_kind == 'uv' else (
+        'Relative Intensity + offset' if normalize else 'Intensity + offset'
+    )
+    y_label = str(style.get('y_label') or default_y_label)
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    if show_title:
+        ax.set_title(title, fontweight='bold', y=1.03)
+    if normalized_traces:
+        ordered_indexes = sorted(legend_handles)
+        ax.legend(
+            [legend_handles[index] for index in ordered_indexes],
+            [normalized_traces[index]['label'] for index in ordered_indexes],
+            loc='upper right',
+            fontsize='small',
+            frameon=False,
+        )
+    if show_grid:
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.grid(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    if not normalize:
+        _apply_safe_scientific_y_format(ax, scilimits=(0, 0))
+
+    _apply_locked_deconvolution_export_layout(fig)
+    return fig
+
+
 def create_deconvolution_figure(sample, start_time: float, end_time: float,
                                  deconv_results: list,
                                  style: dict = None) -> matplotlib.figure.Figure:

@@ -166,6 +166,14 @@ const api = {
     });
   },
 
+  exportTimeChange(payload) {
+    return apiFetch('/api/export-time-change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   exportSingleSample(payload) {
     return apiFetch('/api/export-single-sample', {
       method: 'POST',

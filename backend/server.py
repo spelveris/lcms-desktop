@@ -3565,7 +3565,7 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
         fig = plotting.create_deconvoluted_masses_figure(sample_name, components, style, spectrum=spectrum)
     try:
         if export_format == "svg":
-            content = plotting.export_figure_svg(fig)
+            content = plotting.export_figure_svg(fig, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
             content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
@@ -3588,6 +3588,52 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     else:
         filename_suffix = "batch_deconvoluted_masses"
     filename = f"{safe_name}_{filename_suffix}.{export_format}"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/export-time-change")
+def export_time_change(payload: dict = Body(...)):
+    """Export the Time Change diagonal offset plot with deconvolution export sizing."""
+    traces = payload.get("traces", [])
+    if not isinstance(traces, list):
+        raise HTTPException(status_code=400, detail="traces must be a list")
+
+    export_format = str(payload.get("format", "png")).lower()
+    if export_format not in {"png", "svg", "pdf"}:
+        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    style = payload.get("style", {})
+    if not isinstance(style, dict):
+        style = {}
+
+    fig = plotting.create_time_change_offset_figure(traces, style)
+    try:
+        if export_format == "svg":
+            content = plotting.export_figure_svg(fig, tight=False)
+            media_type = "image/svg+xml"
+        elif export_format == "pdf":
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            media_type = "application/pdf"
+        else:
+            content = plotting.export_figure(fig, dpi=dpi, format="png")
+            media_type = "image/png"
+    finally:
+        plt.close(fig)
+
+    filename_base = str(payload.get("filename_base") or "time_change_offset")
+    safe_name = _sanitize_filename(filename_base, fallback="time_change_offset")
+    filename = f"{safe_name}.{export_format}"
 
     return Response(
         content=content,
@@ -3635,10 +3681,10 @@ def export_ion_selection(payload: dict = Body(...)):
     fig = plotting.create_ion_selection_figure(mz_arr, intensity_arr, components, style)
     try:
         if export_format == "svg":
-            content = plotting.export_figure_svg(fig)
+            content = plotting.export_figure_svg(fig, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
-            content = plotting.export_figure_pdf(fig, dpi=dpi)
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
             media_type = "application/pdf"
         else:
             content = plotting.export_figure(fig, dpi=dpi, format="png")

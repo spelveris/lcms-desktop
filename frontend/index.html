@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.33">
+  <link rel="stylesheet" href="css/style.css?v=0.2.34">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -191,7 +191,7 @@
       <button class="tab-btn" data-tab="tab-batch-deconv">Batch Deconvolution</button>
       <button class="tab-btn" data-tab="tab-progression">Time Progression</button>
       <button class="tab-btn" data-tab="tab-uptake-assay-cc">Uptake Assay CC</button>
-      <button class="tab-btn" data-tab="tab-time-change-ms">Time Change MS</button>
+      <button class="tab-btn" data-tab="tab-time-change-ms">Time Change</button>
       <button class="tab-btn" data-tab="tab-sequence-mod">Protein Mod Mass</button>
       <button class="tab-btn" data-tab="tab-masscalc">Mass Calculator</button>
       <button class="tab-btn" data-tab="tab-report">Report Export</button>
@@ -503,11 +503,12 @@
       </div>
     </div>
 
-    <!-- Tab: Time Change MS -->
+    <!-- Tab: Time Change -->
     <div id="tab-time-change-ms" class="tab-panel hidden">
       <div class="tab-toolbar">
         <span class="toolbar-note">Requires 2+ selected samples</span>
-        <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS Comparison</button>
+        <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS</button>
+        <button id="btn-run-time-change-uv" class="btn btn-primary">Generate UV</button>
         <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
         <div class="export-group">
           <button class="btn btn-sm btn-export-timechange" data-format="png">PNG</button>
@@ -764,9 +765,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.33"></script>
-  <script src="js/charts.js?v=0.2.33"></script>
-  <script src="js/quotes.js?v=0.2.33"></script>
-  <script src="js/app.js?v=0.2.33"></script>
+  <script src="js/api.js?v=0.2.34"></script>
+  <script src="js/charts.js?v=0.2.34"></script>
+  <script src="js/quotes.js?v=0.2.34"></script>
+  <script src="js/app.js?v=0.2.34"></script>
 </body>
 </html>
