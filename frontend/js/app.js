@@ -8034,7 +8034,7 @@ function getTimeChangePlotSpectra(data) {
 }
 
 function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength) {
-  const spacingMultiplier = 2.25;
+  const spacingMultiplier = 3.375;
   const xOffsetStep = (kind === 'uv' ? 0.10 : 20.0) * spacingMultiplier;
   let yOffsetStep = 10.0 * spacingMultiplier;
   if (!normalize) {
@@ -8055,7 +8055,7 @@ function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength) {
     xTitle,
     yTitle,
     overlapTitle: `${baseTitle} Overlap`,
-    exportTitle: `${baseTitle} Offset`,
+    exportTitle: kind === 'uv' ? 'Absorbance' : `${baseTitle} Offset`,
     offsetTitle: `${baseTitle} (Diagonal Offset: +${xOffsetStep.toFixed(kind === 'uv' ? 2 : 0)} ${xTitle}, +${normalize ? yOffsetStep.toFixed(0) : yOffsetStep.toPrecision(2)} intensity units per trace)`,
   };
 }
