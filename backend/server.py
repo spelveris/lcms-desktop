@@ -3565,7 +3565,7 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
         fig = plotting.create_deconvoluted_masses_figure(sample_name, components, style, spectrum=spectrum)
     try:
         if export_format == "svg":
-            content = plotting.export_figure_svg(fig, tight=False)
+            content = plotting.export_figure_pdf_matching_svg(fig, dpi=dpi, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
             content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
@@ -3620,7 +3620,7 @@ def export_time_change(payload: dict = Body(...)):
     fig = plotting.create_time_change_offset_figure(traces, style)
     try:
         if export_format == "svg":
-            content = plotting.export_figure_svg(fig, tight=False)
+            content = plotting.export_figure_pdf_matching_svg(fig, dpi=dpi, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
             content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
@@ -3681,7 +3681,7 @@ def export_ion_selection(payload: dict = Body(...)):
     fig = plotting.create_ion_selection_figure(mz_arr, intensity_arr, components, style)
     try:
         if export_format == "svg":
-            content = plotting.export_figure_svg(fig, tight=False)
+            content = plotting.export_figure_pdf_matching_svg(fig, dpi=dpi, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
             content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)

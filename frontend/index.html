@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.36">
+  <link rel="stylesheet" href="css/style.css?v=0.2.37">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -98,11 +98,11 @@
 
     <!-- Settings -->
     <div class="sidebar-section">
-      <div class="section-header" data-toggle="settings-content">
+      <div class="section-header collapsed" data-toggle="settings-content">
         <span>Settings</span>
         <span class="chevron">&#9660;</span>
       </div>
-      <div id="settings-content" class="section-content">
+      <div id="settings-content" class="section-content collapsed">
 
         <!-- UV Wavelengths -->
         <fieldset class="settings-group">
@@ -400,8 +400,8 @@
       </div>
       <div class="deconv-controls">
         <div class="input-row">
-          <label>Start (min)<input type="number" id="deconv-start" step="0.0001" value="0" min="0"></label>
-          <label>End (min)<input type="number" id="deconv-end" step="0.0001" value="30" min="0"></label>
+          <label>Start (min)<input type="number" id="deconv-start" step="0.05" value="0" min="0"></label>
+          <label>End (min)<input type="number" id="deconv-end" step="0.05" value="30" min="0"></label>
         </div>
         <label class="checkbox-label toggle-expert">
           <input type="checkbox" id="expert-mode-toggle"> Expert Mode
@@ -765,9 +765,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.36"></script>
-  <script src="js/charts.js?v=0.2.36"></script>
-  <script src="js/quotes.js?v=0.2.36"></script>
-  <script src="js/app.js?v=0.2.36"></script>
+  <script src="js/api.js?v=0.2.37"></script>
+  <script src="js/charts.js?v=0.2.37"></script>
+  <script src="js/quotes.js?v=0.2.37"></script>
+  <script src="js/app.js?v=0.2.37"></script>
 </body>
 </html>

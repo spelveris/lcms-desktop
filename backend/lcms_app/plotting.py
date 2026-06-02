@@ -1,8 +1,14 @@
 """Plotting functions for LC-MS data visualization."""
 
+import copy
 import io
+import os
+import shutil
+import subprocess
+import tempfile
 import textwrap
 from typing import Optional
+import xml.etree.ElementTree as ET
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.figure
@@ -24,9 +30,9 @@ plt.rcParams.update({
     # Embed TrueType fonts in PDF for better editability in vector editors.
     'pdf.fonttype': 42,
     'ps.fonttype': 42,
-    # Convert SVG text to vector paths so the exported SVG matches the PDF
-    # appearance instead of depending on the viewer's font metrics.
-    'svg.fonttype': 'path',
+    # Keep SVG labels as text. Vector editors such as Affinity can misplace or
+    # merge Matplotlib's reusable glyph paths when svg.fonttype is "path".
+    'svg.fonttype': 'none',
 })
 
 import config
@@ -1055,9 +1061,11 @@ def export_figure(
     Returns:
         Image/document as bytes
     """
-    # Make all axes backgrounds transparent
+    fig.patch.set_facecolor('none')
+    fig.patch.set_alpha(0.0)
     for ax in fig.get_axes():
         ax.set_facecolor('none')
+        ax.patch.set_alpha(0.0)
     buf = io.BytesIO()
     bbox_inches = 'tight' if tight else None
     fig.savefig(
@@ -1082,23 +1090,256 @@ def export_figure_png(
     return export_figure(fig, dpi=dpi, format='png', tight=tight)
 
 
-def export_figure_svg(fig: matplotlib.figure.Figure, tight: bool = True) -> bytes:
+_SVG_NS = 'http://www.w3.org/2000/svg'
+_XLINK_NS = 'http://www.w3.org/1999/xlink'
+
+
+def _is_svg_font_glyph_id(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    return (
+        value.startswith('Arial')
+        or value.startswith('DejaVu')
+        or value.startswith('Liberation')
+        or value.startswith('STIX')
+        or value.startswith('cm')
+    )
+
+
+def _expand_svg_font_uses(svg_bytes: bytes) -> bytes:
+    """Replace Matplotlib font glyph <use> nodes with direct paths for editors."""
+    try:
+        ET.register_namespace('', _SVG_NS)
+        ET.register_namespace('xlink', _XLINK_NS)
+        root = ET.fromstring(svg_bytes)
+    except Exception:
+        return svg_bytes
+
+    svg_path = f'{{{_SVG_NS}}}path'
+    svg_use = f'{{{_SVG_NS}}}use'
+    svg_group = f'{{{_SVG_NS}}}g'
+    svg_defs = f'{{{_SVG_NS}}}defs'
+    xlink_href = f'{{{_XLINK_NS}}}href'
+    glyph_paths = {
+        path.get('id'): path
+        for path in root.iter(svg_path)
+        if _is_svg_font_glyph_id(path.get('id'))
+    }
+    if not glyph_paths:
+        return svg_bytes
+
+    def replace_font_uses(parent: ET.Element) -> None:
+        children = list(parent)
+        for index, child in enumerate(children):
+            if child.tag == svg_use:
+                href = child.get(xlink_href) or child.get('href')
+                glyph_id = href[1:] if href and href.startswith('#') else ''
+                glyph = glyph_paths.get(glyph_id)
+                if glyph is not None:
+                    wrapper = ET.Element(svg_group)
+                    transforms = []
+                    x = child.get('x')
+                    y = child.get('y')
+                    if x is not None or y is not None:
+                        transforms.append(f"translate({x or '0'} {y or '0'})")
+                    use_transform = child.get('transform')
+                    if use_transform:
+                        transforms.append(use_transform)
+                    if transforms:
+                        wrapper.set('transform', ' '.join(transforms))
+
+                    path = ET.Element(svg_path)
+                    for attr in ('d', 'transform', 'style'):
+                        value = glyph.get(attr)
+                        if value is not None:
+                            path.set(attr, value)
+                    for attr, value in child.attrib.items():
+                        if attr in {xlink_href, 'href', 'x', 'y', 'transform'}:
+                            continue
+                        path.set(attr, value)
+                    wrapper.append(path)
+                    parent[index] = wrapper
+                    continue
+            replace_font_uses(child)
+
+    replace_font_uses(root)
+
+    def prune_unused_font_defs(parent: ET.Element) -> None:
+        for child in list(parent):
+            if child.tag == svg_path and _is_svg_font_glyph_id(child.get('id')):
+                parent.remove(child)
+                continue
+            prune_unused_font_defs(child)
+            if child.tag == svg_defs and len(child) == 0:
+                parent.remove(child)
+
+    prune_unused_font_defs(root)
+    try:
+        return ET.tostring(root, encoding='utf-8', xml_declaration=True)
+    except Exception:
+        return svg_bytes
+
+
+def _strip_svg_ids(element: ET.Element) -> None:
+    element.attrib.pop('id', None)
+    for child in list(element):
+        _strip_svg_ids(child)
+
+
+def _expand_svg_uses(svg_bytes: bytes) -> bytes:
+    """Inline SVG <use> references so vector editors cannot mis-scale glyph defs."""
+    try:
+        ET.register_namespace('', _SVG_NS)
+        ET.register_namespace('xlink', _XLINK_NS)
+        root = ET.fromstring(svg_bytes)
+    except Exception:
+        return svg_bytes
+
+    svg_use = f'{{{_SVG_NS}}}use'
+    xlink_href = f'{{{_XLINK_NS}}}href'
+    id_elements = {
+        element_id: element
+        for element in root.iter()
+        for element_id in [element.get('id')]
+        if element_id
+    }
+    if not id_elements:
+        return svg_bytes
+
+    def replace_uses(parent: ET.Element) -> None:
+        children = list(parent)
+        for index, child in enumerate(children):
+            if child.tag == svg_use:
+                href = child.get(xlink_href) or child.get('href')
+                target_id = href[1:] if href and href.startswith('#') else ''
+                target = id_elements.get(target_id)
+                if target is not None:
+                    clone = copy.deepcopy(target)
+                    _strip_svg_ids(clone)
+
+                    wrapper = ET.Element(f'{{{_SVG_NS}}}g')
+                    transforms = []
+                    x = child.get('x')
+                    y = child.get('y')
+                    if x is not None or y is not None:
+                        transforms.append(f"translate({x or '0'} {y or '0'})")
+                    use_transform = child.get('transform')
+                    if use_transform:
+                        transforms.append(use_transform)
+                    if transforms:
+                        wrapper.set('transform', ' '.join(transforms))
+
+                    for attr, value in child.attrib.items():
+                        if attr in {xlink_href, 'href', 'x', 'y', 'transform'}:
+                            continue
+                        wrapper.set(attr, value)
+                    wrapper.append(clone)
+                    parent[index] = wrapper
+                    continue
+            replace_uses(child)
+
+    replace_uses(root)
+    try:
+        return ET.tostring(root, encoding='utf-8', xml_declaration=True)
+    except Exception:
+        return svg_bytes
+
+
+def _find_pdftocairo() -> Optional[str]:
+    candidates = [
+        os.environ.get('LCMS_PDFTOCAIRO'),
+        shutil.which('pdftocairo'),
+        '/opt/homebrew/bin/pdftocairo',
+        '/usr/local/bin/pdftocairo',
+        '/usr/bin/pdftocairo',
+        '/opt/local/bin/pdftocairo',
+    ]
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = os.path.abspath(candidate)
+        if path in seen:
+            continue
+        seen.add(path)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def _pdf_bytes_to_svg(pdf_bytes: bytes) -> Optional[bytes]:
+    converter = _find_pdftocairo()
+    if converter is None:
+        return None
+
+    try:
+        with tempfile.TemporaryDirectory(prefix='lcms_pdf_svg_') as temp_dir:
+            pdf_path = os.path.join(temp_dir, 'figure.pdf')
+            svg_path = os.path.join(temp_dir, 'figure.svg')
+            with open(pdf_path, 'wb') as file:
+                file.write(pdf_bytes)
+            result = subprocess.run(
+                [converter, '-svg', pdf_path, svg_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode != 0 or not os.path.exists(svg_path):
+                return None
+            with open(svg_path, 'rb') as file:
+                svg_bytes = file.read()
+    except Exception:
+        return None
+
+    if not svg_bytes:
+        return None
+    return _expand_svg_uses(svg_bytes)
+
+
+def export_figure_svg(
+    fig: matplotlib.figure.Figure,
+    tight: bool = True,
+    *,
+    fonttype: str = 'none',
+    expand_font_uses: bool = False,
+) -> bytes:
     """Export figure to SVG bytes with transparent background."""
-    # Make all axes backgrounds transparent
+    fig.patch.set_facecolor('none')
+    fig.patch.set_alpha(0.0)
     for ax in fig.get_axes():
         ax.set_facecolor('none')
+        ax.patch.set_alpha(0.0)
     buf = io.BytesIO()
     bbox_inches = 'tight' if tight else None
-    fig.savefig(
-        buf,
-        format='svg',
-        bbox_inches=bbox_inches,
-        facecolor='none',
-        edgecolor='none',
-        transparent=True,
+    svg_fonttype = 'path' if str(fonttype).lower() == 'path' else 'none'
+    with plt.rc_context({'svg.fonttype': svg_fonttype}):
+        fig.savefig(
+            buf,
+            format='svg',
+            bbox_inches=bbox_inches,
+            facecolor='none',
+            edgecolor='none',
+            transparent=True,
     )
     buf.seek(0)
-    return buf.getvalue()
+    svg_bytes = buf.getvalue()
+    if expand_font_uses and svg_fonttype == 'path':
+        svg_bytes = _expand_svg_font_uses(svg_bytes)
+    return svg_bytes
+
+
+def export_figure_pdf_matching_svg(
+    fig: matplotlib.figure.Figure,
+    dpi: int = config.EXPORT_DPI,
+    tight: bool = True,
+) -> bytes:
+    """Export SVG by converting the PDF export so vector geometry matches PDF."""
+    pdf_bytes = export_figure_pdf(fig, dpi=dpi, tight=tight)
+    svg_bytes = _pdf_bytes_to_svg(pdf_bytes)
+    if svg_bytes is not None:
+        return svg_bytes
+    return export_figure_svg(fig, tight=tight, fonttype='path', expand_font_uses=True)
 
 
 def export_figure_pdf(

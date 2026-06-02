@@ -62,6 +62,8 @@ const state = {
   deconvDenseProfileRenderId: 0,
   deconvAutoRunSignature: '',
   deconvAutoRunInFlight: false,
+  deconvWindowEditTimer: null,
+  deconvWindowEditRunId: 0,
   deconvSelectedComponentIndex: null,
   deconvDragSelectionInFlight: false,
   progressionAssignments: {},
@@ -6524,19 +6526,58 @@ async function autoRunDeconvolutionOnTabOpen() {
       return;
     }
 
-    state.deconvAutoRunSignature = signature;
     await runDeconvolution();
   } finally {
     state.deconvAutoRunInFlight = false;
   }
 }
 
+function scheduleManualDeconvWindowUpdate({ immediate = false } = {}) {
+  if (state.deconvWindowEditTimer) {
+    clearTimeout(state.deconvWindowEditTimer);
+    state.deconvWindowEditTimer = null;
+  }
+
+  const delay = immediate ? 0 : 450;
+  state.deconvWindowEditTimer = setTimeout(() => {
+    state.deconvWindowEditTimer = null;
+    void applyManualDeconvWindowUpdate();
+  }, delay);
+}
+
+async function applyManualDeconvWindowUpdate() {
+  if (state.deconvDragSelectionInFlight) return;
+
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) return;
+
+  const start = parseFloat(document.getElementById('deconv-start')?.value);
+  const end = parseFloat(document.getElementById('deconv-end')?.value);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+
+  const runId = state.deconvWindowEditRunId + 1;
+  state.deconvWindowEditRunId = runId;
+
+  await refreshDeconvWindowContext(samplePath);
+  if (runId !== state.deconvWindowEditRunId) return;
+
+  const hasCurrentResults = state.deconvResults && state.deconvSamplePath === samplePath;
+  if (!hasCurrentResults) return;
+
+  const signature = getDeconvolutionRunSignature();
+  if (!signature || signature === state.deconvAutoRunSignature) return;
+
+  await runDeconvolution({ useOverlay: false, silentSuccess: true });
+}
+
 function initDeconvolution() {
   document.getElementById('btn-auto-detect-window').addEventListener('click', autoDetectDeconvWindow);
   document.getElementById('btn-run-deconv').addEventListener('click', runDeconvolution);
   document.getElementById('btn-refresh-deconv')?.addEventListener('click', refreshCurrentDeconvolutionSample);
-  document.getElementById('deconv-start').addEventListener('change', () => refreshDeconvWindowContext());
-  document.getElementById('deconv-end').addEventListener('change', () => refreshDeconvWindowContext());
+  document.getElementById('deconv-start').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
+  document.getElementById('deconv-end').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
+  document.getElementById('deconv-start').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
+  document.getElementById('deconv-end').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
   document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
   document.getElementById('btn-deconv-mode-zoom')?.addEventListener('click', () => setDeconvInteractionMode('zoom'));
   document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
@@ -6767,10 +6808,19 @@ async function autoDetectDeconvWindow() {
 
   showLoading('Auto-detecting time window...');
   try {
+    if (state.deconvWindowEditTimer) {
+      clearTimeout(state.deconvWindowEditTimer);
+      state.deconvWindowEditTimer = null;
+    }
+    state.deconvWindowEditRunId += 1;
     const data = await api.autoDetectWindow(samplePath);
     document.getElementById('deconv-start').value = formatDeconvTimeValue(data.start);
     document.getElementById('deconv-end').value = formatDeconvTimeValue(data.end);
     await refreshDeconvWindowContext(samplePath);
+    const signature = getDeconvolutionRunSignature();
+    if (signature && signature !== state.deconvAutoRunSignature) {
+      await runDeconvolution({ useOverlay: false, silentSuccess: true });
+    }
     toast(`Window detected: ${formatDeconvTimeValue(data.start)} - ${formatDeconvTimeValue(data.end)} min`, 'success');
   } catch (err) {
     toast(`Auto-detect failed: ${err.message}`, 'error');
@@ -6817,6 +6867,7 @@ async function runDeconvolution(options = {}) {
     parseFloat(document.getElementById('deconv-start').value),
     parseFloat(document.getElementById('deconv-end').value),
   );
+  const requestSignature = JSON.stringify(params);
 
   const useOverlay = options.useOverlay !== false;
   const silentSuccess = options.silentSuccess === true;
@@ -6837,7 +6888,7 @@ async function runDeconvolution(options = {}) {
       Number.isFinite(params.start_time) ? params.start_time : (resultRange ? resultRange[0] : null),
       Number.isFinite(params.end_time) ? params.end_time : (resultRange ? resultRange[1] : null),
     ];
-    state.deconvAutoRunSignature = getDeconvolutionRunSignature() || state.deconvAutoRunSignature;
+    state.deconvAutoRunSignature = requestSignature;
     renderDeconvResults(data);
     renderReportSummary();
     if (!silentSuccess) {
