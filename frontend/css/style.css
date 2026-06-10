@@ -584,6 +584,17 @@ input[type="radio"] {
   pointer-events: none;
 }
 
+.timechange-ms-window {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timechange-ms-window input[type="number"] {
+  width: 84px;
+}
+
 /* Tab toolbar */
 .tab-toolbar {
   display: flex;

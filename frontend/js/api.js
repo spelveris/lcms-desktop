@@ -141,6 +141,7 @@ const api = {
       use_mz_agreement: params.use_mz_agreement,
       use_monoisotopic: params.monoisotopic || params.use_monoisotopic,
       include_singly_charged: params.include_singly_charged,
+      mw_algorithm: params.mw_algorithm,
     });
     return apiFetch(`/api/deconvolute?${q}`, { method: 'POST' });
   },

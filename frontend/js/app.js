@@ -27,6 +27,7 @@ const DECONV_EXPERT_DEFAULTS = {
   massHigh: '',
   noiseCutoff: '',
   monoisotopic: false,
+  mwAlgorithm: 'apex',
 };
 
 const state = {
@@ -454,6 +455,9 @@ function syncDeconvExpertModeUI() {
   document.querySelectorAll('.deconv-expert-only').forEach((el) => {
     el.classList.toggle('hidden', !expertMode);
   });
+  if (expertMode) {
+    syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '');
+  }
 }
 
 function setQuoteContainerState(emptyId, keyPrefix, isEmpty, forceNew = false) {
@@ -1968,6 +1972,7 @@ function updateSampleDropdowns() {
 
   syncBackgroundSubtractionSelections();
   syncDeconvBackgroundSelection();
+  syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '');
 }
 
 function syncBackgroundSubtractionSelections() {
@@ -6320,9 +6325,29 @@ function getGlobalDeconvMassRangeParams() {
   return params;
 }
 
-function getCurrentDeconvolutionParameters() {
+function getDefaultDeconvMwAlgorithmForPath(path) {
+  const basePath = String(path || '').split('::')[0].trim().toLowerCase();
+  return basePath.endsWith('.sirslt') ? 'centroid' : DECONV_EXPERT_DEFAULTS.mwAlgorithm;
+}
+
+function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
+  const select = document.getElementById('deconv-mw-algorithm');
+  if (!select) return;
+
+  const defaultAlgorithm = getDefaultDeconvMwAlgorithmForPath(samplePath);
+  const defaultKey = `${String(samplePath || '')}:${defaultAlgorithm}`;
+  const shouldSync = options.force === true || select.dataset.defaultKey !== defaultKey || select.dataset.userEdited !== 'true';
+  if (shouldSync) {
+    select.value = defaultAlgorithm;
+    select.dataset.userEdited = '';
+  }
+  select.dataset.defaultKey = defaultKey;
+}
+
+function getCurrentDeconvolutionParameters(samplePath = '') {
   const globalMassRange = getGlobalDeconvMassRangeParams();
   const expertMode = document.getElementById('expert-mode-toggle')?.checked === true;
+  const defaultMwAlgorithm = getDefaultDeconvMwAlgorithmForPath(samplePath);
 
   const params = {
     min_charge: DECONV_EXPERT_DEFAULTS.minCharge,
@@ -6339,6 +6364,7 @@ function getCurrentDeconvolutionParameters() {
     noise_cutoff: DEFAULT_DECONV_NOISE_CUTOFF,
     monoisotopic: DECONV_EXPERT_DEFAULTS.monoisotopic,
     include_singly_charged: true,
+    mw_algorithm: defaultMwAlgorithm,
   };
 
   if (!expertMode) {
@@ -6357,6 +6383,7 @@ function getCurrentDeconvolutionParameters() {
   const massLow = parseFloat(document.getElementById('dp-mass-low')?.value);
   const massHigh = parseFloat(document.getElementById('dp-mass-high')?.value);
   const noiseCutoff = parseFloat(document.getElementById('dp-noise')?.value);
+  const mwAlgorithm = document.getElementById('deconv-mw-algorithm')?.value;
 
   if (Number.isFinite(minCharge)) params.min_charge = minCharge;
   if (Number.isFinite(maxCharge)) params.max_charge = maxCharge;
@@ -6370,6 +6397,7 @@ function getCurrentDeconvolutionParameters() {
   if (Number.isFinite(massLow)) params.mass_range_low = massLow;
   if (Number.isFinite(massHigh)) params.mass_range_high = massHigh;
   if (Number.isFinite(noiseCutoff)) params.noise_cutoff = noiseCutoff;
+  if (mwAlgorithm) params.mw_algorithm = mwAlgorithm;
   params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
 
   return params;
@@ -6415,6 +6443,8 @@ function restoreDefaultDeconvExpertSettings() {
   const monoisotopic = document.getElementById('dp-monoisotopic');
   if (monoisotopic) monoisotopic.checked = DECONV_EXPERT_DEFAULTS.monoisotopic;
 
+  syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '', { force: true });
+
   const axisMin = document.getElementById('mass-axis-min');
   const axisMax = document.getElementById('mass-axis-max');
   if (axisMin) axisMin.value = DECONV_EXPERT_DEFAULTS.massLow;
@@ -6427,7 +6457,7 @@ function buildDeconvolutionRequest(path, startTime, endTime) {
     start_time: startTime,
     end_time: endTime,
     ion_mode: document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive',
-    ...getCurrentDeconvolutionParameters(),
+    ...getCurrentDeconvolutionParameters(path),
   };
 
   return params;
@@ -6580,6 +6610,11 @@ function initDeconvolution() {
   document.getElementById('deconv-end').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
   document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
   document.getElementById('btn-deconv-mode-zoom')?.addEventListener('click', () => setDeconvInteractionMode('zoom'));
+  document.getElementById('deconv-mw-algorithm')?.addEventListener('change', () => {
+    const mwAlgorithm = document.getElementById('deconv-mw-algorithm');
+    if (mwAlgorithm) mwAlgorithm.dataset.userEdited = 'true';
+    state.deconvAutoRunSignature = '';
+  });
   document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvMasses(btn.dataset.format));
   });
@@ -6594,6 +6629,7 @@ function initDeconvolution() {
   if (select) {
     select.addEventListener('change', async () => {
       syncDeconvBackgroundSelection();
+      syncDeconvMwAlgorithmDefault(select.value || '', { force: true });
       if (select.value) {
         await autoRunDeconvolutionOnTabOpen();
       } else {
@@ -7942,6 +7978,27 @@ function getTimeChangeSignalLabel(kind = getTimeChangeSignalKind()) {
   return kind === 'uv' ? 'UV' : 'Mass';
 }
 
+function getTimeChangeMSWindow() {
+  const startInput = document.getElementById('timechange-ms-start');
+  const endInput = document.getElementById('timechange-ms-end');
+  let start = parseFloat(startInput?.value);
+  let end = parseFloat(endInput?.value);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    const fallback = getCurrentDeconvolutionTimeRange();
+    if (fallback) {
+      [start, end] = fallback;
+      if (startInput) startInput.value = formatDeconvTimeValue(start);
+      if (endInput) endInput.value = formatDeconvTimeValue(end);
+    }
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+  return { start, end };
+}
+
 async function resolveTimeChangeUvWavelength() {
   const checked = getSelectedWavelengths().find((wl) => Number.isFinite(Number(wl)));
   if (Number.isFinite(Number(checked))) return Number(checked);
@@ -7976,6 +8033,11 @@ async function runTimeChangeMS(kind = 'ms') {
   const wavelength = kind === 'uv' ? await resolveTimeChangeUvWavelength() : null;
   if (kind === 'uv' && !Number.isFinite(wavelength)) {
     toast('Select a UV wavelength in Settings first', 'warning');
+    return;
+  }
+  const msWindow = kind === 'ms' ? getTimeChangeMSWindow() : null;
+  if (kind === 'ms' && !msWindow) {
+    toast('Enter a valid Time Change MS window where end is greater than start', 'warning');
     return;
   }
 
@@ -8013,18 +8075,7 @@ async function runTimeChangeMS(kind = 'ms') {
           });
         }
       } else {
-        let start = parseFloat(document.getElementById('deconv-start').value) || 0;
-        let end = parseFloat(document.getElementById('deconv-end').value) || (start + 1);
-
-        try {
-          const autoWindow = await api.autoDetectWindow(file.path);
-          if (Number.isFinite(autoWindow.start) && Number.isFinite(autoWindow.end) && autoWindow.end > autoWindow.start) {
-            start = autoWindow.start;
-            end = autoWindow.end;
-          }
-        } catch (_) {
-          // Keep fallback window for this sample
-        }
+        const { start, end } = msWindow;
 
         try {
           const summed = await api.getSummedSpectrum(file.path, start, end);
@@ -8471,7 +8522,7 @@ async function exportReportPDF() {
   };
 
   if (includeDeconv) {
-    payload.deconv_parameters = getCurrentDeconvolutionParameters();
+    payload.deconv_parameters = getCurrentDeconvolutionParameters(samplePath);
 
     const deconvSamplePath = document.getElementById('deconv-sample-select')?.value || '';
     const currentTimeRange = getCurrentDeconvolutionTimeRange();

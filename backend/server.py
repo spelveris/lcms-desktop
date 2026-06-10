@@ -97,6 +97,7 @@ DEFAULT_DECONV_MW_ASSIGN_CUTOFF = 0.40
 DEFAULT_DECONV_USE_MZ_AGREEMENT = False
 DEFAULT_DECONV_USE_MONOISOTOPIC = False
 DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED = True
+DEFAULT_DECONV_MW_ALGORITHM = "apex"
 _router_log_lock = Lock()
 _router_logged_item_state: dict[str, str] = {}
 _router_last_window_signature = ""
@@ -681,6 +682,102 @@ def _coerce_bool(value, default: bool) -> bool:
         if v in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _default_deconvolution_mw_algorithm_for_path(path_str: str) -> str:
+    base_raw, _selector = split_virtual_sample_path(_normalize_filesystem_path(path_str))
+    if Path(base_raw).suffix.lower() == ".sirslt":
+        return "centroid"
+    return DEFAULT_DECONV_MW_ALGORITHM
+
+
+def _normalize_deconvolution_mw_algorithm(value, path_str: str = "") -> str:
+    algorithm = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if algorithm in {"", "auto", "default"}:
+        return _default_deconvolution_mw_algorithm_for_path(path_str) if path_str else DEFAULT_DECONV_MW_ALGORITHM
+    if algorithm in {"centroid", "centroid_mw", "agilent_centroid"}:
+        return "centroid"
+    if algorithm in {"apex", "peak", "peak_apex"}:
+        return "apex"
+    return _default_deconvolution_mw_algorithm_for_path(path_str) if path_str else DEFAULT_DECONV_MW_ALGORITHM
+
+
+def _find_agilent_centroid_cdf_path(path_str: str) -> Optional[Path]:
+    base_raw, selector = split_virtual_sample_path(_normalize_filesystem_path(path_str))
+    base_path = Path(base_raw)
+    if not base_path.is_dir():
+        return None
+
+    candidates = [
+        path for path in sorted(base_path.glob("*_spectra.cdf"))
+        if path.is_file() and not path.name.startswith("._")
+    ]
+    if not candidates:
+        return None
+
+    if selector:
+        selector_lower = selector.lower()
+        selected = [path for path in candidates if path.name.lower().startswith(selector_lower)]
+        if selected:
+            return selected[0]
+
+    return candidates[0]
+
+
+def _sum_agilent_centroid_cdf_spectra(path_str: str, start: float, end: float) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Sum OpenLAB centroid/profile CDF spectra exported inside a .sirslt bundle."""
+    cdf_path = _find_agilent_centroid_cdf_path(path_str)
+    if cdf_path is None:
+        return None
+
+    try:
+        from scipy.io import netcdf_file
+    except Exception:
+        return None
+
+    try:
+        with netcdf_file(str(cdf_path), "r", mmap=False) as handle:
+            times = np.asarray(handle.variables["scan_acquisition_time"].data, dtype=float)
+            scan_index = np.asarray(handle.variables["scan_index"].data, dtype=int)
+            point_count = np.asarray(handle.variables["point_count"].data, dtype=int)
+            mass_values = np.asarray(handle.variables["mass_values"].data, dtype=float)
+            intensity_values = np.asarray(handle.variables["intensity_values"].data, dtype=float)
+    except Exception:
+        return None
+
+    if times.size == 0 or scan_index.size == 0 or point_count.size == 0:
+        return None
+
+    # OpenLAB CDF scan times are normally seconds, while the UI uses minutes.
+    time_values = times / 60.0 if np.nanmax(times) > 20.0 else times
+    selected = np.where((time_values >= float(start)) & (time_values <= float(end)))[0]
+    if selected.size == 0:
+        return None
+
+    first = int(selected[0])
+    first_start = int(scan_index[first])
+    first_count = int(point_count[first])
+    if first_count <= 0:
+        return None
+
+    base_mz = mass_values[first_start:first_start + first_count].astype(float, copy=True)
+    if base_mz.size == 0:
+        return None
+
+    summed = np.zeros(base_mz.shape, dtype=float)
+    for scan_number in selected:
+        offset = int(scan_index[int(scan_number)])
+        count = int(point_count[int(scan_number)])
+        if count <= 0:
+            continue
+        mz = mass_values[offset:offset + count].astype(float, copy=False)
+        intensity = intensity_values[offset:offset + count].astype(float, copy=False)
+        if mz.size == base_mz.size and np.allclose(mz, base_mz, rtol=0.0, atol=1e-4):
+            summed += intensity
+        else:
+            summed += np.interp(base_mz, mz, intensity, left=0.0, right=0.0)
+
+    return base_mz, summed
 
 
 def _sanitize_filename(name: str, fallback: str = "sample") -> str:
@@ -1835,6 +1932,7 @@ def _get_default_deconvolution_parameters() -> dict[str, Union[int, float, bool]
         "use_mz_agreement": DEFAULT_DECONV_USE_MZ_AGREEMENT,
         "use_monoisotopic": DEFAULT_DECONV_USE_MONOISOTOPIC,
         "include_singly_charged": DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED,
+        "mw_algorithm": DEFAULT_DECONV_MW_ALGORITHM,
     }
 
 
@@ -1868,6 +1966,7 @@ def _normalize_deconvolution_parameters(raw_params: Optional[dict]) -> dict[str,
         raw.get("include_singly_charged"),
         bool(params["include_singly_charged"]),
     )
+    params["mw_algorithm"] = _normalize_deconvolution_mw_algorithm(raw.get("mw_algorithm"))
     return params
 
 
@@ -1968,6 +2067,7 @@ def _run_report_deconvolution(
 def _format_deconvolution_parameters_for_report(raw_params: Optional[dict]) -> dict[str, str]:
     params = _normalize_deconvolution_parameters(raw_params)
     return {
+        "MW algorithm": "Centroid MW" if params["mw_algorithm"] == "centroid" else "Apex",
         "Mass range": f"{float(params['low_mw']):,.0f} - {float(params['high_mw']):,.0f} Da",
         "Charge range": f"{int(params['min_charge'])} - {int(params['max_charge'])}",
         "Minimum ions": str(int(params["min_peaks"])),
@@ -2847,11 +2947,14 @@ def deconvolute(
     use_mz_agreement: bool = Query(DEFAULT_DECONV_USE_MZ_AGREEMENT),
     use_monoisotopic: bool = Query(DEFAULT_DECONV_USE_MONOISOTOPIC),
     include_singly_charged: bool = Query(DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED),
+    mw_algorithm: str = Query("auto"),
 ):
     """Run deconvolution on summed spectrum and return detected components."""
     sample = _get_sample(path)
     if sample.ms_scans is None:
         raise HTTPException(status_code=404, detail="No MS data")
+    normalized_mw_algorithm = _normalize_deconvolution_mw_algorithm(mw_algorithm, path)
+    spectrum_source = "sample"
     background = None
     normalized_background_path = ""
     raw_mz_arr = None
@@ -2866,13 +2969,27 @@ def deconvolute(
         if background.ms_scans is None:
             raise HTTPException(status_code=404, detail="No MS data in background sample")
 
-    mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
+    centroid_sum = None
+    if normalized_mw_algorithm == "centroid":
+        centroid_sum = _sum_agilent_centroid_cdf_spectra(path, start, end)
+
+    if centroid_sum is not None:
+        mz_arr, intensity_arr = centroid_sum
+        spectrum_source = "agilent_cdf"
+    else:
+        mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
     raw_mz_arr = np.asarray(mz_arr, dtype=float)
     raw_intensity_arr = np.asarray(intensity_arr, dtype=float)
     if background is not None:
-        bg_mz_arr, bg_intensity_arr = analysis.sum_spectra_in_range(background, start, end)
+        bg_centroid_sum = None
+        if normalized_mw_algorithm == "centroid":
+            bg_centroid_sum = _sum_agilent_centroid_cdf_spectra(normalized_background_path, start, end)
+        if bg_centroid_sum is not None:
+            bg_mz_arr, bg_intensity_arr = bg_centroid_sum
+        else:
+            bg_mz_arr, bg_intensity_arr = analysis.sum_spectra_in_range(background, start, end)
         bg_plot_mz_arr = np.asarray(bg_mz_arr if bg_mz_arr is not None else [], dtype=float)
         bg_plot_intensity_arr = np.asarray(bg_intensity_arr if bg_intensity_arr is not None else [], dtype=float)
         mz_arr, intensity_arr = _subtract_spectra(
@@ -2964,6 +3081,8 @@ def deconvolute(
         "time_range": [start, end],
         "background_path": normalized_background_path or None,
         "effective_max_charge": effective_max_charge,
+        "mw_algorithm": normalized_mw_algorithm,
+        "spectrum_source": spectrum_source,
     }
 
 
@@ -3626,7 +3745,7 @@ def export_time_change(payload: dict = Body(...)):
             content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
             media_type = "application/pdf"
         else:
-            content = plotting.export_figure(fig, dpi=dpi, format="png")
+            content = plotting.export_figure(fig, dpi=dpi, format="png", tight=False)
             media_type = "image/png"
     finally:
         plt.close(fig)
@@ -3760,7 +3879,10 @@ def export_report_pdf(payload: dict = Body(...)):
         deconv_results = []
     deconv_results = _sort_serialized_deconvolution_results(deconv_results)
 
-    deconv_parameters = _normalize_deconvolution_parameters(payload.get("deconv_parameters"))
+    raw_deconv_parameters = payload.get("deconv_parameters")
+    deconv_parameters = _normalize_deconvolution_parameters(raw_deconv_parameters)
+    if not isinstance(raw_deconv_parameters, dict) or not str(raw_deconv_parameters.get("mw_algorithm", "")).strip():
+        deconv_parameters["mw_algorithm"] = _default_deconvolution_mw_algorithm_for_path(path)
 
     deconv_time_range = payload.get("deconv_time_range")
     if isinstance(deconv_time_range, (list, tuple)) and len(deconv_time_range) == 2:
@@ -3779,7 +3901,13 @@ def export_report_pdf(payload: dict = Body(...)):
             if end > start:
                 deconv_time_range = (start, end)
         if not deconv_results and deconv_time_range is not None:
-            report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
+            report_sum = None
+            if deconv_parameters["mw_algorithm"] == "centroid":
+                report_sum = _sum_agilent_centroid_cdf_spectra(path, deconv_time_range[0], deconv_time_range[1])
+            if report_sum is not None:
+                report_mz, report_intensity = report_sum
+            else:
+                report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
             if report_mz is not None and len(report_mz) > 0:
                 deconv_results = _run_report_deconvolution(report_mz, report_intensity, deconv_parameters)
     else:

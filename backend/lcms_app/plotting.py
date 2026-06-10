@@ -202,7 +202,12 @@ def _get_deconvolution_panel_dimensions(base_fig_width: float = 8.0) -> tuple[fl
 
     panel_width_in = base_fig_width * panel_width_frac
     panel_height_in = base_fig_height * panel_height_frac
-    return panel_width_in, panel_height_in
+    # Lock to the same hundredth-inch dimensions used by saved Matplotlib
+    # figures so packaged and source exports keep identical plot-box sizes.
+    return (
+        float(np.floor(panel_width_in * 100.0) / 100.0),
+        float(np.floor(panel_height_in * 100.0) / 100.0),
+    )
 
 
 def _apply_locked_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> None:
@@ -219,6 +224,100 @@ def _apply_locked_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> 
         bottom=0.18,
         top=0.83,
     )
+
+
+def _apply_side_by_side_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> None:
+    """Lock side-by-side panels to the same plot-box size as standard export."""
+    fig.subplots_adjust(
+        left=0.1316,
+        right=0.934,
+        bottom=0.18,
+        top=0.83,
+        wspace=0.36,
+    )
+
+
+def _get_time_change_axis_box_inches(plot_area_width_in: float, panel_height_in: float) -> tuple[float, float, float, float]:
+    """Return the fixed Time Change axes box in physical inches."""
+    return (
+        plot_area_width_in * 0.25,
+        panel_height_in * 0.18,
+        plot_area_width_in * 0.68,
+        panel_height_in * 0.65,
+    )
+
+
+def _apply_time_change_export_layout(
+    fig: matplotlib.figure.Figure,
+    plot_area_width_in: float,
+    panel_height_in: float,
+) -> None:
+    """Keep Time Change plot-box dimensions stable while the canvas grows."""
+    if not fig.axes:
+        return
+    fig_width_in, fig_height_in = fig.get_size_inches()
+    left_in, bottom_in, width_in, height_in = _get_time_change_axis_box_inches(
+        plot_area_width_in,
+        panel_height_in,
+    )
+    fig.axes[0].set_position([
+        left_in / fig_width_in,
+        bottom_in / fig_height_in,
+        width_in / fig_width_in,
+        height_in / fig_height_in,
+    ])
+
+
+def _get_time_change_legend_columns(trace_count: int, max_rows: int = 5) -> int:
+    """Use more legend columns as the Time Change export gains traces."""
+    if trace_count <= 0:
+        return 1
+    max_rows = max(1, int(max_rows))
+    return max(1, int(np.ceil(trace_count / float(max_rows))))
+
+
+def _get_time_change_legend_max_rows(axis_height_in: float, font_size_pt: float) -> int:
+    """Estimate how many legend rows can fit beside the Time Change plot box."""
+    font_height_in = max(1.0, font_size_pt) / 72.0
+    row_height_in = font_height_in * 1.45
+    if axis_height_in <= 0 or row_height_in <= 0:
+        return 5
+    return max(1, int(np.floor(axis_height_in / row_height_in)))
+
+
+def _estimate_time_change_legend_width_in(labels: list[str], columns: int, font_size_pt: float) -> float:
+    """Estimate legend width so the initial canvas usually contains it."""
+    if not labels:
+        return 0.0
+    max_label_chars = max(len(str(label)) for label in labels)
+    char_width_in = (font_size_pt / 72.0) * 0.55
+    text_width_in = max_label_chars * char_width_in
+    column_width_in = 0.38 + text_width_in
+    return (columns * column_width_in) + (max(0, columns - 1) * 0.22) + 0.10
+
+
+def _fit_time_change_legend_in_canvas(
+    fig: matplotlib.figure.Figure,
+    legend,
+    plot_area_width_in: float,
+    panel_height_in: float,
+    right_margin_in: float = 0.12,
+) -> None:
+    """Expand only the canvas width if the outside legend would be clipped."""
+    if legend is None:
+        return
+    for _ in range(3):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legend_bbox = legend.get_window_extent(renderer=renderer).transformed(
+            fig.dpi_scale_trans.inverted()
+        )
+        fig_width_in, fig_height_in = fig.get_size_inches()
+        required_width_in = float(legend_bbox.x1) + right_margin_in
+        if required_width_in <= fig_width_in + 1e-3:
+            break
+        fig.set_size_inches(required_width_in, fig_height_in, forward=True)
+        _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
 
 
 def create_single_panel(
@@ -2004,10 +2103,29 @@ def create_time_change_offset_figure(
     base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
     panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
     x_axis_width_multiplier = max(1.0, _coerce_finite_float(style.get('x_axis_width_multiplier', 2.0), 2.0))
-    fig, ax = plt.subplots(1, 1, figsize=(panel_width_in * x_axis_width_multiplier, panel_height_in))
-    _apply_locked_deconvolution_export_layout(fig)
-
     normalized_traces = _normalize_time_change_trace_payload(traces)
+    legend_font_size = max(5.0, _coerce_finite_float(style.get('legend_font_size'), 7.0))
+    plot_area_width_in = panel_width_in * x_axis_width_multiplier
+    left_in, _bottom_in, axis_width_in, axis_height_in = _get_time_change_axis_box_inches(
+        plot_area_width_in,
+        panel_height_in,
+    )
+    default_legend_max_rows = _get_time_change_legend_max_rows(axis_height_in, legend_font_size)
+    legend_max_rows = int(max(1.0, _coerce_finite_float(style.get('legend_max_rows'), default_legend_max_rows)))
+    legend_columns = _get_time_change_legend_columns(len(normalized_traces), legend_max_rows)
+    legend_gap_in = 0.10 if normalized_traces else 0.0
+    legend_width_in = _estimate_time_change_legend_width_in(
+        [trace['label'] for trace in normalized_traces],
+        legend_columns,
+        legend_font_size,
+    )
+    fig_width_in = max(
+        plot_area_width_in,
+        left_in + axis_width_in + legend_gap_in + legend_width_in + 0.12,
+    )
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width_in, panel_height_in))
+    _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
+
     signal_kind = str(style.get('signal_kind', 'ms') or 'ms').lower()
     normalize = _coerce_bool(style.get('normalize', False), False)
     line_width = max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
@@ -2133,12 +2251,25 @@ def create_time_change_offset_figure(
         ax.set_title(title, fontweight='bold', y=1.03)
     if normalized_traces:
         ordered_indexes = sorted(legend_handles)
-        ax.legend(
+        legend = ax.legend(
             [legend_handles[index] for index in ordered_indexes],
             [normalized_traces[index]['label'] for index in ordered_indexes],
-            loc='upper right',
-            fontsize='small',
+            loc='upper left',
+            bbox_to_anchor=(1.035, 1.0),
+            fontsize=legend_font_size,
             frameon=False,
+            ncol=legend_columns,
+            handlelength=1.8,
+            handletextpad=0.45,
+            columnspacing=0.9,
+            borderaxespad=0.0,
+        )
+        legend.set_in_layout(False)
+        _fit_time_change_legend_in_canvas(
+            fig,
+            legend,
+            plot_area_width_in,
+            panel_height_in,
         )
     if show_grid:
         ax.grid(True, alpha=0.3)
@@ -2149,7 +2280,7 @@ def create_time_change_offset_figure(
     if not normalize:
         _apply_safe_scientific_y_format(ax, scilimits=(0, 0))
 
-    _apply_locked_deconvolution_export_layout(fig)
+    _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
     return fig
 
 
@@ -2326,7 +2457,7 @@ def create_deconvoluted_masses_figure(
             show_peak_labels=deconv_show_peak_labels,
         )
         _plot_deconvoluted_component_inset(ax_inset, selected_component, spectrum=spectrum)
-        plt.tight_layout(pad=0.8)
+        _apply_side_by_side_deconvolution_export_layout(fig)
         return fig
 
     fig_width_in = panel_width_in
