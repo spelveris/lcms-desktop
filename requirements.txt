@@ -1,6 +1,8 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
-rainbow-api>=1.0.0
+# rainbow-api 1.4 removed the `prec` argument used by data_reader.py.
+# Keep the version used by the known-good v0.2.38 desktop backend.
+rainbow-api==1.0.10
 python-lzf>=0.2.6
 numpy>=1.24.0
 scipy>=1.11.0

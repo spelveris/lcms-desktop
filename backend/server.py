@@ -3715,6 +3715,58 @@ def export_deconvoluted_masses(payload: dict = Body(...)):
     )
 
 
+@app.post("/api/export-deconvolution-spectrum")
+def export_deconvolution_spectrum(payload: dict = Body(...)):
+    """Export the clean deconvolution mass spectrum without ion guide lines."""
+    sample_name = str(payload.get("sample_name", "sample"))
+    spectrum = payload.get("spectrum")
+    if not isinstance(spectrum, dict):
+        raise HTTPException(status_code=400, detail="spectrum must be an object")
+
+    export_format = str(payload.get("format", "pdf")).lower()
+    if export_format not in {"png", "svg", "pdf"}:
+        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    style = payload.get("style", {})
+    if not isinstance(style, dict):
+        style = {}
+    title = str(payload.get("title", "Mass Spectrum"))
+
+    fig = plotting.create_deconvolution_mass_spectrum_figure(
+        sample_name=sample_name,
+        spectrum=spectrum,
+        title=title,
+        style=style,
+    )
+    try:
+        if export_format == "svg":
+            content = plotting.export_figure_pdf_matching_svg(fig, dpi=dpi, tight=False)
+            media_type = "image/svg+xml"
+        elif export_format == "pdf":
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            media_type = "application/pdf"
+        else:
+            content = plotting.export_figure(fig, dpi=dpi, format="png")
+            media_type = "image/png"
+    finally:
+        plt.close(fig)
+
+    base_name = sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name
+    safe_name = _sanitize_filename(base_name, fallback="sample")
+    filename = f"{safe_name}_mass_spectrum.{export_format}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/api/export-time-change")
 def export_time_change(payload: dict = Body(...)):
     """Export the Time Change diagonal offset plot with deconvolution export sizing."""

@@ -1,6 +1,6 @@
 {
   "name": "catrupole",
-  "version": "0.2.38",
+  "version": "0.2.39",
   "description": "CATrupole Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
@@ -10,15 +10,16 @@
     "setup": "./setup-dev.sh",
     "frontend-only": "open frontend/index.html",
     "build:backend": "node scripts/build-backend.js",
+    "prepare:mac-build": "node scripts/prepare-mac-build.js",
     "smoke:mac": "bash scripts/smoke-test-mac.sh",
-    "dist": "npm run build:backend && electron-builder --publish never",
-    "dist:mac": "npm run build:backend && electron-builder --mac dmg zip --publish never",
+    "dist": "npm run build:backend && npm run prepare:mac-build && electron-builder --publish never",
+    "dist:mac": "npm run build:backend && npm run prepare:mac-build && electron-builder --mac dmg zip --publish never",
     "dist:win": "npm run build:backend && electron-builder --win nsis portable zip --publish never",
     "dist:linux": "npm run build:backend && electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
     "jsme-editor": "^2024.4.29",
-    "jspdf": "^4.1.0",
+    "jspdf": "^4.2.1",
     "openchemlib": "^9.20.0",
     "plotly.js-dist-min": "^2.27.0"
   },

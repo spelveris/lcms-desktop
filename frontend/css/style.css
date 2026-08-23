@@ -595,6 +595,21 @@ input[type="radio"] {
   width: 84px;
 }
 
+.timechange-eic-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timechange-eic-controls input[type="number"] {
+  width: 100px;
+}
+
+.tab-toolbar .timechange-eic-controls select {
+  min-width: 116px;
+}
+
 /* Tab toolbar */
 .tab-toolbar {
   display: flex;

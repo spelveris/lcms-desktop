@@ -6618,6 +6618,7 @@ function initDeconvolution() {
   document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvMasses(btn.dataset.format));
   });
+  document.getElementById('btn-export-deconv-spectrum-pdf')?.addEventListener('click', exportDeconvSpectrumPdf);
   document.querySelectorAll('.btn-export-ion-selection').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvIonSelection(btn.dataset.format));
   });
@@ -7223,6 +7224,7 @@ function renderDeconvDenseMassPreview() {
       return;
     }
     try {
+      container.innerHTML = '';
       charts.plotDenseDeconvolutedMassProfile('deconv-dense-mass-preview', spectrum, {
         style: applyDenseDeconvProfileStyle(buildCurrentDeconvStyle()),
         height: 340,
@@ -7314,6 +7316,45 @@ async function exportDeconvIonSelection(format) {
     const blob = await backendResponseToBlob(response);
     downloadBlob(blob, `${sanitizeFilename(sampleName)}_ion_selection.${format}`);
     toast(`Exported ${format.toUpperCase()} (ion selection)`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportDeconvSpectrumPdf() {
+  const samplePath = state.deconvSamplePath;
+  const spectrum = state.deconvResults?.spectrum || null;
+  const hasSpectrum = spectrum
+    && Array.isArray(spectrum.mz)
+    && spectrum.mz.length > 0
+    && Array.isArray(spectrum.intensities)
+    && spectrum.intensities.length > 0;
+  if (!samplePath || !hasSpectrum) {
+    toast('Run deconvolution first', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
+  const title = state.deconvResults?.background_path
+    ? 'Background-Subtracted Mass Spectrum'
+    : 'Mass Spectrum';
+
+  showLoading('Exporting mass spectrum PDF...');
+  try {
+    const response = await api.exportDeconvolutionSpectrum({
+      sample_name: sampleName,
+      spectrum,
+      title,
+      format: 'pdf',
+      dpi,
+      style: buildCurrentDeconvStyle(),
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${sanitizeFilename(sampleName)}_mass_spectrum.pdf`);
+    toast('Exported PDF (mass spectrum)', 'success');
   } catch (err) {
     toast(`Export failed: ${err.message}`, 'error');
   } finally {
@@ -7949,6 +7990,8 @@ function exportBatchDeconvCSV() {
 // ===== Time Change Tab =====
 function initTimeChangeMS() {
   document.getElementById('btn-run-time-change-ms').addEventListener('click', () => runTimeChangeMS('ms'));
+  document.getElementById('btn-run-time-change-tic')?.addEventListener('click', () => runTimeChangeMS('tic'));
+  document.getElementById('btn-run-time-change-eic')?.addEventListener('click', () => runTimeChangeMS('eic'));
   document.getElementById('btn-run-time-change-uv')?.addEventListener('click', () => runTimeChangeMS('uv'));
   document.getElementById('timechange-normalize').addEventListener('change', async () => {
     if (!state.timeChangeMSData) return;
@@ -7968,14 +8011,22 @@ function initTimeChangeMS() {
   document.querySelectorAll('.btn-export-timechange').forEach(btn => {
     btn.addEventListener('click', () => exportTimeChangeOffset(btn.dataset.format));
   });
+  document.getElementById('btn-export-timechange-ms-pdf')?.addEventListener('click', exportTimeChangeSummedMassPdf);
+  document.getElementById('btn-export-timechange-tic-pdf')?.addEventListener('click', exportTimeChangeTICPdf);
+  document.getElementById('btn-export-timechange-eic-pdf')?.addEventListener('click', exportTimeChangeEICPdf);
+  document.getElementById('btn-export-timechange-uv-pdf')?.addEventListener('click', exportTimeChangeUVPdf);
 }
 
 function getTimeChangeSignalKind() {
-  return state.timeChangeMSData?.kind === 'uv' ? 'uv' : 'ms';
+  const kind = state.timeChangeMSData?.kind;
+  return kind === 'uv' || kind === 'tic' || kind === 'eic' ? kind : 'ms';
 }
 
 function getTimeChangeSignalLabel(kind = getTimeChangeSignalKind()) {
-  return kind === 'uv' ? 'UV' : 'Mass';
+  if (kind === 'uv') return 'UV';
+  if (kind === 'tic') return 'TIC';
+  if (kind === 'eic') return 'EIC';
+  return 'Mass';
 }
 
 function getTimeChangeMSWindow() {
@@ -7997,6 +8048,20 @@ function getTimeChangeMSWindow() {
     return null;
   }
   return { start, end };
+}
+
+function getTimeChangeEICSettings() {
+  const mz = parseFloat(document.getElementById('timechange-eic-mz')?.value);
+  if (!Number.isFinite(mz) || mz <= 0) return null;
+  const ionMode = document.getElementById('timechange-eic-polarity')?.value === 'negative'
+    ? 'negative'
+    : 'positive';
+  return {
+    mz,
+    ionMode,
+    mzWindow: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+    smoothing: parseInt(document.getElementById('eic-smoothing')?.value, 10) || 0,
+  };
 }
 
 async function resolveTimeChangeUvWavelength() {
@@ -8025,23 +8090,33 @@ async function resolveTimeChangeUvWavelength() {
 async function runTimeChangeMS(kind = 'ms') {
   if (state.selectedFiles.length < 2) {
     toast('Select at least 2 samples for Time Change', 'warning');
-    return;
+    return false;
   }
 
-  kind = kind === 'uv' ? 'uv' : 'ms';
+  kind = kind === 'uv' || kind === 'tic' || kind === 'eic' ? kind : 'ms';
   const signalLabel = getTimeChangeSignalLabel(kind);
   const wavelength = kind === 'uv' ? await resolveTimeChangeUvWavelength() : null;
   if (kind === 'uv' && !Number.isFinite(wavelength)) {
     toast('Select a UV wavelength in Settings first', 'warning');
-    return;
+    return false;
   }
   const msWindow = kind === 'ms' ? getTimeChangeMSWindow() : null;
   if (kind === 'ms' && !msWindow) {
     toast('Enter a valid Time Change MS window where end is greater than start', 'warning');
-    return;
+    return false;
+  }
+  const eicSettings = kind === 'eic' ? getTimeChangeEICSettings() : null;
+  if (kind === 'eic' && !eicSettings) {
+    toast('Enter a valid positive m/z value for Time Change EIC', 'warning');
+    return false;
   }
 
-  showLoading(kind === 'uv' ? 'Generating UV traces...' : 'Generating mass spectra...');
+  const loadingMessage = kind === 'uv'
+    ? 'Generating UV traces...'
+    : (kind === 'tic'
+      ? 'Generating TIC traces...'
+      : (kind === 'eic' ? 'Generating EIC traces...' : 'Generating mass spectra...'));
+  showLoading(loadingMessage);
   try {
     const spectra = [];
     for (const file of state.selectedFiles) {
@@ -8068,6 +8143,64 @@ async function runTimeChangeMS(kind = 'ms') {
             path: file.path,
             kind,
             wavelength,
+            status: 'error',
+            error: err.message || String(err),
+            times: [],
+            intensities: [],
+          });
+        }
+      } else if (kind === 'tic') {
+        try {
+          const tic = await api.getTIC(file.path);
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            status: 'ok',
+            error: '',
+            times: tic.times || [],
+            intensities: tic.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            status: 'error',
+            error: err.message || String(err),
+            times: [],
+            intensities: [],
+          });
+        }
+      } else if (kind === 'eic') {
+        try {
+          const eic = await api.getEIC(
+            file.path,
+            eicSettings.mz,
+            eicSettings.mzWindow,
+            eicSettings.smoothing,
+            eicSettings.ionMode,
+          );
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            targetMz: eicSettings.mz,
+            ionMode: eicSettings.ionMode,
+            mzWindow: eicSettings.mzWindow,
+            status: 'ok',
+            error: '',
+            times: eic.times || [],
+            intensities: eic.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            targetMz: eicSettings.mz,
+            ionMode: eicSettings.ionMode,
+            mzWindow: eicSettings.mzWindow,
             status: 'error',
             error: err.message || String(err),
             times: [],
@@ -8106,51 +8239,71 @@ async function runTimeChangeMS(kind = 'ms') {
       }
     }
 
-    state.timeChangeMSData = { generatedAt: new Date().toISOString(), kind, wavelength, spectra };
+    state.timeChangeMSData = {
+      generatedAt: new Date().toISOString(),
+      kind,
+      wavelength,
+      targetMz: eicSettings?.mz ?? null,
+      ionMode: eicSettings?.ionMode ?? null,
+      mzWindow: eicSettings?.mzWindow ?? null,
+      spectra,
+    };
     renderTimeChangeMS(state.timeChangeMSData);
     renderReportSummary();
 
     const okCount = spectra.filter(s => s.status === 'ok').length;
     toast(`Time Change ${signalLabel} complete (${okCount}/${spectra.length} succeeded)`, okCount > 0 ? 'success' : 'warning');
+    return okCount > 0;
   } catch (err) {
     toast(`Time Change failed: ${err.message}`, 'error');
+    return false;
   } finally {
     hideLoading();
   }
 }
 
 function getTimeChangePlotSpectra(data) {
-  const kind = data?.kind === 'uv' ? 'uv' : 'ms';
+  const kind = data?.kind === 'uv' || data?.kind === 'tic' || data?.kind === 'eic' ? data.kind : 'ms';
+  const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
   return (data?.spectra || [])
     .filter((s) => {
-      const xValues = kind === 'uv' ? s.times : s.mz;
+      const xValues = isTimeSeries ? s.times : s.mz;
       return Array.isArray(xValues) && Array.isArray(s.intensities) && xValues.length > 0 && s.intensities.length > 0;
     })
     .map((s) => ({
       label: s.name,
-      x: kind === 'uv' ? s.times : s.mz,
-      mz: kind === 'uv' ? s.times : s.mz,
+      x: isTimeSeries ? s.times : s.mz,
+      mz: isTimeSeries ? s.times : s.mz,
       intensities: s.intensities,
       maxIntensity: maxFiniteValue(s.intensities),
     }));
 }
 
-function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength) {
+function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength, targetMz = null, ionMode = null) {
   const spacingMultiplier = 3.375;
-  const xOffsetStep = (kind === 'uv' ? 0.10 : 20.0) * spacingMultiplier;
+  const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
+  const xOffsetStep = (isTimeSeries ? 0.10 : 20.0) * spacingMultiplier;
   let yOffsetStep = 10.0 * spacingMultiplier;
   if (!normalize) {
     const globalYMax = plotSpectra.reduce((acc, s) => Math.max(acc, s.maxIntensity || 0), 0);
     yOffsetStep = (globalYMax > 0 ? globalYMax * 0.10 : 1.0) * spacingMultiplier;
   }
   const wavelengthLabel = Number.isFinite(Number(wavelength)) ? Number(wavelength).toFixed(0) : '';
-  const xTitle = kind === 'uv' ? 'Time (min)' : 'm/z';
+  const targetMzLabel = Number.isFinite(Number(targetMz)) ? Number(targetMz).toFixed(2) : '?';
+  const polarityLabel = ionMode === 'negative' ? '−' : '+';
+  const xTitle = isTimeSeries ? 'Time (min)' : 'm/z';
   const yTitle = kind === 'uv'
     ? `Absorbance${wavelengthLabel ? ` (${wavelengthLabel} nm)` : ''}`
-    : (normalize ? 'Relative Intensity + offset' : 'Intensity + offset');
+    : (kind === 'tic'
+      ? (normalize ? 'Relative TIC Intensity + offset' : 'TIC Intensity + offset')
+      : (kind === 'eic'
+        ? (normalize ? 'Relative EIC Intensity + offset' : 'EIC Intensity + offset')
+        : (normalize ? 'Relative Intensity + offset' : 'Intensity + offset')));
   const baseTitle = kind === 'uv'
     ? `UV ${wavelengthLabel} nm`
-    : 'Summed Mass Spectrum';
+    : (kind === 'tic'
+      ? 'Total Ion Chromatogram (TIC)'
+      : (kind === 'eic' ? `EIC m/z ${targetMzLabel} (${polarityLabel})` : 'Summed Mass Spectrum'));
   return {
     xOffsetStep,
     yOffsetStep,
@@ -8158,7 +8311,7 @@ function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength) {
     yTitle,
     overlapTitle: `${baseTitle} Overlap`,
     exportTitle: kind === 'uv' ? 'Absorbance' : `${baseTitle} Offset`,
-    offsetTitle: `${baseTitle} (Diagonal Offset: +${xOffsetStep.toFixed(kind === 'uv' ? 2 : 0)} ${xTitle}, +${normalize ? yOffsetStep.toFixed(0) : yOffsetStep.toPrecision(2)} intensity units per trace)`,
+    offsetTitle: `${baseTitle} (Diagonal Offset: +${xOffsetStep.toFixed(isTimeSeries ? 2 : 0)} ${xTitle}, +${normalize ? yOffsetStep.toFixed(0) : yOffsetStep.toPrecision(2)} intensity units per trace)`,
   };
 }
 
@@ -8195,7 +8348,7 @@ function buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, k
     .map((s) => Number(Array.isArray(s.x) && s.x.length > 0 ? s.x[0] : NaN))
     .filter((v) => Number.isFinite(v));
   if (finiteStarts.length === 0) return null;
-  const anchorX = kind === 'uv' ? 0 : Math.min(...finiteStarts);
+  const anchorX = kind === 'uv' || kind === 'tic' || kind === 'eic' ? 0 : Math.min(...finiteStarts);
   const baseTrace = plotSpectra[0];
   const baseRawY = interpolateTimeChangeY(baseTrace.x || [], baseTrace.intensities || [], anchorX);
   const baseY = normalize
@@ -8221,7 +8374,8 @@ function buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, k
 
 function renderTimeChangeMS(data) {
   const spectra = data.spectra || [];
-  const kind = data.kind === 'uv' ? 'uv' : 'ms';
+  const kind = data.kind === 'uv' || data.kind === 'tic' || data.kind === 'eic' ? data.kind : 'ms';
+  const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
   const normalize = document.getElementById('timechange-normalize').checked;
   const plotContainer = document.getElementById('timechange-ms-plot');
   const offsetPlotContainer = document.getElementById('timechange-ms-offset-plot');
@@ -8239,12 +8393,25 @@ function renderTimeChangeMS(data) {
     plotContainer.innerHTML = '<p class="placeholder-msg">No time-change data available</p>';
     offsetPlotContainer.innerHTML = '<p class="placeholder-msg">No offset data available</p>';
   } else {
-    const offsetConfig = getTimeChangeOffsetConfig(plotSpectra, normalize, kind, data.wavelength);
+    const offsetConfig = getTimeChangeOffsetConfig(
+      plotSpectra,
+      normalize,
+      kind,
+      data.wavelength,
+      data.targetMz,
+      data.ionMode,
+    );
     charts.plotMassSpectraOverlay('timechange-ms-plot', plotSpectra, {
       normalize,
       title: offsetConfig.overlapTitle,
       xTitle: offsetConfig.xTitle,
-      yTitle: kind === 'uv' ? offsetConfig.yTitle : (normalize ? 'Relative Intensity' : 'Intensity'),
+      yTitle: kind === 'uv'
+        ? offsetConfig.yTitle
+        : (kind === 'tic'
+          ? (normalize ? 'Relative TIC Intensity' : 'TIC Intensity')
+          : (kind === 'eic'
+            ? (normalize ? 'Relative EIC Intensity' : 'EIC Intensity')
+            : (normalize ? 'Relative Intensity' : 'Intensity'))),
     });
 
     const shifted = plotSpectra.map((s, i) => ({
@@ -8270,18 +8437,22 @@ function renderTimeChangeMS(data) {
     });
   }
 
-  const contextHeading = kind === 'uv' ? 'Signal' : 'Window (min)';
+  const contextHeading = isTimeSeries ? 'Signal' : 'Window (min)';
   let html = `<div class="data-table-wrapper"><table class="data-table">
     <thead><tr>
       <th>Sample</th><th>Status</th><th>${contextHeading}</th><th>Points</th><th>Error</th>
     </tr></thead><tbody>`;
 
   spectra.forEach((s) => {
-    const xValues = kind === 'uv' ? s.times : s.mz;
+    const xValues = isTimeSeries ? s.times : s.mz;
     const pointCount = Array.isArray(xValues) ? xValues.length : 0;
     const contextValue = kind === 'uv'
       ? `UV ${Number.isFinite(Number(s.wavelength)) ? Number(s.wavelength).toFixed(0) : ''} nm`
-      : `${Number.isFinite(s.start) ? s.start.toFixed(2) : '-'} - ${Number.isFinite(s.end) ? s.end.toFixed(2) : '-'}`;
+      : (kind === 'tic'
+        ? 'TIC'
+        : (kind === 'eic'
+          ? `EIC m/z ${Number.isFinite(Number(s.targetMz)) ? Number(s.targetMz).toFixed(2) : '?'}${formatProgressionPolarityLabel(s.ionMode)}`
+          : `${Number.isFinite(s.start) ? s.start.toFixed(2) : '-'} - ${Number.isFinite(s.end) ? s.end.toFixed(2) : '-'}`));
     html += `<tr>
       <td>${escapeHtml(s.name)}</td>
       <td>${s.status}</td>
@@ -8300,7 +8471,9 @@ async function exportTimeChangeOffset(format) {
     return;
   }
 
-  const kind = state.timeChangeMSData.kind === 'uv' ? 'uv' : 'ms';
+  const kind = state.timeChangeMSData.kind === 'uv' || state.timeChangeMSData.kind === 'tic' || state.timeChangeMSData.kind === 'eic'
+    ? state.timeChangeMSData.kind
+    : 'ms';
   const normalize = document.getElementById('timechange-normalize')?.checked === true;
   const plotSpectra = getTimeChangePlotSpectra(state.timeChangeMSData);
   if (plotSpectra.length === 0) {
@@ -8309,11 +8482,22 @@ async function exportTimeChangeOffset(format) {
   }
 
   const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
-  const offsetConfig = getTimeChangeOffsetConfig(plotSpectra, normalize, kind, state.timeChangeMSData.wavelength);
+  const offsetConfig = getTimeChangeOffsetConfig(
+    plotSpectra,
+    normalize,
+    kind,
+    state.timeChangeMSData.wavelength,
+    state.timeChangeMSData.targetMz,
+    state.timeChangeMSData.ionMode,
+  );
   const baseStyle = buildCurrentDeconvStyle();
   const filenameBase = kind === 'uv'
     ? `time_change_uv_${Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength).toFixed(0) + 'nm' : 'offset'}`
-    : 'time_change_mass_offset';
+    : (kind === 'tic'
+      ? 'time_change_tic_offset'
+      : (kind === 'eic'
+        ? `time_change_eic_${Number(state.timeChangeMSData.targetMz).toFixed(2).replace('.', '_')}_${state.timeChangeMSData.ionMode === 'negative' ? 'neg' : 'pos'}_offset`
+        : 'time_change_mass_offset'));
 
   showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
   try {
@@ -8336,7 +8520,7 @@ async function exportTimeChangeOffset(format) {
         x_axis_width_multiplier: 2.0,
         offset_angle_degrees: 45.0,
         offset_guide: true,
-        offset_guide_anchor_x: kind === 'uv' ? 0.0 : null,
+        offset_guide_anchor_x: kind === 'uv' || kind === 'tic' || kind === 'eic' ? 0.0 : null,
         uv_wavelength_nm: Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength) : null,
         x_offset_step: offsetConfig.xOffsetStep,
         y_offset_step: offsetConfig.yOffsetStep,
@@ -8357,6 +8541,56 @@ async function exportTimeChangeOffset(format) {
   } finally {
     hideLoading();
   }
+}
+
+async function exportTimeChangeTICPdf() {
+  if (getTimeChangeSignalKind() !== 'tic') {
+    const generated = await runTimeChangeMS('tic');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeEICPdf() {
+  const requested = getTimeChangeEICSettings();
+  if (!requested) {
+    toast('Enter a valid positive m/z value for Time Change EIC', 'warning');
+    return;
+  }
+  const current = state.timeChangeMSData;
+  const matchesCurrent = current?.kind === 'eic'
+    && Math.abs(Number(current.targetMz) - requested.mz) < 1e-9
+    && current.ionMode === requested.ionMode
+    && Math.abs(Number(current.mzWindow) - requested.mzWindow) < 1e-9;
+  if (!matchesCurrent) {
+    const generated = await runTimeChangeMS('eic');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeUVPdf() {
+  const wavelength = await resolveTimeChangeUvWavelength();
+  if (!Number.isFinite(wavelength)) {
+    toast('Select a UV wavelength in Settings first', 'warning');
+    return;
+  }
+  const current = state.timeChangeMSData;
+  const matchesCurrent = current?.kind === 'uv'
+    && Math.abs(Number(current.wavelength) - wavelength) < 1e-9;
+  if (!matchesCurrent) {
+    const generated = await runTimeChangeMS('uv');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeSummedMassPdf() {
+  if (getTimeChangeSignalKind() !== 'ms' || !state.timeChangeMSData) {
+    const generated = await runTimeChangeMS('ms');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
 }
 
 // ===== Report Export Tab =====

@@ -2127,6 +2127,7 @@ def create_time_change_offset_figure(
     _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
 
     signal_kind = str(style.get('signal_kind', 'ms') or 'ms').lower()
+    is_time_series = signal_kind in {'uv', 'tic', 'eic'}
     normalize = _coerce_bool(style.get('normalize', False), False)
     line_width = max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
     show_grid = _coerce_bool(style.get('show_grid', False), False)
@@ -2134,7 +2135,7 @@ def create_time_change_offset_figure(
     colors = ['#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
               '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
-    default_x_offset = 0.10 if signal_kind == 'uv' else 20.0
+    default_x_offset = 0.10 if is_time_series else 20.0
     x_offset_step = _coerce_finite_float(style.get('x_offset_step'), default_x_offset)
 
     global_y_max = 0.0
@@ -2160,7 +2161,7 @@ def create_time_change_offset_figure(
 
     def _offset_guide_anchor_x() -> float:
         starts = [float(trace['x'][0]) for trace in normalized_traces if trace['x'].size > 0]
-        default_anchor = 0.0 if signal_kind == 'uv' else (min(starts) if starts else 0.0)
+        default_anchor = 0.0 if is_time_series else (min(starts) if starts else 0.0)
         return _coerce_finite_float(style.get('offset_guide_anchor_x'), default_anchor)
 
     def _plot_offset_traces(current_y_offset: float) -> dict[int, object]:
@@ -2237,12 +2238,17 @@ def create_time_change_offset_figure(
         ax.text(0.5, 0.5, "No time-change data", ha='center', va='center', transform=ax.transAxes)
 
     title = str(style.get('title') or 'Time Change')
-    x_label = str(style.get('x_label') or ('Time (min)' if signal_kind == 'uv' else 'm/z'))
+    x_label = str(style.get('x_label') or ('Time (min)' if is_time_series else 'm/z'))
     wavelength_nm = _coerce_finite_float(style.get('uv_wavelength_nm'), np.nan)
     absorbance_label = f"Absorbance ({wavelength_nm:.0f} nm)" if np.isfinite(wavelength_nm) else "Absorbance"
-    default_y_label = absorbance_label if signal_kind == 'uv' else (
-        'Relative Intensity + offset' if normalize else 'Intensity + offset'
-    )
+    if signal_kind == 'uv':
+        default_y_label = absorbance_label
+    elif signal_kind == 'tic':
+        default_y_label = 'Relative TIC Intensity + offset' if normalize else 'TIC Intensity + offset'
+    elif signal_kind == 'eic':
+        default_y_label = 'Relative EIC Intensity + offset' if normalize else 'EIC Intensity + offset'
+    else:
+        default_y_label = 'Relative Intensity + offset' if normalize else 'Intensity + offset'
     y_label = str(style.get('y_label') or default_y_label)
 
     ax.set_xlabel(x_label)
@@ -2483,6 +2489,62 @@ def create_deconvoluted_masses_figure(
         inset_ax = ax.inset_axes([0.70, 0.47, 0.27, 0.35])
         _plot_deconvoluted_component_inset(inset_ax, selected_component, spectrum=spectrum)
 
+    return fig
+
+
+def create_deconvolution_mass_spectrum_figure(
+    sample_name: str,
+    spectrum: Optional[dict],
+    title: str = "Mass Spectrum",
+    style: Optional[dict] = None,
+) -> matplotlib.figure.Figure:
+    """Create a clean standalone deconvolution spectrum without ion guides."""
+    style = style or {}
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
+    line_width = max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
+    show_grid = _coerce_bool(style.get('show_grid', True), True)
+    show_title = _coerce_bool(style.get('deconv_show_title', True), True)
+    show_subtitle = _coerce_bool(style.get('deconv_show_subtitle', True), True)
+    sample_subtitle = (sample_name[:-2] if sample_name.lower().endswith('.d') else sample_name) if show_subtitle else None
+    normalized_spectrum = _normalize_spectrum_payload(spectrum)
+
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
+
+    if normalized_spectrum is not None:
+        ax.plot(
+            normalized_spectrum['mz'],
+            normalized_spectrum['intensities'],
+            color='#1f77b4',
+            linewidth=line_width,
+        )
+        ax.set_ylim(bottom=0)
+    else:
+        ax.text(0.5, 0.5, 'No mass spectrum available', ha='center', va='center', transform=ax.transAxes)
+
+    ax.set_xlabel('m/z')
+    ax.set_ylabel('Intensity')
+    if show_title:
+        title_y = 1.08 if sample_subtitle else 1.03
+        ax.set_title(str(title or 'Mass Spectrum'), fontweight='bold', y=title_y)
+    if sample_subtitle:
+        sub_y = 1.02 if show_title else 1.03
+        ax.text(
+            0.5,
+            sub_y,
+            sample_subtitle,
+            transform=ax.transAxes,
+            ha='center',
+            va='bottom',
+            fontsize=7,
+            fontweight='normal',
+        )
+    if show_grid:
+        ax.grid(True, alpha=0.3)
+    _apply_safe_scientific_y_format(ax, scilimits=(0, 0))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    _apply_locked_deconvolution_export_layout(fig)
     return fig
 
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.38">
+  <link rel="stylesheet" href="css/style.css?v=0.2.39">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -447,12 +447,18 @@
         <div class="two-col deconv-results-grid">
           <div class="col deconv-spectrum-stack">
             <div id="deconv-spectrum-plot" class="plot-container" style="border-color:transparent;"></div>
+            <div class="deconv-mass-download-row">
+              <button id="btn-export-deconv-spectrum-pdf" class="btn btn-sm">Download PDF</button>
+            </div>
             <div class="deconv-dense-preview-card">
               <div class="tab-toolbar" style="margin:0 0 8px 0;">
                 <span class="toolbar-note">Full Deconvoluted Spectrum</span>
               </div>
               <div id="deconv-dense-mass-preview" class="deconv-dense-preview">
                 <p class="placeholder-msg">Run deconvolution to render the full dense mass profile.</p>
+              </div>
+              <div class="deconv-mass-download-row">
+                <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-dense">Download PDF</button>
               </div>
             </div>
           </div>
@@ -463,7 +469,6 @@
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="png">Download PNG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="svg">Download SVG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf">Download PDF</button>
-                <button class="btn btn-sm btn-export-deconv-masses deconv-expert-only hidden" data-format="pdf-dense">Download Dense PDF</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-wide">Download Wide PDF</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-side-by-side">Download Side-by-Side PDF</button>
               </div>
@@ -518,12 +523,26 @@
           <label>MS Start (min)<input type="number" id="timechange-ms-start" step="0.05" value="0" min="0"></label>
           <label>MS End (min)<input type="number" id="timechange-ms-end" step="0.05" value="30" min="0"></label>
         </div>
+        <button id="btn-export-timechange-ms-pdf" class="btn btn-sm" title="Generate summed mass spectra if needed, then export the diagonal Time Change plot">PDF summed mass</button>
+        <button id="btn-run-time-change-tic" class="btn btn-primary">Generate TIC</button>
+        <button id="btn-export-timechange-tic-pdf" class="btn btn-sm" title="Generate TIC if needed, then export the diagonal Time Change TIC plot">PDF TIC</button>
+        <div class="timechange-eic-controls">
+          <label>EIC m/z<input type="number" id="timechange-eic-mz" step="0.01" min="0.01" placeholder="e.g. 203.00"></label>
+          <label>Polarity
+            <select id="timechange-eic-polarity">
+              <option value="positive">Positive (+)</option>
+              <option value="negative">Negative (−)</option>
+            </select>
+          </label>
+          <button id="btn-run-time-change-eic" class="btn btn-primary">Generate EIC</button>
+          <button id="btn-export-timechange-eic-pdf" class="btn btn-sm" title="Generate the selected EIC if needed, then export the diagonal Time Change EIC plot">PDF EIC</button>
+        </div>
         <button id="btn-run-time-change-uv" class="btn btn-primary">Generate UV</button>
+        <button id="btn-export-timechange-uv-pdf" class="btn btn-sm" title="Generate UV if needed, then export the diagonal Time Change UV plot">PDF UV</button>
         <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
         <div class="export-group">
           <button class="btn btn-sm btn-export-timechange" data-format="png">PNG</button>
           <button class="btn btn-sm btn-export-timechange" data-format="svg">SVG</button>
-          <button class="btn btn-sm btn-export-timechange" data-format="pdf">PDF</button>
         </div>
       </div>
       <div id="timechange-empty-state" class="quote-empty-stack"></div>
@@ -775,9 +794,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.38"></script>
-  <script src="js/charts.js?v=0.2.38"></script>
-  <script src="js/quotes.js?v=0.2.38"></script>
-  <script src="js/app.js?v=0.2.38"></script>
+  <script src="js/api.js?v=0.2.39"></script>
+  <script src="js/charts.js?v=0.2.39"></script>
+  <script src="js/quotes.js?v=0.2.39"></script>
+  <script src="js/app.js?v=0.2.39"></script>
 </body>
 </html>

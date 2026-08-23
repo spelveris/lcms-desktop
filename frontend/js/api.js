@@ -167,6 +167,14 @@ const api = {
     });
   },
 
+  exportDeconvolutionSpectrum(payload) {
+    return apiFetch('/api/export-deconvolution-spectrum', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   exportTimeChange(payload) {
     return apiFetch('/api/export-time-change', {
       method: 'POST',
