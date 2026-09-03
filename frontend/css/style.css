@@ -285,6 +285,16 @@ input[type="radio"] {
   text-overflow: ellipsis;
 }
 .mount-btn:hover { background: var(--accent); color: #fff; }
+.mount-btn.mount-btn-pinned {
+  background: rgba(45, 126, 220, 0.2);
+  border-color: rgba(89, 163, 255, 0.8);
+  color: #9dcbff;
+}
+.mount-btn.mount-btn-pinned:hover {
+  background: #2d7edc;
+  border-color: #68aaff;
+  color: #fff;
+}
 
 .sort-bar {
   display: flex;

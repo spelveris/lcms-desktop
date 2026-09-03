@@ -59,6 +59,7 @@ from data_reader import (
     list_rslt_runs,
     split_virtual_sample_path,
 )
+from search_index import record_transferred_sample, search_shared_index, write_complete_index
 import analysis
 import config as lcms_config
 import plotting
@@ -860,10 +861,164 @@ def _make_browser_search_item(
     }
 
 
+def _build_browser_search_index(root: Path) -> list[dict]:
+    """Collect browser-visible names once for subsequent indexed searches."""
+    items: list[dict] = []
+
+    def add_container_runs(container_path: Path, kind: str) -> None:
+        runs = list_rslt_runs(str(container_path)) if kind == "rslt-run" else list_olax_runs(str(container_path))
+        modified = _safe_path_mtime(container_path)
+        for run in runs:
+            items.append(
+                _make_browser_search_item(
+                    name=str(run.get("name") or ""),
+                    path=str(run.get("path") or ""),
+                    parent_path=container_path,
+                    search_root=root,
+                    is_dir=False,
+                    is_d_folder=True,
+                    kind=kind,
+                    modified=modified,
+                )
+            )
+
+    def ignore_walk_error(_exc) -> None:
+        return None
+
+    for current_root, dirs, files in os.walk(root, onerror=ignore_walk_error):
+        current_root_path = Path(current_root)
+        next_dirs: list[str] = []
+
+        for dirname in sorted((d for d in dirs if not d.startswith(".")), key=lambda value: value.lower()):
+            entry_path = current_root_path / dirname
+            modified = _safe_path_mtime(entry_path)
+
+            if _is_supported_sample_folder(entry_path):
+                items.append(
+                    _make_browser_search_item(
+                        name=dirname,
+                        path=str(entry_path),
+                        parent_path=current_root_path,
+                        search_root=root,
+                        is_dir=True,
+                        is_d_folder=True,
+                        kind="sample-folder",
+                        modified=modified,
+                    )
+                )
+                continue
+
+            if entry_path.suffix.lower() == RSLT_CONTAINER_SUFFIX:
+                items.append(
+                    _make_browser_search_item(
+                        name=dirname,
+                        path=str(entry_path),
+                        parent_path=current_root_path,
+                        search_root=root,
+                        is_dir=True,
+                        is_d_folder=False,
+                        kind="rslt-container",
+                        modified=modified,
+                    )
+                )
+                add_container_runs(entry_path, "rslt-run")
+                continue
+
+            items.append(
+                _make_browser_search_item(
+                    name=dirname,
+                    path=str(entry_path),
+                    parent_path=current_root_path,
+                    search_root=root,
+                    is_dir=True,
+                    is_d_folder=False,
+                    kind="directory",
+                    modified=modified,
+                )
+            )
+            next_dirs.append(dirname)
+
+        dirs[:] = next_dirs
+
+        for filename in sorted((f for f in files if not f.startswith(".")), key=lambda value: value.lower()):
+            entry_path = current_root_path / filename
+            modified = _safe_path_mtime(entry_path)
+
+            if _is_supported_sample_container(entry_path):
+                items.append(
+                    _make_browser_search_item(
+                        name=filename,
+                        path=str(entry_path),
+                        parent_path=current_root_path,
+                        search_root=root,
+                        is_dir=True,
+                        is_d_folder=False,
+                        kind="olax-container",
+                        modified=modified,
+                    )
+                )
+                add_container_runs(entry_path, "olax-run")
+                continue
+
+            items.append(
+                _make_browser_search_item(
+                    name=filename,
+                    path=str(entry_path),
+                    parent_path=current_root_path,
+                    search_root=root,
+                    is_dir=False,
+                    is_d_folder=False,
+                    kind="file",
+                    modified=modified,
+                )
+            )
+
+    return items
+
+
+def _filter_browser_index_items(root: Path, items: list[dict], query: str, limit: int) -> dict:
+    matched = []
+    for item in items:
+        if not _browser_search_name_matches(item.get("name", ""), query):
+            continue
+        base_path, _selector = split_virtual_sample_path(str(item.get("path") or ""))
+        try:
+            Path(base_path).relative_to(root)
+        except ValueError:
+            continue
+        matched.append(item)
+    matched.sort(key=lambda item: (str(item.get("name", "")).lower(), str(item.get("path", "")).lower()))
+    return {
+        "path": str(root),
+        "items": matched[:limit],
+        "truncated": len(matched) > limit,
+        "indexed": False,
+    }
+
+
+def _resolve_browser_index_root(search_root: Path, requested_index_root: Optional[Union[str, Path]]) -> Path:
+    if requested_index_root:
+        candidate = Path(_normalize_filesystem_path(str(requested_index_root)))
+        try:
+            search_root.relative_to(candidate)
+            if candidate.is_dir():
+                return candidate
+        except ValueError:
+            pass
+
+    # Once a transfer has created the shared index folder, searches started in
+    # a child folder can discover and reuse it without frontend configuration.
+    for candidate in (search_root, *search_root.parents):
+        if (candidate / ".catrupole-index").is_dir():
+            return candidate
+    return search_root
+
+
 def _search_browser_items(
     path: Union[str, Path],
     search: str,
     limit: int = DEFAULT_BROWSER_SEARCH_LIMIT,
+    index_root: Optional[Union[str, Path]] = None,
 ) -> dict:
     root = Path(_normalize_filesystem_path(str(path)))
     query = str(search or "").strip()
@@ -914,113 +1069,19 @@ def _search_browser_items(
         truncated = len(results) > capped_limit
         return {"path": str(root), "items": results[:capped_limit], "truncated": truncated}
 
-    def _on_walk_error(exc):
-        if isinstance(exc, PermissionError):
-            raise HTTPException(status_code=403, detail="Permission denied")
+    shared_index_root = _resolve_browser_index_root(root, index_root)
+    indexed_result = search_shared_index(shared_index_root, query, capped_limit, search_root=root)
+    if indexed_result is not None:
+        return indexed_result
 
-    for current_root, dirs, files in os.walk(root, onerror=_on_walk_error):
-        current_root_path = Path(current_root)
-        next_dirs: list[str] = []
-
-        for dirname in sorted((d for d in dirs if not d.startswith(".")), key=lambda value: value.lower()):
-            entry_path = current_root_path / dirname
-            modified = _safe_path_mtime(entry_path)
-
-            if _is_supported_sample_folder(entry_path):
-                if _browser_search_name_matches(dirname, query) and not append_item(
-                    _make_browser_search_item(
-                        name=dirname,
-                        path=str(entry_path),
-                        parent_path=current_root_path,
-                        search_root=root,
-                        is_dir=True,
-                        is_d_folder=True,
-                        kind="sample-folder",
-                        modified=modified,
-                    )
-                ):
-                    break
-                continue
-
-            if entry_path.suffix.lower() == RSLT_CONTAINER_SUFFIX:
-                if _browser_search_name_matches(dirname, query) and not append_item(
-                    _make_browser_search_item(
-                        name=dirname,
-                        path=str(entry_path),
-                        parent_path=current_root_path,
-                        search_root=root,
-                        is_dir=True,
-                        is_d_folder=False,
-                        kind="rslt-container",
-                        modified=modified,
-                    )
-                ):
-                    break
-                if not _collect_container_runs(entry_path, "rslt-run"):
-                    break
-                continue
-
-            if _browser_search_name_matches(dirname, query) and not append_item(
-                _make_browser_search_item(
-                    name=dirname,
-                    path=str(entry_path),
-                    parent_path=current_root_path,
-                    search_root=root,
-                    is_dir=True,
-                    is_d_folder=False,
-                    kind="directory",
-                    modified=modified,
-                )
-            ):
-                break
-
-            next_dirs.append(dirname)
-
-        dirs[:] = next_dirs
-        if len(results) >= max_results:
-            break
-
-        for filename in sorted((f for f in files if not f.startswith(".")), key=lambda value: value.lower()):
-            entry_path = current_root_path / filename
-            modified = _safe_path_mtime(entry_path)
-
-            if _is_supported_sample_container(entry_path):
-                if _browser_search_name_matches(filename, query) and not append_item(
-                    _make_browser_search_item(
-                        name=filename,
-                        path=str(entry_path),
-                        parent_path=current_root_path,
-                        search_root=root,
-                        is_dir=True,
-                        is_d_folder=False,
-                        kind="olax-container",
-                        modified=modified,
-                    )
-                ):
-                    break
-                if not _collect_container_runs(entry_path, "olax-run"):
-                    break
-                continue
-
-            if _browser_search_name_matches(filename, query) and not append_item(
-                _make_browser_search_item(
-                    name=filename,
-                    path=str(entry_path),
-                    parent_path=current_root_path,
-                    search_root=root,
-                    is_dir=False,
-                    is_d_folder=False,
-                    kind="file",
-                    modified=modified,
-                )
-            ):
-                break
-
-        if len(results) >= max_results:
-            break
-
-    truncated = len(results) > capped_limit
-    return {"path": str(root), "items": results[:capped_limit], "truncated": truncated}
+    # The first search performs the one-time full scan and writes this
+    # computer's complete shard. Later keystrokes only merge/search the shards.
+    index_items = _build_browser_search_index(shared_index_root)
+    if write_complete_index(shared_index_root, index_items):
+        indexed_result = search_shared_index(shared_index_root, query, capped_limit, search_root=root)
+        if indexed_result is not None:
+            return indexed_result
+    return _filter_browser_index_items(root, index_items, query, capped_limit)
 
 
 def _recent_sequence_date_tokens(lookback_days: int) -> list[str]:
@@ -2497,9 +2558,10 @@ def search_browser(
     path: str = Query(..., description="Directory or container to search"),
     search: str = Query(..., description="Name fragment to match"),
     limit: int = Query(DEFAULT_BROWSER_SEARCH_LIMIT, ge=1, le=500),
+    index_root: Optional[str] = Query(None, description="Shared root that owns the hidden search index"),
 ):
     """Recursively search browser-visible items under a path."""
-    return _search_browser_items(path, search, limit=limit)
+    return _search_browser_items(path, search, limit=limit, index_root=index_root)
 
 
 @app.get("/api/find-d-folders")
@@ -3105,21 +3167,37 @@ def list_volumes():
     import platform
     volumes = []
 
+    def add_volume(name: str, path: Union[str, Path], *, pinned: bool = False) -> None:
+        normalized = str(path)
+        if any(item.get("path") == normalized for item in volumes):
+            return
+        item = {"name": name, "path": normalized}
+        if pinned:
+            item["pinned"] = True
+        volumes.append(item)
+
     system = platform.system()
     if system == "Darwin":
+        preferred = Path("/Volumes/chab_loc_lang_s1/Group/LC-MS Agilent data")
+        if preferred.is_dir():
+            add_volume("LC-MS Agilent data", preferred, pinned=True)
         # macOS: list /Volumes
         vol_path = Path("/Volumes")
         if vol_path.exists():
             for entry in sorted(vol_path.iterdir()):
                 if entry.name.startswith("."):
                     continue
-                volumes.append({"name": entry.name, "path": str(entry)})
+                add_volume(entry.name, entry)
     elif system == "Windows":
         # Windows: list drive letters
         for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
             drive = f"{letter}:\\"
             if os.path.exists(drive):
-                volumes.append({"name": f"{letter}:", "path": drive})
+                for relative in (("Group", "LC-MS Agilent data"), ("LC-MS Agilent data",)):
+                    preferred = Path(drive).joinpath(*relative)
+                    if preferred.is_dir():
+                        add_volume("LC-MS Agilent data", preferred, pinned=True)
+                add_volume(f"{letter}:", drive)
     else:
         # Linux: list /mnt and /media
         for base in ["/mnt", "/media"]:
@@ -3128,10 +3206,10 @@ def list_volumes():
                 for entry in sorted(bp.iterdir()):
                     if entry.name.startswith("."):
                         continue
-                    volumes.append({"name": entry.name, "path": str(entry)})
+                    add_volume(entry.name, entry)
         # Also add home
         home = Path.home()
-        volumes.append({"name": f"Home ({home.name})", "path": str(home)})
+        add_volume(f"Home ({home.name})", home)
 
     return {"volumes": volumes, "platform": system.lower()}
 
@@ -3362,6 +3440,9 @@ def run_router_copy(payload: dict = Body(...)):
         try:
             _copy_router_folder(source_folder, destination_path)
             result["status"] = "copied"
+            result["index_updated"] = record_transferred_sample(destination_root_path, destination_path)
+            if not result["index_updated"]:
+                result["detail"] = "Copied, but the shared search index could not be updated"
             copied_count += 1
         except Exception as exc:
             result["status"] = "error"
