@@ -3894,6 +3894,55 @@ def export_time_change(payload: dict = Body(...)):
     )
 
 
+@app.post("/api/export-uv-area")
+def export_uv_area(payload: dict = Body(...)):
+    """Export a UV area graph with the fixed Time Change axis and font sizing."""
+    times = payload.get("times", [])
+    intensities = payload.get("intensities", [])
+    areas = payload.get("areas", [])
+    if (
+        not isinstance(times, list)
+        or not isinstance(intensities, list)
+        or len(times) == 0
+        or len(times) != len(intensities)
+    ):
+        raise HTTPException(status_code=400, detail="times and intensities must be equally sized non-empty lists")
+    if not isinstance(areas, list):
+        raise HTTPException(status_code=400, detail="areas must be a list")
+
+    try:
+        dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
+    except Exception:
+        dpi = lcms_config.EXPORT_DPI
+    dpi = max(72, min(600, dpi))
+
+    style = payload.get("style", {})
+    if not isinstance(style, dict):
+        style = {}
+    sample_name = str(payload.get("sample_name") or "sample")
+    wavelength = payload.get("wavelength")
+    fig = plotting.create_uv_area_export_figure(
+        times=times,
+        intensities=intensities,
+        areas=areas,
+        sample_name=sample_name,
+        wavelength=wavelength,
+        style=style,
+    )
+    try:
+        content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+    finally:
+        plt.close(fig)
+
+    filename_base = str(payload.get("filename_base") or "uv_area")
+    safe_name = _sanitize_filename(filename_base, fallback="uv_area")
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
+    )
+
+
 @app.post("/api/export-ion-selection")
 def export_ion_selection(payload: dict = Body(...)):
     """Export webapp-style ion selection figure for deconvolution results."""

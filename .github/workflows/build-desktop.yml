@@ -186,6 +186,15 @@ jobs:
 
           cat "$SMOKE_DIR/health.json"
 
+          curl -fsS "http://127.0.0.1:${SMOKE_PORT}/api/export-uv-area" \
+            -H 'Content-Type: application/json' \
+            -d '{"times":[0,1,2,3],"intensities":[0,2,1,0],"areas":[{"start":0.5,"end":2.5,"area":2.0,"selected":true}],"sample_name":"Smoke Sample.d","wavelength":254,"style":{"fig_width":6,"x_axis_width_multiplier":2}}' \
+            --output "$SMOKE_DIR/uv-area.pdf"
+          if [[ "$(head -c 4 "$SMOKE_DIR/uv-area.pdf")" != "%PDF" ]]; then
+            echo "Smoke test failed: UV area export did not return a PDF"
+            exit 1
+          fi
+
       - name: Smoke test Windows package
         if: runner.os == 'Windows'
         shell: pwsh
@@ -259,6 +268,26 @@ jobs:
             }
 
             Write-Host ($health | ConvertTo-Json -Compress)
+
+            $uvAreaPdf = Join-Path $smokeDir 'uv-area.pdf'
+            $uvAreaBody = @{
+              times = @(0, 1, 2, 3)
+              intensities = @(0, 2, 1, 0)
+              areas = @(@{ start = 0.5; end = 2.5; area = 2.0; selected = $true })
+              sample_name = 'Smoke Sample.d'
+              wavelength = 254
+              style = @{ fig_width = 6; x_axis_width_multiplier = 2 }
+            } | ConvertTo-Json -Depth 5
+            Invoke-WebRequest `
+              -Uri "http://127.0.0.1:$port/api/export-uv-area" `
+              -Method Post `
+              -ContentType 'application/json' `
+              -Body $uvAreaBody `
+              -OutFile $uvAreaPdf
+            $pdfBytes = [System.IO.File]::ReadAllBytes($uvAreaPdf)
+            if ($pdfBytes.Length -lt 4 -or [System.Text.Encoding]::ASCII.GetString($pdfBytes[0..3]) -ne '%PDF') {
+              throw 'Smoke test failed: UV area export did not return a PDF'
+            }
           }
           finally {
             if ($proc -and -not $proc.HasExited) {

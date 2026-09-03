@@ -1154,16 +1154,90 @@ function schedulePlotlyResize(plotIds = []) {
 
 // ===== Sidebar =====
 function initSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const resizeHandle = document.getElementById('sidebar-resize-handle');
+  const sidebarWidthStorageKey = 'catrupole.sidebarWidth';
+  const defaultSidebarWidth = 320;
+  const minimumSidebarWidth = 240;
+  const maximumSidebarWidth = () => Math.max(minimumSidebarWidth, Math.min(640, Math.floor(window.innerWidth * 0.6)));
+  const clampSidebarWidth = (width) => Math.min(maximumSidebarWidth(), Math.max(minimumSidebarWidth, Math.round(width)));
+  const applySidebarWidth = (width, persist = false) => {
+    const normalizedWidth = clampSidebarWidth(Number(width) || defaultSidebarWidth);
+    document.documentElement.style.setProperty('--sidebar-width', `${normalizedWidth}px`);
+    resizeHandle?.setAttribute('aria-valuenow', String(normalizedWidth));
+    resizeHandle?.setAttribute('aria-valuemax', String(maximumSidebarWidth()));
+    if (persist) {
+      try {
+        localStorage.setItem(sidebarWidthStorageKey, String(normalizedWidth));
+      } catch (_) {
+        // Resizing still works when local storage is unavailable.
+      }
+    }
+    return normalizedWidth;
+  };
+
+  try {
+    applySidebarWidth(localStorage.getItem(sidebarWidthStorageKey) || defaultSidebarWidth);
+  } catch (_) {
+    applySidebarWidth(defaultSidebarWidth);
+  }
+
+  if (sidebar && resizeHandle) {
+    let activePointerId = null;
+    let startingX = 0;
+    let startingWidth = defaultSidebarWidth;
+
+    const finishResize = (event) => {
+      if (activePointerId === null || (event?.pointerId !== undefined && event.pointerId !== activePointerId)) return;
+      activePointerId = null;
+      document.body.classList.remove('sidebar-resizing');
+      applySidebarWidth(sidebar.getBoundingClientRect().width, true);
+      schedulePlotlyResize();
+    };
+
+    resizeHandle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      activePointerId = event.pointerId;
+      startingX = event.clientX;
+      startingWidth = sidebar.getBoundingClientRect().width;
+      document.body.classList.add('sidebar-resizing');
+      resizeHandle.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+    });
+
+    resizeHandle.addEventListener('pointermove', (event) => {
+      if (activePointerId !== event.pointerId) return;
+      applySidebarWidth(startingWidth + event.clientX - startingX);
+    });
+    resizeHandle.addEventListener('pointerup', finishResize);
+    resizeHandle.addEventListener('pointercancel', finishResize);
+    resizeHandle.addEventListener('dblclick', () => {
+      applySidebarWidth(defaultSidebarWidth, true);
+      schedulePlotlyResize();
+    });
+    resizeHandle.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return;
+      const currentWidth = sidebar.getBoundingClientRect().width;
+      const nextWidth = event.key === 'Home'
+        ? defaultSidebarWidth
+        : currentWidth + (event.key === 'ArrowRight' ? 16 : -16);
+      applySidebarWidth(nextWidth, true);
+      schedulePlotlyResize();
+      event.preventDefault();
+    });
+    window.addEventListener('resize', () => applySidebarWidth(sidebar.getBoundingClientRect().width), { passive: true });
+  }
+
   // Collapse/expand
   document.getElementById('sidebar-toggle-collapse').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.add('collapsed');
+    sidebar.classList.add('collapsed');
     document.getElementById('sidebar-expand').classList.remove('hidden');
     setTimeout(() => window.dispatchEvent(new Event('resize')), 180);
     schedulePlotlyResize();
   });
 
   document.getElementById('sidebar-expand').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.remove('collapsed');
+    sidebar.classList.remove('collapsed');
     document.getElementById('sidebar-expand').classList.add('hidden');
     setTimeout(() => window.dispatchEvent(new Event('resize')), 180);
     schedulePlotlyResize();
@@ -5460,6 +5534,7 @@ function updateAreaCalculationModeUI() {
   const mzToolbar = document.getElementById('eic-mz-toolbar');
   const overlayWrap = document.getElementById('eic-overlay-wrap');
   const normalizeWrap = document.getElementById('eic-normalize-wrap');
+  const uvAreaPdfButton = document.getElementById('btn-export-uv-area-pdf');
   const runButton = document.getElementById('btn-run-eic');
   const note = document.getElementById('eic-batch-mode-note');
   const overlay = document.getElementById('eic-overlay');
@@ -5468,6 +5543,7 @@ function updateAreaCalculationModeUI() {
   if (mzToolbar) mzToolbar.classList.toggle('hidden', isUv);
   if (overlayWrap) overlayWrap.classList.toggle('hidden', isUv);
   if (normalizeWrap) normalizeWrap.classList.toggle('hidden', isUv);
+  if (uvAreaPdfButton) uvAreaPdfButton.classList.toggle('hidden', !isUv);
   if (overlay) overlay.disabled = isUv;
   if (normalize) normalize.disabled = isUv;
   if (runButton) runButton.textContent = isUv ? 'Load UV Area' : 'Run Area Analysis';
@@ -5481,6 +5557,7 @@ function updateAreaCalculationModeUI() {
 function initEICBatch() {
   document.getElementById('btn-run-eic').addEventListener('click', runEICBatch);
   document.getElementById('btn-export-eic-csv').addEventListener('click', exportEICCSV);
+  document.getElementById('btn-export-uv-area-pdf')?.addEventListener('click', exportUVAreaPDF);
   document.getElementById('eic-overlay').addEventListener('change', reRenderEICBatch);
   document.getElementById('eic-normalize').addEventListener('change', reRenderEICBatch);
   document.getElementById('eic-signal-type')?.addEventListener('change', () => {
@@ -6367,6 +6444,58 @@ async function exportEICCSV() {
   const blob = new Blob([csv], { type: 'text/csv' });
   downloadBlob(blob, 'area_calculation_results.csv');
   toast('CSV exported', 'success');
+}
+
+async function exportUVAreaPDF() {
+  const data = state.eicBatchData;
+  const target = data?.targets?.find((entry) => entry?.signal_type === 'uv');
+  if (!target || !Array.isArray(target.times) || target.times.length === 0) {
+    toast('Load a UV area trace first', 'warning');
+    return;
+  }
+
+  const sampleName = String(data.sample_name || getAreaCalculationSampleName(data.sample_path || '') || 'sample');
+  const wavelength = Number(target.wavelength);
+  const wavelengthLabel = Number.isFinite(wavelength) ? `${wavelength.toFixed(0)}nm` : 'uv';
+  const filenameBase = `${sanitizeFilename(sampleName.replace(/\.d$/i, ''))}_uv_${wavelengthLabel}_area`;
+  const baseStyle = buildCurrentDeconvStyle();
+  const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+
+  showLoading('Exporting UV area PDF...');
+  try {
+    const response = await api.exportUVArea({
+      dpi,
+      filename_base: filenameBase,
+      sample_name: sampleName,
+      wavelength: Number.isFinite(wavelength) ? wavelength : null,
+      times: target.times,
+      intensities: target.intensities,
+      areas: (target.peaks || []).map((area) => ({
+        start: area.start,
+        end: area.end,
+        area: area.area,
+        selected: area.selected !== false,
+      })),
+      style: {
+        fig_width: baseStyle.fig_width,
+        line_width: baseStyle.line_width,
+        show_grid: false,
+        show_title: baseStyle.deconv_show_title !== false,
+        x_axis_width_multiplier: 2.0,
+      },
+    });
+    const blob = await backendResponseToBlob(response);
+    const filename = getFilenameFromContentDisposition(
+      response.headers.get('content-disposition'),
+      `${filenameBase}.pdf`,
+    );
+    downloadBlob(blob, filename);
+    toast('Exported UV area PDF', 'success');
+  } catch (err) {
+    toast(`UV area PDF export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
 }
 
 // ===== Deconvolution Tab =====
