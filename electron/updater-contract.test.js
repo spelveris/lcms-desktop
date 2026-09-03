@@ -46,9 +46,13 @@ test("packaged app downloads updates and installs them internally", () => {
 });
 
 test("startup screen uses a fixed circular chasing-dot loader", () => {
+  const main = read("electron/main.js");
   const splash = read("electron/splash.html");
   const bubbles = splash.match(/class="spinner-bubble"/g) || [];
   assert.equal(bubbles.length, 7);
+  assert.match(main, /height:\s*308/);
+  assert.match(main, /minHeight:\s*308/);
+  assert.match(main, /maxHeight:\s*308/);
   assert.match(splash, /aspect-ratio:\s*1 \/ 1/);
   assert.match(splash, /flex:\s*0 0 72px/);
   assert.match(splash, /@keyframes orbit/);
