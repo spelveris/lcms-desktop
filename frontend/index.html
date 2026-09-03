@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.40">
+  <link rel="stylesheet" href="css/style.css?v=0.2.41">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -25,6 +25,12 @@
       <div class="sidebar-title-wrap">
         <h2>CATrupole</h2>
         <div id="app-version-badge" class="sidebar-version-badge">v--</div>
+        <button id="update-available-badge" class="update-available-badge" type="button" hidden
+                title="Open the newest CATrupole release on GitHub">
+          <span class="update-available-dot" aria-hidden="true"></span>
+          <span id="update-status-label">Update available</span>
+          <span id="update-available-version"></span>
+        </button>
       </div>
       <button id="sidebar-toggle-collapse" class="icon-btn" title="Collapse sidebar">&laquo;</button>
     </div>
@@ -794,9 +800,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.40"></script>
-  <script src="js/charts.js?v=0.2.40"></script>
-  <script src="js/quotes.js?v=0.2.40"></script>
-  <script src="js/app.js?v=0.2.40"></script>
+  <script src="js/api.js?v=0.2.41"></script>
+  <script src="js/charts.js?v=0.2.41"></script>
+  <script src="js/quotes.js?v=0.2.41"></script>
+  <script src="js/app.js?v=0.2.41"></script>
 </body>
 </html>

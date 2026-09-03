@@ -336,6 +336,7 @@ function renderMountButtons() {
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', () => {
   initAppVersionBadge();
+  initUpdateIndicator();
   initSidebar();
   initTabs();
   initSettings();
@@ -378,6 +379,44 @@ function initAppVersionBadge() {
   const el = document.getElementById('app-version-badge');
   if (!el) return;
   el.textContent = getAppVersionLabel();
+}
+
+function initUpdateIndicator() {
+  const badge = document.getElementById('update-available-badge');
+  const label = document.getElementById('update-status-label');
+  const version = document.getElementById('update-available-version');
+  const updates = window.catrupoleUpdates;
+  if (!badge || !label || !version || !updates) return;
+
+  const render = (status) => {
+    const available = Boolean(status && status.available);
+    const current = Boolean(status && status.state === 'current');
+    const offline = Boolean(status && status.state === 'offline');
+    badge.hidden = !available && !current && !offline;
+    badge.disabled = current || offline;
+    badge.classList.toggle('is-current', current);
+    badge.classList.toggle('is-offline', offline);
+    label.textContent = available
+      ? 'Update available'
+      : (current ? 'You are up to date!' : 'Update check unavailable');
+    badge.title = available
+      ? 'Open the newest CATrupole release on GitHub'
+      : (current ? 'This is the latest CATrupole release' : 'CATrupole could not check GitHub for updates');
+    version.textContent = available && status.latestVersion ? `v${status.latestVersion}` : '';
+  };
+
+  badge.addEventListener('click', async () => {
+    try {
+      await updates.openRelease();
+    } catch (_) {
+      toast('Could not open the CATrupole release page.', 'error');
+    }
+  });
+
+  updates.onStatus(render);
+  updates.getStatus().then(render).catch(() => {
+    // Update checks stay quiet when GitHub is unavailable.
+  });
 }
 
 // ===== Toast Notifications =====
