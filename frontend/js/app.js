@@ -389,27 +389,43 @@ function initUpdateIndicator() {
   if (!badge || !label || !version || !updates) return;
 
   const render = (status) => {
-    const available = Boolean(status && status.available);
-    const current = Boolean(status && status.state === 'current');
-    const offline = Boolean(status && status.state === 'offline');
-    badge.hidden = !available && !current && !offline;
-    badge.disabled = current || offline;
+    const state = String(status?.state || 'idle');
+    const available = Boolean(status?.available);
+    const current = state === 'current';
+    const offline = state === 'offline';
+    const checking = state === 'checking';
+    const downloading = state === 'downloading';
+    const ready = state === 'ready';
+    const installing = state === 'installing';
+    const canOpenDevelopmentRelease = available && status?.installable === false;
+    const actionable = ready || canOpenDevelopmentRelease;
+    badge.hidden = !available && !current && !offline && !checking;
+    badge.disabled = !actionable;
     badge.classList.toggle('is-current', current);
     badge.classList.toggle('is-offline', offline);
-    label.textContent = available
-      ? 'Update available'
-      : (current ? 'You are up to date!' : 'Update check unavailable');
-    badge.title = available
-      ? 'Open the newest CATrupole release on GitHub'
-      : (current ? 'This is the latest CATrupole release' : 'CATrupole could not check GitHub for updates');
+    badge.classList.toggle('is-downloading', downloading || checking);
+    badge.classList.toggle('is-ready', ready);
+    if (installing) label.textContent = 'Installing update…';
+    else if (ready) label.textContent = 'Restart to update';
+    else if (downloading) label.textContent = `Downloading update ${Number(status?.progressPercent) || 0}%`;
+    else if (available) label.textContent = status?.installable === false ? 'Update available' : 'Preparing update…';
+    else if (current) label.textContent = 'You are up to date!';
+    else if (checking) label.textContent = 'Checking for updates…';
+    else label.textContent = 'Update check unavailable';
+    badge.title = ready
+      ? 'Restart CATrupole now and install the downloaded update'
+      : (downloading || available
+        ? 'CATrupole is downloading the update automatically'
+        : (current ? 'This is the latest CATrupole release' : 'CATrupole could not check GitHub for updates'));
     version.textContent = available && status.latestVersion ? `v${status.latestVersion}` : '';
   };
 
   badge.addEventListener('click', async () => {
     try {
-      await updates.openRelease();
+      if (typeof updates.performAction === 'function') await updates.performAction();
+      else await updates.openRelease();
     } catch (_) {
-      toast('Could not open the CATrupole release page.', 'error');
+      toast('CATrupole could not start the update.', 'error');
     }
   });
 

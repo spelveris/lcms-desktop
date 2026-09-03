@@ -1,6 +1,6 @@
 {
   "name": "catrupole",
-  "version": "0.2.42",
+  "version": "0.2.43",
   "description": "CATrupole Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "setup": "./setup-dev.sh",
     "frontend-only": "open frontend/index.html",
     "test:update-checker": "node --test electron/update-checker.test.js",
+    "test:updater": "node --test electron/update-checker.test.js electron/updater-contract.test.js",
     "build:backend": "node scripts/build-backend.js",
     "prepare:mac-build": "node scripts/prepare-mac-build.js",
     "smoke:mac": "bash scripts/smoke-test-mac.sh",
@@ -19,6 +20,7 @@
     "dist:linux": "npm run build:backend && electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "jsme-editor": "^2024.4.29",
     "jspdf": "^4.2.1",
     "openchemlib": "^9.20.0",
@@ -53,6 +55,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "spelveris",
+        "repo": "lcms-desktop"
+      }
+    ],
     "mac": {
       "icon": "build/icons/icon.icns",
       "category": "public.app-category.science",

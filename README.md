@@ -2,6 +2,12 @@
 
 Desktop LC-MS analysis app built with Electron (frontend shell) and a packaged FastAPI backend.
 
+## Automatic updates
+
+Starting with version `0.2.43`, CATrupole checks GitHub when it starts and once per day. New releases download quietly in the background. The small update indicator changes to **Restart to update** when installation is ready; the update is also installed the next time CATrupole is quit normally.
+
+Version `0.2.43` is the one-time bridge and must be installed manually. Later versions can update from inside CATrupole.
+
 ## Downloads
 
 Get installers from GitHub Releases.

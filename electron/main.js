@@ -12,6 +12,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
+const { autoUpdater } = require("electron-updater");
 const { fetchLatestRelease, isNewerVersion } = require("./update-checker");
 
 const BACKEND_PORT = 8741;
@@ -25,6 +26,7 @@ let backendProcess = null;
 let isQuitting = false;
 let backendReady = false;
 let updateCheckTimer = null;
+let packagedUpdaterConfigured = false;
 let updateStatus = {
   state: "idle",
   available: false,
@@ -49,8 +51,112 @@ function sendUpdateStatus(status) {
   return updateStatus;
 }
 
+function releaseUrlForVersion(version) {
+  const normalized = String(version || "").trim().replace(/^v/i, "");
+  return normalized ? `${RELEASES_URL}/tag/v${normalized}` : RELEASES_URL;
+}
+
+function configurePackagedUpdater() {
+  if (!app.isPackaged || packagedUpdaterConfigured) return;
+  packagedUpdaterConfigured = true;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.logger = console;
+
+  autoUpdater.on("checking-for-update", () => {
+    sendUpdateStatus({
+      state: "checking",
+      available: false,
+      currentVersion: String(app.getVersion() || ""),
+    });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    const latestVersion = String(info?.version || "");
+    sendUpdateStatus({
+      state: "available",
+      available: true,
+      installable: true,
+      currentVersion: String(app.getVersion() || ""),
+      latestVersion,
+      releaseUrl: releaseUrlForVersion(latestVersion),
+      progressPercent: 0,
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    const progressPercent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
+    sendUpdateStatus({
+      state: "downloading",
+      available: true,
+      installable: true,
+      progressPercent,
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    const latestVersion = String(info?.version || updateStatus.latestVersion || "");
+    sendUpdateStatus({
+      state: "ready",
+      available: true,
+      installable: true,
+      latestVersion,
+      releaseUrl: releaseUrlForVersion(latestVersion),
+      progressPercent: 100,
+    });
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    sendUpdateStatus({
+      state: "current",
+      available: false,
+      installable: true,
+      currentVersion: String(app.getVersion() || ""),
+      latestVersion: String(info?.version || app.getVersion() || ""),
+      progressPercent: 0,
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    console.warn(`[updates] Automatic update failed: ${error.message}`);
+    sendUpdateStatus({
+      state: "offline",
+      available: false,
+      installable: true,
+      currentVersion: String(app.getVersion() || ""),
+      progressPercent: 0,
+      checkedAt: new Date().toISOString(),
+    });
+  });
+}
+
 async function checkForUpdates() {
   const currentVersion = String(app.getVersion() || "");
+  if (app.isPackaged) {
+    configurePackagedUpdater();
+    if (updateStatus.state === "downloading" || updateStatus.state === "ready" || updateStatus.state === "installing") {
+      return updateStatus;
+    }
+    try {
+      await autoUpdater.checkForUpdates();
+      return updateStatus;
+    } catch (error) {
+      console.warn(`[updates] Could not check for automatic updates: ${error.message}`);
+      return sendUpdateStatus({
+        state: "offline",
+        available: false,
+        installable: true,
+        currentVersion,
+        progressPercent: 0,
+        checkedAt: new Date().toISOString(),
+      });
+    }
+  }
+
   try {
     const release = await fetchLatestRelease();
     const available = isNewerVersion(release.version, currentVersion);
@@ -60,6 +166,7 @@ async function checkForUpdates() {
       currentVersion,
       latestVersion: release.version,
       releaseUrl: release.url || RELEASES_URL,
+      installable: false,
       checkedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -102,6 +209,31 @@ ipcMain.handle("updates:open-release", async () => {
   }
   await shell.openExternal(releaseUrl);
   return true;
+});
+
+ipcMain.handle("updates:perform-action", async () => {
+  if (app.isPackaged && updateStatus.state === "ready") {
+    sendUpdateStatus({ state: "installing", available: true, installable: true });
+    isQuitting = true;
+    stopBackend();
+    setImmediate(() => autoUpdater.quitAndInstall(true, true));
+    return "installing";
+  }
+
+  if (!app.isPackaged && updateStatus.available) {
+    const candidate = String(updateStatus.releaseUrl || RELEASES_URL);
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === "https:" && parsed.hostname === "github.com" && parsed.pathname.startsWith("/spelveris/lcms-desktop/releases")) {
+        await shell.openExternal(parsed.toString());
+        return "opened-release";
+      }
+    } catch (_) {
+      // Ignore invalid release URLs in development builds.
+    }
+  }
+
+  return "unavailable";
 });
 
 // ---------------------------------------------------------------------------
