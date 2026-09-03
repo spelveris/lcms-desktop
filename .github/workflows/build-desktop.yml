@@ -290,6 +290,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -306,14 +308,14 @@ jobs:
         run: |
           echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          previous_tag="$(git tag --sort=-version:refname | grep -Fxv "${GITHUB_REF_NAME}" | head -n1)"
+          echo "changelog=https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           body: |
             CATrupole release `${{ steps.meta.outputs.tag }}`.
-
-            This release is built in CI on both macOS and Windows and includes smoke tests for the packaged backend (`/api/health`) before publishing assets.
 
             Download the file that matches your operating system from the assets list below:
 
@@ -322,11 +324,8 @@ jobs:
             | Windows | `CATrupole Setup ${{ steps.meta.outputs.version }}.exe` | Installer |
             | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg` | Disk image |
 
-            Notes for users:
-            - macOS builds are ad-hoc signed in CI (no notarization).
-            - If Gatekeeper warns on first open, use macOS override flow (Open Anyway / right-click Open).
-            - Windows installer is Trusted Signed when CI signing secrets are configured.
-          generate_release_notes: true
+            **Full Changelog**: ${{ steps.meta.outputs.changelog }}
+          generate_release_notes: false
           files: |
             release-assets/*.dmg
             release-assets/*Setup*.exe
