@@ -253,6 +253,10 @@ function getPathLeafName(path) {
   return parts[parts.length - 1] || cleaned;
 }
 
+function isPreferredLcmsDataPath(path) {
+  return getPathLeafName(path).toLowerCase() === 'lc-ms agilent data';
+}
+
 function rememberCustomMountPath(resolvedPath, sourcePath = '') {
   const normalizedResolved = normalizeEnteredPath(resolvedPath);
   if (!normalizedResolved || normalizedResolved === '/') return;
@@ -286,8 +290,11 @@ function renderMountButtons() {
     seen.add(path);
     entries.push({
       path,
-      label: String(vol.name || getPathLeafName(path) || path),
+      label: vol.pinned === true || isPreferredLcmsDataPath(path)
+        ? 'LC-MS Agilent data'
+        : String(vol.name || getPathLeafName(path) || path),
       title: path,
+      pinned: vol.pinned === true || isPreferredLcmsDataPath(path),
     });
   });
 
@@ -298,10 +305,15 @@ function renderMountButtons() {
     const source = normalizeEnteredPath(mount.source || '');
     entries.push({
       path,
-      label: String(mount.label || getPathLeafName(path) || path),
+      label: isPreferredLcmsDataPath(path)
+        ? 'LC-MS Agilent data'
+        : String(mount.label || getPathLeafName(path) || path),
       title: source && source !== path ? `${source} -> ${path}` : path,
+      pinned: isPreferredLcmsDataPath(path),
     });
   });
+
+  entries.sort((left, right) => Number(right.pinned) - Number(left.pinned));
 
   if (entries.length === 0) {
     container.innerHTML = '';
@@ -313,7 +325,7 @@ function renderMountButtons() {
   container.innerHTML = '';
   entries.forEach((entry) => {
     const btn = document.createElement('button');
-    btn.className = 'btn btn-sm mount-btn';
+    btn.className = `btn btn-sm mount-btn${entry.pinned ? ' mount-btn-pinned' : ''}`;
     btn.textContent = entry.label;
     btn.title = entry.title;
     btn.addEventListener('click', () => browseTo(entry.path));
@@ -1535,7 +1547,12 @@ async function runFileSearch() {
   renderFileList();
 
   try {
-    const data = await api.searchBrowser(state.currentPath, query, FILE_BROWSER_SEARCH_LIMIT);
+    const data = await api.searchBrowser(
+      state.currentPath,
+      query,
+      FILE_BROWSER_SEARCH_LIMIT,
+      state.runRouterSettings.initialsRoot || state.currentPath
+    );
     if (requestId !== state.fileSearchRequestId) return;
     state.fileSearchResults = Array.isArray(data.items) ? data.items : [];
     state.fileSearchScopePath = data.path || state.currentPath;

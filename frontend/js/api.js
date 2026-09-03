@@ -54,8 +54,8 @@ const api = {
     })}`);
   },
 
-  searchBrowser(path, search, limit) {
-    return apiFetch(`/api/search-browser?${qs({ path, search, limit })}`);
+  searchBrowser(path, search, limit, indexRoot) {
+    return apiFetch(`/api/search-browser?${qs({ path, search, limit, index_root: indexRoot })}`);
   },
 
   findDFolders(path, search) {
