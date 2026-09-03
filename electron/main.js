@@ -131,7 +131,7 @@ function configurePackagedUpdater() {
   autoUpdater.on("error", (error) => {
     console.warn(`[updates] Automatic update failed: ${error.message}`);
     sendUpdateStatus({
-      state: "error",
+      state: "offline",
       available: false,
       installable: true,
       currentVersion: String(app.getVersion() || ""),
@@ -257,7 +257,7 @@ ipcMain.handle("updates:perform-action", async () => {
         launchMacUpdateHelper();
       } catch (error) {
         sendUpdateStatus({
-          state: "error",
+          state: "offline",
           available: false,
           errorMessage: String(error?.message || "Could not start the macOS update helper."),
         });
