@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 110752)
-Total output lines: 11560
-
 /**
  * Main application logic for LC-MS Desktop Frontend.
  * Handles UI interactions, state management, and orchestrates API calls + chart rendering.
@@ -396,17 +393,16 @@ function initUpdateIndicator() {
     const available = Boolean(status?.available);
     const current = state === 'current';
     const offline = state === 'offline';
-    const updateError = state === 'error';
     const checking = state === 'checking';
     const downloading = state === 'downloading';
     const ready = state === 'ready';
     const installing = state === 'installing';
     const canOpenDevelopmentRelease = available && status?.installable === false;
     const actionable = ready || canOpenDevelopmentRelease;
-    badge.hidden = !available && !current && !offline && !updateError && !checking;
+    badge.hidden = !available && !current && !offline && !checking;
     badge.disabled = !actionable;
     badge.classList.toggle('is-current', current);
-    badge.classList.toggle('is-offline', offline || updateError);
+    badge.classList.toggle('is-offline', offline);
     badge.classList.toggle('is-downloading', downloading || checking);
     badge.classList.toggle('is-ready', ready);
     if (installing) label.textContent = 'Installing update…';
@@ -415,17 +411,12 @@ function initUpdateIndicator() {
     else if (available) label.textContent = status?.installable === false ? 'Update available' : 'Preparing update…';
     else if (current) label.textContent = 'You are up to date!';
     else if (checking) label.textContent = 'Checking for updates…';
-    else if (updateError) label.textContent = 'Update problem';
     else label.textContent = 'Update check unavailable';
     badge.title = ready
       ? 'Restart CATrupole now and install the downloaded update'
       : (downloading || available
         ? 'CATrupole is downloading the update automatically'
-        : (current
-          ? 'This is the latest CATrupole release'
-          : (updateError
-            ? String(status?.errorMessage || 'CATrupole could not install the update')
-            : 'CATrupole could not check GitHub for updates')));
+        : (current ? 'This is the latest CATrupole release' : 'CATrupole could not check GitHub for updates'));
     version.textContent = available && status.latestVersion ? `v${status.latestVersion}` : '';
   };
 
@@ -2745,7 +2736,6458 @@ function _getSmilesFromFrame() {
       }
     }
     window.addEventListener('message', onMsg);
-    frame.contentWindow.postMessage({ typ…60752 tokens truncated…d;
+    frame.contentWindow.postMessage({ type: 'jsme-get-smiles' }, '*');
+  });
+}
+
+async function toggleSingleSketcher() {
+  const wrap = document.getElementById('single-sketcher-wrap');
+  const btn = document.getElementById('btn-single-toggle-sketcher');
+  if (!wrap || !btn) return;
+
+  const opening = wrap.classList.contains('hidden');
+  if (!opening) {
+    wrap.classList.add('hidden');
+    btn.textContent = 'Draw Molecule';
+    return;
+  }
+
+  wrap.classList.remove('hidden');
+  btn.textContent = 'Hide Drawer';
+
+  if (!_jsmeReady) {
+    showLoading('Loading molecule drawer...');
+    try {
+      await _initJsmeInFrame();
+    } catch (err) {
+      wrap.classList.add('hidden');
+      btn.textContent = 'Draw Molecule';
+      toast(`Molecule drawer failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
+  }
+}
+
+async function useDrawnStructureAsSmiles() {
+  try {
+    if (!_jsmeReady) { toast('Open the molecule drawer first', 'warning'); return; }
+    const smiles = await _getSmilesFromFrame();
+    if (!smiles) {
+      toast('Draw a molecule first', 'warning');
+      return;
+    }
+    const smilesInput = document.getElementById('single-smiles-input');
+    if (smilesInput) smilesInput.value = smiles;
+    await addSmilesMzTarget(smiles);
+  } catch (err) {
+    toast(`Could not use drawn structure: ${err.message}`, 'error');
+  }
+}
+
+let _seqmodJsmeReady = false;
+
+function _seqmodJsmeFrame() {
+  return document.getElementById('seqmod-sketcher-frame');
+}
+
+function _initSeqmodJsmeInFrame() {
+  return new Promise((resolve, reject) => {
+    const frame = _seqmodJsmeFrame();
+    if (!frame || !frame.contentWindow) { reject(new Error('Sketcher frame missing')); return; }
+
+    const timeout = setTimeout(() => { reject(new Error('JSME init timed out')); }, 15000);
+
+    function onMsg(e) {
+      if (!e.data || !e.data.type) return;
+      if (e.data.type === 'jsme-ready') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', onMsg);
+        _seqmodJsmeReady = true;
+        resolve();
+      }
+      if (e.data.type === 'jsme-error') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', onMsg);
+        reject(new Error(e.data.msg || 'JSME error'));
+      }
+    }
+    window.addEventListener('message', onMsg);
+
+    const w = Math.max(420, frame.clientWidth || 760);
+    const h = Math.max(380, frame.clientHeight || 420);
+    frame.contentWindow.postMessage({ type: 'jsme-init', width: w, height: h }, '*');
+  });
+}
+
+function _getSmilesFromSeqmodFrame() {
+  return new Promise((resolve) => {
+    const frame = _seqmodJsmeFrame();
+    if (!frame || !frame.contentWindow) { resolve(''); return; }
+
+    const timeout = setTimeout(() => resolve(''), 3000);
+    function onMsg(e) {
+      if (e.data && e.data.type === 'jsme-smiles') {
+        clearTimeout(timeout);
+        window.removeEventListener('message', onMsg);
+        resolve(String(e.data.smiles || '').trim());
+      }
+    }
+    window.addEventListener('message', onMsg);
+    frame.contentWindow.postMessage({ type: 'jsme-get-smiles' }, '*');
+  });
+}
+
+async function toggleSequenceModSketcher() {
+  const wrap = document.getElementById('seqmod-sketcher-wrap');
+  const btn = document.getElementById('btn-seqmod-toggle-sketcher');
+  if (!wrap || !btn) return;
+
+  const opening = wrap.classList.contains('hidden');
+  if (!opening) {
+    wrap.classList.add('hidden');
+    btn.textContent = 'Draw Residue';
+    return;
+  }
+
+  wrap.classList.remove('hidden');
+  btn.textContent = 'Hide Drawer';
+
+  if (!_seqmodJsmeReady) {
+    showLoading('Loading modification drawer...');
+    try {
+      await _initSeqmodJsmeInFrame();
+    } catch (err) {
+      wrap.classList.add('hidden');
+      btn.textContent = 'Draw Residue';
+      toast(`Molecule drawer failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
+  }
+}
+
+async function useDrawnStructureForSequenceMod() {
+  try {
+    if (!_seqmodJsmeReady) {
+      toast('Open the modification drawer first', 'warning');
+      return;
+    }
+    const smiles = await _getSmilesFromSeqmodFrame();
+    if (!smiles) {
+      toast('Draw a modification first', 'warning');
+      return;
+    }
+    const context = getSequenceModContext();
+    const targetIndex = context.activeIndex;
+    if (!Number.isInteger(targetIndex) || targetIndex < 0) {
+      toast('Select a target residue first', 'warning');
+      return;
+    }
+    const smilesInput = document.querySelector(`.seqmod-custom-smiles-input[data-index="${targetIndex}"]`);
+    if (smilesInput) smilesInput.value = smiles;
+    patchSequenceModCustomEntry(targetIndex, { smiles, smilesResult: null });
+    await applySequenceModSmilesMass(smiles, targetIndex);
+  } catch (err) {
+    toast(`Could not use drawn modification: ${err.message}`, 'error');
+  }
+}
+
+async function loadSingleSample(options = {}) {
+  if (state.singleLoadInFlight) return;
+  const samplePath = document.getElementById('single-sample-select').value;
+  if (!samplePath) {
+    if (!options.silentNoSelection) toast('Select a sample first', 'warning');
+    return;
+  }
+
+  const wavelengths = getSelectedWavelengths();
+  const ionMode = document.querySelector('input[name="ion-mode"]:checked').value;
+  const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value);
+  const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value);
+  const mzWindow = parseFloat(document.getElementById('mz-window').value);
+
+  state.singleLoadInFlight = true;
+  showLoading('Analyzing sample...');
+  try {
+    state.singleSpectrumSelections = {};
+    const data = await api.getSingleSampleData({
+      path: samplePath,
+      wavelengths,
+      ionMode,
+      uvSmoothing,
+      eicSmoothing,
+      mzTargets: state.mzTargets,
+      mzWindow,
+    });
+
+    state.singleSampleData = data;
+    renderSingleSample(data);
+    renderReportSummary();
+    toast('Sample loaded successfully', 'success');
+  } catch (err) {
+    toast(`Analysis failed: ${err.message}`, 'error');
+  } finally {
+    state.singleLoadInFlight = false;
+    hideLoading();
+  }
+}
+
+function renderSingleSample(data) {
+  setSingleEmptyState(false);
+  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const singlePlotIds = [];
+
+  // Metrics
+  const metricsBar = document.getElementById('single-metrics');
+  metricsBar.innerHTML = '';
+
+  const uvAvail = data.uv && data.uv.wavelengths && data.uv.wavelengths.length > 0;
+  const msAvail = data.tic && data.tic.times && data.tic.times.length > 0;
+  const scanCount = data.ms_scan_count || (msAvail ? data.tic.times.length : 0);
+
+  metricsBar.innerHTML = `
+    <div class="metric"><span class="dot ${uvAvail ? 'green' : 'red'}"></span> UV Data ${uvAvail ? 'Available' : 'Not found'}</div>
+    <div class="metric"><span class="dot ${msAvail ? 'green' : 'red'}"></span> MS Data ${msAvail ? 'Available' : 'Not found'}</div>
+    ${msAvail ? `<div class="metric"><span class="dot blue"></span> ${scanCount} MS Scans</div>` : ''}
+  `;
+
+  // UV plots
+  const uvContainer = document.getElementById('single-uv-plots');
+  uvContainer.innerHTML = '';
+  if (data.uv && data.uv.wavelengths) {
+    const titleInput = document.getElementById('label-uv-panel');
+    const uvTitle = (titleInput && titleInput.value) || 'UV Chromatogram';
+
+    if (data.uv.wavelengths.length > 1) {
+      // One combined plot
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = 'uv-combined-plot';
+      uvContainer.appendChild(div);
+      charts.plotUV('uv-combined-plot', data.uv.wavelengths, uvTitle);
+    } else if (data.uv.wavelengths.length === 1) {
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = 'uv-plot-0';
+      uvContainer.appendChild(div);
+      charts.plotUV('uv-plot-0', data.uv.wavelengths, `${uvTitle} (${data.uv.wavelengths[0].nm} nm)`);
+    }
+
+    // Also plot individual wavelengths if more than 2
+    if (data.uv.wavelengths.length > 2) {
+      data.uv.wavelengths.forEach((wl, i) => {
+        const div = document.createElement('div');
+        div.className = 'plot-container';
+        div.id = `uv-plot-${i}`;
+        uvContainer.appendChild(div);
+        charts.plotUV(`uv-plot-${i}`, [wl], `${uvTitle} (${wl.nm} nm)`);
+      });
+    }
+  }
+
+  // TIC plot(s)
+  const ticContainer = document.getElementById('single-tic-plot');
+  ticContainer.innerHTML = '';
+  ticContainer.className = 'plot-stack';
+  if (data.tic && data.tic.has_dual_polarity && data.tic.times_pos && data.tic.times_neg) {
+    const ticTitle = document.getElementById('label-tic-panel');
+    const baseTitle = (ticTitle && ticTitle.value) || 'Total Ion Chromatogram';
+
+    const posDiv = document.createElement('div');
+    posDiv.className = 'plot-container single-tic-compact';
+    posDiv.id = 'single-tic-pos-plot';
+    ticContainer.appendChild(posDiv);
+    renderSingleInteractiveTicPlot({
+      plotId: 'single-tic-pos-plot',
+      times: data.tic.times_pos,
+      intensities: data.tic.intensities_pos,
+      title: `${baseTitle} (+)`,
+      color: '#1f77b4',
+      samplePath,
+      polarity: 'positive',
+      panelLabel: '(+)',
+      spectrumPlotId: 'single-spectrum-pos-plot',
+    });
+    singlePlotIds.push('single-tic-pos-plot');
+
+    const posSpectrumDiv = document.createElement('div');
+    posSpectrumDiv.className = 'plot-container single-spectrum-compact';
+    posSpectrumDiv.id = 'single-spectrum-pos-plot';
+    ticContainer.appendChild(posSpectrumDiv);
+    renderSingleSummedSpectrumPlaceholder('single-spectrum-pos-plot', '(+)');
+
+    const negDiv = document.createElement('div');
+    negDiv.className = 'plot-container single-tic-compact';
+    negDiv.id = 'single-tic-neg-plot';
+    ticContainer.appendChild(negDiv);
+    renderSingleInteractiveTicPlot({
+      plotId: 'single-tic-neg-plot',
+      times: data.tic.times_neg,
+      intensities: data.tic.intensities_neg,
+      title: `${baseTitle} (−)`,
+      color: '#d62728',
+      samplePath,
+      polarity: 'negative',
+      panelLabel: '(−)',
+      spectrumPlotId: 'single-spectrum-neg-plot',
+    });
+    singlePlotIds.push('single-tic-neg-plot');
+
+    const negSpectrumDiv = document.createElement('div');
+    negSpectrumDiv.className = 'plot-container single-spectrum-compact';
+    negSpectrumDiv.id = 'single-spectrum-neg-plot';
+    ticContainer.appendChild(negSpectrumDiv);
+    renderSingleSummedSpectrumPlaceholder('single-spectrum-neg-plot', '(−)');
+  } else if (data.tic && data.tic.times && data.tic.times.length > 0) {
+    const ticTitle = document.getElementById('label-tic-panel');
+    const ticDiv = document.createElement('div');
+    ticDiv.className = 'plot-container single-tic-compact';
+    ticDiv.id = 'single-tic-plot-main';
+    ticContainer.appendChild(ticDiv);
+    renderSingleInteractiveTicPlot({
+      plotId: 'single-tic-plot-main',
+      times: data.tic.times,
+      intensities: data.tic.intensities,
+      title: (ticTitle && ticTitle.value) || 'Total Ion Chromatogram',
+      color: '#ff7f0e',
+      samplePath,
+      polarity: null,
+      panelLabel: '',
+      spectrumPlotId: 'single-spectrum-plot',
+    });
+    singlePlotIds.push('single-tic-plot-main');
+
+    const spectrumDiv = document.createElement('div');
+    spectrumDiv.className = 'plot-container single-spectrum-compact';
+    spectrumDiv.id = 'single-spectrum-plot';
+    ticContainer.appendChild(spectrumDiv);
+    renderSingleSummedSpectrumPlaceholder('single-spectrum-plot');
+  } else {
+    ticContainer.className = 'plot-container';
+    ticContainer.innerHTML = '<p class="placeholder-msg">No MS data available</p>';
+  }
+
+  // EIC plots
+  const eicContainer = document.getElementById('single-eic-plots');
+  eicContainer.innerHTML = '';
+  if (data.eic && data.eic.targets && data.eic.targets.length > 0) {
+    const eicXRange = (() => {
+      let maxTime = Number.NEGATIVE_INFINITY;
+      (data.eic.targets || []).forEach((target) => {
+        (target.times || []).forEach((tv) => {
+          const t = Number(tv);
+          if (Number.isFinite(t) && t > maxTime) maxTime = t;
+        });
+      });
+      return Number.isFinite(maxTime) && maxTime > 0 ? [0, maxTime] : null;
+    })();
+
+    // Combined EIC
+    const combinedDiv = document.createElement('div');
+    combinedDiv.className = 'plot-container';
+    combinedDiv.id = 'eic-combined-single';
+    eicContainer.appendChild(combinedDiv);
+    charts.plotEIC('eic-combined-single', data.eic.targets, 'Extracted Ion Chromatograms', {
+      xRange: eicXRange,
+    });
+    const combinedDownloadRow = document.createElement('div');
+    combinedDownloadRow.className = 'single-eic-download-row';
+    combinedDownloadRow.innerHTML = `
+      <button class="btn btn-sm" data-format="png">Download PNG</button>
+      <button class="btn btn-sm" data-format="svg">Download SVG</button>
+      <button class="btn btn-sm" data-format="pdf">Download PDF</button>
+    `;
+    eicContainer.appendChild(combinedDownloadRow);
+    combinedDownloadRow.querySelectorAll('button[data-format]').forEach((btn) => {
+      btn.addEventListener('click', () => exportSingleCombinedEic(btn.dataset.format));
+    });
+
+    // Individual EICs
+    data.eic.targets.forEach((t, i) => {
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = `eic-single-${i}`;
+      eicContainer.appendChild(div);
+      const traceColor = charts.getColor(i);
+      const polarityLabel = t.polarity === 'negative' ? ' (−)' : ' (+)';
+      charts.plotEIC(`eic-single-${i}`, [t], `EIC m/z ${t.mz.toFixed(2)}${polarityLabel}`, {
+        xRange: eicXRange,
+        colorIndexStart: i,
+        traceColor,
+        titleColor: traceColor,
+      });
+    });
+  } else if (state.mzTargets.length === 0) {
+    eicContainer.innerHTML = '<p class="placeholder-msg">Add target m/z values in Settings to view EIC plots</p>';
+  } else {
+    eicContainer.innerHTML = '<p class="placeholder-msg">No EIC data available</p>';
+  }
+
+  if (singlePlotIds.length > 0) {
+    schedulePlotlyResize(singlePlotIds);
+  }
+}
+
+async function exportSingle(format) {
+  if (!state.singleSampleData) {
+    toast('Load a sample first', 'warning');
+    return;
+  }
+  const fileBase = getSingleSampleFilenameBase('single_sample');
+  if (format === 'pdf') {
+    const samplePath = document.getElementById('single-sample-select')?.value || '';
+    if (!samplePath) {
+      toast('Select a sample first', 'warning');
+      return;
+    }
+    const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+    showLoading('Exporting PDF...');
+    try {
+      const response = await api.exportSingleSample({
+        path: samplePath,
+        kind: 'overview',
+        format: 'pdf',
+        dpi,
+        mz_window: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+        mz_targets: state.mzTargets,
+        settings: getReportSettingsPayload(),
+      });
+      const blob = await response.blob();
+      const filename = getFilenameFromContentDisposition(
+        response.headers.get('content-disposition'),
+        `${fileBase}_single_sample.pdf`
+      );
+      downloadBlob(blob, filename);
+      toast('Exported PDF', 'success');
+    } catch (err) {
+      toast(`Export failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
+    return;
+  }
+  await exportAllPlots('tab-single', fileBase, format, {
+    singleSample: true,
+    pdfPerPage: 4,
+    pdfOrientation: 'portrait',
+    pdfPreset: 'deconv-like',
+  });
+}
+
+function getSingleSampleFilenameBase(fallback = 'single_sample') {
+  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const selected = state.selectedFiles.find((f) => f.path === samplePath);
+  let sampleName = selected?.name || (samplePath ? samplePath.split(/[\\/]/).pop() : '') || fallback;
+  if (sampleName.toLowerCase().endsWith('.d')) sampleName = sampleName.slice(0, -2);
+  return sanitizeFilename(sampleName || fallback);
+}
+
+async function exportSingleCombinedEic(format) {
+  if (!state.singleSampleData) {
+    toast('Load a sample first', 'warning');
+    return;
+  }
+  const fileBase = `${getSingleSampleFilenameBase('single_sample')}_extracted_ion_chromatograms`;
+  if (format === 'pdf') {
+    const samplePath = document.getElementById('single-sample-select')?.value || '';
+    if (!samplePath) {
+      toast('Select a sample first', 'warning');
+      return;
+    }
+    const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+    showLoading('Exporting PDF...');
+    try {
+      const response = await api.exportSingleSample({
+        path: samplePath,
+        kind: 'eic-overlay',
+        format: 'pdf',
+        dpi,
+        mz_window: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+        mz_targets: state.mzTargets,
+        settings: getReportSettingsPayload(),
+      });
+      const blob = await response.blob();
+      const filename = getFilenameFromContentDisposition(
+        response.headers.get('content-disposition'),
+        `${fileBase}.pdf`
+      );
+      downloadBlob(blob, filename);
+      toast('Exported PDF', 'success');
+    } catch (err) {
+      toast(`Export failed: ${err.message}`, 'error');
+    } finally {
+      hideLoading();
+    }
+    return;
+  }
+  const plotDiv = document.getElementById('eic-combined-single');
+  const traceCount = Array.isArray(plotDiv?.data) ? plotDiv.data.length : 0;
+  const firstTraceColor = getFirstTraceColor(plotDiv);
+  const legendEntries = (Array.isArray(plotDiv?.data) ? plotDiv.data : []).map((trace, i) => {
+    const traceName = String(trace?.name || `m/z ${i + 1}`);
+    const color = (typeof trace?.line?.color === 'string' && trace.line.color)
+      || (typeof trace?.marker?.color === 'string' && trace.marker.color)
+      || charts.getColor(i);
+    return { name: traceName, color };
+  });
+  const singleSampleEicYMax = computeSingleSampleEicGlobalYMax([plotDiv]);
+  await exportPlotById('eic-combined-single', fileBase, format, {
+    // Reuse the same high-quality export style used for polished single-sample outputs.
+    pdfPreset: 'deconv-like',
+    singleSample: format === 'pdf',
+    pdfPerPage: 1,
+    pdfOrientation: 'landscape',
+    pdfCropToPlot: format === 'pdf',
+    pdfCropMarginPt: 8,
+    singleSampleEic: true,
+    singleSampleEicFitLegend: true,
+    singleSampleEicMultiColLegend: true,
+    singleSampleEicLegendEntries: legendEntries,
+    traceCount,
+    firstTraceColor,
+    singleSampleEicYMax,
+    exportHeightScale: 2 / 3,
+    traceLineWidthMultiplier: 1.5,
+    exportTransparentBackground: format === 'pdf',
+    exportFilenameLabel: `${fileBase}.${format}`,
+  });
+}
+
+/** Export all Plotly plots in a tab container as images. */
+async function exportAllPlots(containerId, filenameBase, format, options = {}) {
+  const container = document.getElementById(containerId);
+  const plotDivs = container.querySelectorAll('.js-plotly-plot');
+  if (plotDivs.length === 0) {
+    toast('No plots to export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
+  const scale = dpi / 96;
+
+  showLoading(`Exporting ${format.toUpperCase()}...`);
+  try {
+    if (format === 'pdf') {
+      await exportPlotsAsPDF(plotDivs, filenameBase, scale, options);
+      toast(`Exported ${plotDivs.length} plot(s) as PDF`, 'success');
+      return;
+    }
+
+    for (let i = 0; i < plotDivs.length; i++) {
+      const div = plotDivs[i];
+      const suffix = plotDivs.length > 1 ? `_${i + 1}` : '';
+      const filename = `${filenameBase}${suffix}.${format}`;
+      const dims = getExportDimensions(div, scale, options);
+      const exportOptions = {
+        ...options,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+      };
+      const imageDataUrl = await buildExportImage(
+        div,
+        format,
+        dims.width,
+        dims.height,
+        exportOptions
+      );
+      downloadBlob(dataUrlToBlob(imageDataUrl), filename);
+    }
+    toast(`Exported ${plotDivs.length} plot(s) as ${format.toUpperCase()}`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportPlotsAsPDF(plotDivs, filenameBase, scale, options = {}) {
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    throw new Error('PDF library not loaded');
+  }
+
+  const { jsPDF } = window.jspdf;
+  const isSingleSamplePdf = options.singleSample === true;
+  const orientation = String(options.pdfOrientation || (isSingleSamplePdf ? 'portrait' : 'landscape'));
+  const plotsPerPage = Math.max(1, parseInt(options.pdfPerPage, 10) || (isSingleSamplePdf ? 4 : 1));
+  const singlePdfScale = isSingleSamplePdf
+    ? Math.max(1.75, Math.min(3.0, Number(scale) || 1))
+    : scale;
+  const singleSampleEicYMax = Number.isFinite(Number(options.singleSampleEicYMax)) && Number(options.singleSampleEicYMax) > 0
+    ? Number(options.singleSampleEicYMax)
+    : (isSingleSamplePdf ? computeSingleSampleEicGlobalYMax(plotDivs) : null);
+
+  if (options.pdfCropToPlot === true && plotDivs.length === 1) {
+    const div = plotDivs[0];
+    const singleSampleEic = (options.singleSampleEic === true && isSingleSampleEicPlot(div))
+      || (isSingleSamplePdf && isSingleSampleEicPlot(div));
+    const traceCount = Number(options.traceCount) || (Array.isArray(div?.data) ? div.data.length : 0);
+    const firstTraceColor = options.firstTraceColor || getFirstTraceColor(div);
+    const dims = getExportDimensions(div, scale, options);
+    const dataUrl = await buildExportImage(
+      div,
+      'png',
+      dims.width,
+      dims.height,
+      {
+        singleSampleEic,
+        singleSampleEicFitLegend: options.singleSampleEicFitLegend,
+        singleSampleEicMultiColLegend: options.singleSampleEicMultiColLegend,
+        singleSampleEicLegendEntries: options.singleSampleEicLegendEntries,
+        traceCount,
+        firstTraceColor,
+        singleSampleEicYMax,
+        pdfPreset: options.pdfPreset,
+        pdfScale: singlePdfScale,
+        exportFilenameLabel: options.exportFilenameLabel,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+        traceLineWidthMultiplier: options.traceLineWidthMultiplier,
+        exportTransparentBackground: options.exportTransparentBackground,
+      }
+    );
+    const drawW = Math.max(120, Number(dims.width) || 120);
+    const drawH = Math.max(120, Number(dims.height) || 120);
+    const margin = Math.max(
+      0,
+      Number.isFinite(Number(options.pdfCropMarginPx))
+        ? Number(options.pdfCropMarginPx)
+        : (Number(options.pdfCropMarginPt) || 8)
+    );
+    const pageW = drawW + (margin * 2);
+    const pageH = drawH + (margin * 2);
+    const pdf = new jsPDF({
+      orientation: pageW >= pageH ? 'landscape' : 'portrait',
+      unit: 'px',
+      format: [pageW, pageH],
+      compress: true,
+    });
+    pdf.addImage(dataUrl, 'PNG', margin, margin, drawW, drawH, undefined, 'FAST');
+    pdf.save(`${filenameBase}.pdf`);
+    return;
+  }
+
+  const pdf = new jsPDF({
+    orientation,
+    unit: 'pt',
+    format: 'a4',
+    compress: true,
+  });
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 24;
+  const contentWidth = pageWidth - margin * 2;
+  const contentHeight = pageHeight - margin * 2;
+  const verticalGap = isSingleSamplePdf ? 10 : 0;
+  const slotHeight = isSingleSamplePdf
+    ? ((contentHeight - (verticalGap * (plotsPerPage - 1))) / plotsPerPage)
+    : contentHeight;
+
+  for (let i = 0; i < plotDivs.length; i++) {
+    const div = plotDivs[i];
+    const singleSampleEic = (options.singleSampleEic === true && isSingleSampleEicPlot(div))
+      || (isSingleSamplePdf && isSingleSampleEicPlot(div));
+    const traceCount = Number(options.traceCount) || (Array.isArray(div?.data) ? div.data.length : 0);
+    const firstTraceColor = options.firstTraceColor || getFirstTraceColor(div);
+    const dims = getExportDimensions(div, scale, options);
+    if (isSingleSamplePdf) {
+      // Keep the same aspect ratio as the destination A4 slot to avoid squashing.
+      dims.width = Math.max(900, Math.round(contentWidth * singlePdfScale));
+      dims.height = Math.max(260, Math.round(slotHeight * singlePdfScale));
+    }
+    const dataUrl = await buildExportImage(
+      div,
+      'png',
+      dims.width,
+      dims.height,
+      {
+        singleSampleEic,
+        singleSampleEicFitLegend: options.singleSampleEicFitLegend,
+        singleSampleEicMultiColLegend: options.singleSampleEicMultiColLegend,
+        singleSampleEicLegendEntries: options.singleSampleEicLegendEntries,
+        traceCount,
+        firstTraceColor,
+        singleSampleEicYMax,
+        pdfPreset: options.pdfPreset,
+        pdfScale: singlePdfScale,
+        exportFilenameLabel: options.exportFilenameLabel,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+        traceLineWidthMultiplier: options.traceLineWidthMultiplier,
+        exportTransparentBackground: options.exportTransparentBackground,
+      }
+    );
+
+    if (i > 0 && (i % plotsPerPage) === 0) {
+      pdf.addPage();
+    }
+
+    if (isSingleSamplePdf) {
+      const slotIndex = i % plotsPerPage;
+      const drawX = margin;
+      const drawY = margin + (slotIndex * (slotHeight + verticalGap));
+      pdf.addImage(dataUrl, 'PNG', drawX, drawY, contentWidth, slotHeight, undefined, 'FAST');
+    } else {
+      const sourceW = Math.max(1, Number(dims.width) || 1);
+      const sourceH = Math.max(1, Number(dims.height) || 1);
+      let drawW = contentWidth;
+      let drawH = drawW * (sourceH / sourceW);
+      if (drawH > contentHeight) {
+        drawH = contentHeight;
+        drawW = drawH * (sourceW / sourceH);
+      }
+      const drawX = margin + ((contentWidth - drawW) / 2);
+      const drawY = margin + ((contentHeight - drawH) / 2);
+      pdf.addImage(dataUrl, 'PNG', drawX, drawY, drawW, drawH, undefined, 'FAST');
+    }
+  }
+
+  pdf.save(`${filenameBase}.pdf`);
+}
+
+function getPlotTitleText(plotDiv) {
+  const title = plotDiv?.layout?.title;
+  if (typeof title === 'string') return title;
+  if (title && typeof title.text === 'string') return title.text;
+  return '';
+}
+
+function isSingleSampleEicPlot(plotDiv) {
+  const id = String(plotDiv?.id || '');
+  if (id === 'eic-combined-single' || id.startsWith('eic-single-')) return true;
+  const title = getPlotTitleText(plotDiv).toLowerCase();
+  return title.includes('eic') || title.includes('extracted ion chromatograms');
+}
+
+function getExportDimensions(plotDiv, scale, options = {}) {
+  const figWidthIn = parseFloat(document.getElementById('fig-width')?.value) || 6;
+  const width = Math.max(600, Math.round(figWidthIn * 96 * scale));
+  const layoutHeight = Number(plotDiv?.layout?.height);
+  const baseHeight = Number.isFinite(layoutHeight) && layoutHeight > 0
+    ? layoutHeight
+    : (plotDiv?.offsetHeight || 320);
+  const heightScale = Math.max(0.1, Number(options.exportHeightScale) || 1);
+  const height = Math.max(120, Math.round(baseHeight * scale * heightScale));
+  return { width, height };
+}
+
+function applyWebappExportStyle(layout) {
+  return applyWebappExportStyleWithOptions(layout, {});
+}
+
+function applyWebappExportStyleWithOptions(layout, options = {}) {
+  const styled = JSON.parse(JSON.stringify(layout || {}));
+  const showGrid = document.getElementById('show-grid')?.checked ?? false;
+
+  styled.paper_bgcolor = 'rgba(0,0,0,0)';
+  styled.plot_bgcolor = 'rgba(0,0,0,0)';
+  styled.font = {
+    ...(styled.font || {}),
+    family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+    size: styled.font?.size || 10,
+    color: '#000000',
+  };
+  if (styled.title && styled.title.font) {
+    styled.title.font = { ...styled.title.font, color: '#000000' };
+  }
+
+  for (const key of Object.keys(styled)) {
+    if (key.startsWith('xaxis') || key.startsWith('yaxis')) {
+      const axis = styled[key] || {};
+      styled[key] = {
+        ...axis,
+        color: '#000000',
+        showgrid: showGrid,
+        gridcolor: 'rgba(0,0,0,0.30)',
+        zeroline: false,
+      };
+    }
+  }
+
+  if (styled.legend) {
+    styled.legend = {
+      ...styled.legend,
+      bgcolor: 'rgba(0,0,0,0)',
+      borderwidth: 0,
+      font: { ...(styled.legend.font || {}), color: '#000000' },
+    };
+  }
+
+  if (options.pdfPreset === 'deconv-like') {
+    styled.paper_bgcolor = '#ffffff';
+    styled.plot_bgcolor = '#ffffff';
+    styled.showlegend = false;
+    styled.font = {
+      ...(styled.font || {}),
+      size: 25,
+      color: '#000000',
+      family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+    };
+    if (styled.title) {
+      const titleFont = (typeof styled.title === 'object' ? styled.title.font : null) || {};
+      styled.title = {
+        ...(typeof styled.title === 'object' ? styled.title : { text: String(styled.title || '') }),
+        font: {
+          ...titleFont,
+          size: 30,
+          color: '#000000',
+          family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+        },
+      };
+    }
+    const m = styled.margin || {};
+    styled.margin = {
+      l: Math.max(120, Number(m.l) || 0),
+      r: Math.max(40, Number(m.r) || 0),
+      t: Math.max(90, Number(m.t) || 0),
+      b: Math.max(100, Number(m.b) || 0),
+      pad: Number(m.pad) || 0,
+    };
+    for (const key of Object.keys(styled)) {
+      if (key.startsWith('xaxis') || key.startsWith('yaxis')) {
+        const axis = styled[key] || {};
+        const existingTitle = axis.title;
+        const normalizedTitle = typeof existingTitle === 'string'
+          ? { text: existingTitle }
+          : (existingTitle || {});
+        styled[key] = {
+          ...axis,
+          color: '#000000',
+          linecolor: '#000000',
+          linewidth: 1.4,
+          showline: true,
+          mirror: true,
+          automargin: true,
+          ticks: axis.ticks || 'outside',
+          tickfont: {
+            ...(axis.tickfont || {}),
+            size: 23,
+            color: '#000000',
+            family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+          },
+          title: {
+            ...normalizedTitle,
+            font: {
+              ...((normalizedTitle && normalizedTitle.font) || {}),
+              size: 25,
+              color: '#000000',
+              family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+            },
+          },
+          zeroline: false,
+        };
+      }
+    }
+  }
+
+  if (options.exportTransparentBackground === true) {
+    styled.paper_bgcolor = 'rgba(0,0,0,0)';
+    styled.plot_bgcolor = 'rgba(0,0,0,0)';
+    if (styled.legend) {
+      styled.legend = {
+        ...styled.legend,
+        bgcolor: 'rgba(0,0,0,0)',
+      };
+    }
+  }
+
+  if (options.singleSampleEic === true) {
+    const traceCount = Number(options.traceCount) || 0;
+    const showLegend = traceCount > 1;
+    const fitLegend = options.singleSampleEicFitLegend === true;
+    const useMultiColumnLegend = fitLegend && options.singleSampleEicMultiColLegend === true;
+    const axisTickSize = Number(styled?.xaxis?.tickfont?.size)
+      || Number(styled?.yaxis?.tickfont?.size)
+      || Number(styled?.font?.size)
+      || 11;
+    const exportPixelWidth = Math.max(600, Number(options.exportPixelWidth) || 1200);
+    const exportPixelHeight = Math.max(240, Number(options.exportPixelHeight) || 520);
+    styled.showlegend = showLegend;
+    const m = styled.margin || {};
+    styled.margin = {
+      l: Math.max(60, Number(m.l) || 0),
+      r: Math.max(showLegend ? (fitLegend ? 280 : 200) : 40, Number(m.r) || 0),
+      t: Math.max(traceCount > 6 ? 64 : 72, Number(m.t) || 0),
+      b: Math.max(56, Number(m.b) || 0),
+      pad: Number(m.pad) || 0,
+    };
+    if (showLegend && !useMultiColumnLegend) {
+      styled.legend = {
+        ...(styled.legend || {}),
+        x: 1.01,
+        xanchor: 'left',
+        y: 0.995,
+        yanchor: 'top',
+        bgcolor: 'rgba(255,255,255,0.9)',
+        bordercolor: '#000000',
+        borderwidth: 0.6,
+        itemsizing: 'constant',
+        font: {
+          ...((styled.legend && styled.legend.font) || {}),
+          color: '#000000',
+          // Keep legend font synced with axis tick labels.
+          size: axisTickSize,
+          family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+        },
+      };
+    }
+    if (showLegend && useMultiColumnLegend) {
+      const entries = Array.isArray(options.singleSampleEicLegendEntries)
+        ? options.singleSampleEicLegendEntries.filter((e) => e && e.name)
+        : [];
+      if (entries.length > 0) {
+        const rowHeightPx = Math.max(16, Math.round(axisTickSize * 1.30));
+        const marginLeft = Number(styled.margin?.l) || 60;
+        const marginTop = Number(styled.margin?.t) || 72;
+        const marginBottom = Number(styled.margin?.b) || 56;
+        const plotHeightPx = Math.max(100, exportPixelHeight - marginTop - marginBottom);
+        const maxRows = Math.max(1, Math.floor(plotHeightPx / rowHeightPx));
+        const columnCount = Math.max(1, Math.ceil(entries.length / maxRows));
+        const rowsPerColumn = Math.ceil(entries.length / columnCount);
+
+        const swatchWidth = Math.max(14, Math.round(axisTickSize * 1.25));
+        const swatchGap = Math.max(6, Math.round(axisTickSize * 0.35));
+        const textPadding = Math.max(10, Math.round(axisTickSize * 0.55));
+        const maxNameLen = entries.reduce((acc, e) => Math.max(acc, String(e.name).length), 8);
+        const columnWidth = Math.max(120, Math.round(swatchWidth + swatchGap + textPadding + (maxNameLen * axisTickSize * 0.56)));
+        const requiredRightMargin = Math.round(columnCount * columnWidth + 18);
+
+        styled.margin = {
+          ...styled.margin,
+          r: Math.max(Number(styled.margin?.r) || 0, requiredRightMargin),
+        };
+        styled.showlegend = false;
+
+        const plotWidthPx = Math.max(140, exportPixelWidth - marginLeft - (Number(styled.margin?.r) || requiredRightMargin));
+        const plotHeightPxAdjusted = Math.max(100, exportPixelHeight - marginTop - marginBottom);
+        const legendLeftPad = 6;
+        const firstColX = 1 + (legendLeftPad / plotWidthPx);
+        const xStep = columnWidth / plotWidthPx;
+        const yTop = 1 - ((axisTickSize * 0.15) / plotHeightPxAdjusted);
+        const yStep = rowHeightPx / plotHeightPxAdjusted;
+
+        const legendAnnotations = [];
+        const legendShapes = [];
+        entries.forEach((entry, idx) => {
+          const col = Math.floor(idx / rowsPerColumn);
+          const row = idx % rowsPerColumn;
+          const y = yTop - (row * yStep);
+          const xSwatch0 = firstColX + (col * xStep);
+          const xSwatch1 = xSwatch0 + (swatchWidth / plotWidthPx);
+          const xText = xSwatch1 + (swatchGap / plotWidthPx);
+          legendShapes.push({
+            type: 'line',
+            xref: 'paper',
+            yref: 'paper',
+            x0: xSwatch0,
+            x1: xSwatch1,
+            y0: y,
+            y1: y,
+            line: {
+              color: String(entry.color || '#000000'),
+              width: Math.max(2, axisTickSize * 0.12),
+            },
+          });
+          legendAnnotations.push({
+            xref: 'paper',
+            yref: 'paper',
+            x: xText,
+            y,
+            xanchor: 'left',
+            yanchor: 'middle',
+            text: String(entry.name),
+            showarrow: false,
+            align: 'left',
+            font: {
+              family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+              size: axisTickSize,
+              color: '#000000',
+            },
+          });
+        });
+        styled.shapes = Array.isArray(styled.shapes) ? [...styled.shapes, ...legendShapes] : legendShapes;
+        styled.annotations = Array.isArray(styled.annotations)
+          ? [...styled.annotations, ...legendAnnotations]
+          : legendAnnotations;
+      }
+    }
+    if (!showLegend && options.firstTraceColor && styled.title) {
+      const color = String(options.firstTraceColor);
+      const titleObj = typeof styled.title === 'object'
+        ? styled.title
+        : { text: String(styled.title || '') };
+      styled.title = {
+        ...titleObj,
+        font: {
+          ...(titleObj.font || {}),
+          color,
+        },
+      };
+    }
+
+    const yMax = Number(options.singleSampleEicYMax);
+    if (Number.isFinite(yMax) && yMax > 0) {
+      const yPad = yMax * 0.03;
+      const yTop = yMax + yPad;
+      styled.yaxis = {
+        ...(styled.yaxis || {}),
+        range: [0, yTop],
+        autorange: false,
+      };
+    }
+  }
+
+  if (options.exportFilenameLabel) {
+    const label = String(options.exportFilenameLabel);
+    const marginLeft = Number(styled?.margin?.l) || 0;
+    const marginBottom = Number(styled?.margin?.b) || 0;
+    // Place filename under the x-axis title and aligned toward left tick labels.
+    const labelXShift = -(Math.max(42, Math.min(110, marginLeft - 10)));
+    const labelYShift = -(Math.max(58, Math.min(95, marginBottom - 8)));
+    styled.annotations = Array.isArray(styled.annotations) ? [...styled.annotations] : [];
+    styled.annotations.push({
+      xref: 'paper',
+      yref: 'paper',
+      x: 0,
+      y: 0,
+      xanchor: 'left',
+      yanchor: 'bottom',
+      xshift: labelXShift,
+      yshift: labelYShift,
+      text: `<i>${label}</i>`,
+      showarrow: false,
+      align: 'left',
+      font: {
+        family: 'Arial, Liberation Sans, DejaVu Sans, sans-serif',
+        size: 12,
+        color: '#777777',
+      },
+    });
+  }
+
+  if (Array.isArray(styled.annotations)) {
+    styled.annotations = styled.annotations.map((ann) => ({
+      ...ann,
+      font: { ...(ann.font || {}), color: ann?.font?.color || '#000000' },
+      arrowcolor: ann.arrowcolor || '#000000',
+    }));
+  }
+
+  return styled;
+}
+
+function applyExportTraceStyleWithOptions(data, options = {}) {
+  const traces = Array.isArray(data) ? data : [];
+  const customMultiplier = Number(options.traceLineWidthMultiplier);
+  const hasCustomMultiplier = Number.isFinite(customMultiplier) && customMultiplier > 0;
+  if (options.pdfPreset !== 'deconv-like' && !hasCustomMultiplier) return traces;
+  const widthMultiplier = hasCustomMultiplier ? customMultiplier : 1.8;
+
+  return traces.map((trace) => {
+    if (!trace || typeof trace !== 'object') return trace;
+    const next = { ...trace };
+    const traceType = String(next.type || 'scatter');
+    const mode = String(next.mode || '');
+    const isLineLike = traceType === 'scatter' || traceType === 'scattergl';
+    const drawsLines = mode.includes('lines') || mode === '' || mode === 'none';
+
+    if (isLineLike && drawsLines) {
+      const currentWidth = Number(next?.line?.width);
+      const baseWidth = Number.isFinite(currentWidth) && currentWidth > 0 ? currentWidth : 1.8;
+      next.line = {
+        ...(next.line || {}),
+        width: baseWidth * widthMultiplier,
+      };
+    }
+
+    if (next.error_y && typeof next.error_y === 'object') {
+      const ew = Number(next.error_y.width);
+      if (Number.isFinite(ew) && ew > 0) {
+        next.error_y = { ...next.error_y, width: ew * 1.5 };
+      }
+    }
+
+    if (next.error_x && typeof next.error_x === 'object') {
+      const ew = Number(next.error_x.width);
+      if (Number.isFinite(ew) && ew > 0) {
+        next.error_x = { ...next.error_x, width: ew * 1.5 };
+      }
+    }
+
+    return next;
+  });
+}
+
+function getFirstTraceColor(plotDiv) {
+  const traces = Array.isArray(plotDiv?.data) ? plotDiv.data : [];
+  if (traces.length === 0) return null;
+  const t0 = traces[0] || {};
+  if (typeof t0?.line?.color === 'string' && t0.line.color) return t0.line.color;
+  if (typeof t0?.marker?.color === 'string' && t0.marker.color) return t0.marker.color;
+  return null;
+}
+
+function computeSingleSampleEicGlobalYMax(plotDivs) {
+  const divList = Array.from(plotDivs || []);
+  let maxY = 0;
+  divList.forEach((div) => {
+    if (!isSingleSampleEicPlot(div)) return;
+    const traces = Array.isArray(div?.data) ? div.data : [];
+    traces.forEach((trace) => {
+      const ys = Array.isArray(trace?.y) ? trace.y : [];
+      ys.forEach((v) => {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > maxY) maxY = n;
+      });
+    });
+  });
+  return maxY > 0 ? maxY : null;
+}
+
+async function buildExportImage(plotDiv, format, width, height, options = {}) {
+  const temp = document.createElement('div');
+  temp.style.position = 'fixed';
+  temp.style.left = '-10000px';
+  temp.style.top = '-10000px';
+  temp.style.width = `${width}px`;
+  temp.style.height = `${height}px`;
+  document.body.appendChild(temp);
+
+  try {
+    const exportData = applyExportTraceStyleWithOptions(
+      JSON.parse(JSON.stringify(plotDiv.data || [])),
+      options
+    );
+    await Plotly.newPlot(
+      temp,
+      exportData,
+      applyWebappExportStyleWithOptions(plotDiv.layout || {}, options),
+      { responsive: false, displaylogo: false }
+    );
+
+    return await Plotly.toImage(temp, {
+      format,
+      width,
+      height,
+      scale: 1,
+    });
+  } finally {
+    Plotly.purge(temp);
+    temp.remove();
+  }
+}
+
+function dataUrlToBlob(dataUrl) {
+  if (typeof dataUrl !== 'string') {
+    throw new Error('Invalid image data');
+  }
+
+  // Plotly can return:
+  // 1) data URLs with base64 payload (png),
+  // 2) data URLs with URL-encoded text payload (svg),
+  // 3) raw SVG text in some environments.
+  if (dataUrl.startsWith('<svg') || dataUrl.startsWith('<?xml')) {
+    return new Blob([dataUrl], { type: 'image/svg+xml;charset=utf-8' });
+  }
+
+  if (!dataUrl.startsWith('data:')) {
+    throw new Error('Unsupported export payload format');
+  }
+
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx < 0) {
+    throw new Error('Malformed data URL');
+  }
+
+  const header = dataUrl.slice(0, commaIdx);
+  const data = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = header.match(/^data:([^;,]+)/i);
+  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+  const isBase64 = /;base64(?:;|$)/i.test(header);
+
+  if (isBase64) {
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  }
+
+  const text = decodeURIComponent(data);
+  return new Blob([text], { type: mime });
+}
+
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function maxFiniteValue(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  let maxVal = 0;
+  for (let i = 0; i < values.length; i++) {
+    const n = Number(values[i]);
+    if (Number.isFinite(n) && n > maxVal) maxVal = n;
+  }
+  return maxVal;
+}
+
+function getDefaultProgressionRole(index, total) {
+  if (index === 0) return 'initial';
+  if (index === total - 1) return 'final';
+  return 'mid';
+}
+
+function getProgressionRoleBaseLabel(role) {
+  if (role === 'initial') return 'Initial';
+  if (role === 'final') return 'Final';
+  return 'Mid';
+}
+
+function buildAutoProgressionLabel(role, ordinal, totalForRole) {
+  const base = getProgressionRoleBaseLabel(role);
+  if (totalForRole <= 1) return base;
+  return `${base} ${ordinal}`;
+}
+
+function computeAutoProgressionColorMap(assignments = state.progressionAssignments) {
+  const colorsByPath = {};
+  let activeIndex = 0;
+
+  state.selectedFiles.forEach((file) => {
+    const assignment = assignments?.[file.path] || {};
+    if (assignment.active === false) return;
+    colorsByPath[file.path] = NPG_COLOR_PALETTE[activeIndex % NPG_COLOR_PALETTE.length];
+    activeIndex += 1;
+  });
+
+  state.selectedFiles.forEach((file) => {
+    if (!colorsByPath[file.path]) {
+      colorsByPath[file.path] = '#808080';
+    }
+  });
+
+  return colorsByPath;
+}
+
+function computeAutoProgressionLabelMap() {
+  const total = state.selectedFiles.length;
+  const roleCounts = { initial: 0, mid: 0, final: 0 };
+  const rolesByPath = {};
+
+  state.selectedFiles.forEach((file, i) => {
+    const assignment = state.progressionAssignments[file.path] || {};
+    const role = assignment.role || getDefaultProgressionRole(i, total);
+    rolesByPath[file.path] = role;
+    if (roleCounts[role] == null) roleCounts[role] = 0;
+    roleCounts[role] += 1;
+  });
+
+  const roleOrdinals = { initial: 0, mid: 0, final: 0 };
+  const labelsByPath = {};
+  state.selectedFiles.forEach((file) => {
+    const role = rolesByPath[file.path] || 'mid';
+    if (roleOrdinals[role] == null) roleOrdinals[role] = 0;
+    roleOrdinals[role] += 1;
+    labelsByPath[file.path] = buildAutoProgressionLabel(role, roleOrdinals[role], roleCounts[role] || 1);
+  });
+
+  return labelsByPath;
+}
+
+function syncProgressionAssignmentsToSelectedFiles() {
+  const total = state.selectedFiles.length;
+  const next = {};
+  const autoColors = computeAutoProgressionColorMap(state.progressionAssignments);
+  state.selectedFiles.forEach((file, i) => {
+    const existing = state.progressionAssignments[file.path] || {};
+    const defaultRole = getDefaultProgressionRole(i, total);
+    const hasUserRole = existing.userRole === true;
+    const hasUserLabel = existing.userLabel === true;
+    const hasUserColor = existing.userColor === true;
+    const autoColor = autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length];
+    next[file.path] = {
+      role: hasUserRole ? (existing.role || defaultRole) : defaultRole,
+      label: hasUserLabel ? (existing.label || '') : '',
+      color: hasUserColor ? (existing.color || autoColor) : autoColor,
+      autoColor,
+      active: existing.active !== false,
+      userRole: hasUserRole,
+      userLabel: hasUserLabel,
+      userColor: hasUserColor,
+    };
+  });
+  state.progressionAssignments = next;
+}
+
+function readProgressionAssignmentsFromDOM() {
+  document.querySelectorAll('.prog-active').forEach((el) => {
+    const path = el.dataset.path;
+    if (!path) return;
+    const item = state.progressionAssignments[path] || {};
+    item.active = Boolean(el.checked);
+    state.progressionAssignments[path] = item;
+  });
+
+  document.querySelectorAll('.prog-role').forEach((el) => {
+    const path = el.dataset.path;
+    if (!path) return;
+    const item = state.progressionAssignments[path] || {};
+    item.role = el.value || item.role || 'mid';
+    item.userRole = true;
+    state.progressionAssignments[path] = item;
+  });
+
+  const autoLabels = computeAutoProgressionLabelMap();
+  document.querySelectorAll('.prog-label').forEach((el) => {
+    const path = el.dataset.path;
+    if (!path) return;
+    const item = state.progressionAssignments[path] || {};
+    const value = (el.value || '').trim();
+    const autoLabel = String(autoLabels[path] || '').trim();
+    item.label = value;
+    item.userLabel = value.length > 0 && value !== autoLabel;
+    state.progressionAssignments[path] = item;
+  });
+
+  document.querySelectorAll('.prog-color').forEach((el) => {
+    const path = el.dataset.path;
+    if (!path) return;
+    const item = state.progressionAssignments[path] || {};
+    const autoColor = String(item.autoColor || '#808080');
+    const value = String(el.value || '').trim();
+    item.color = value || item.color || autoColor;
+    item.userColor = value.length > 0 && value.toLowerCase() !== String(autoColor).toLowerCase();
+    state.progressionAssignments[path] = item;
+  });
+}
+
+function getProgressionSamples(options = {}) {
+  const activeOnly = options.activeOnly !== false;
+  const total = state.selectedFiles.length;
+  const autoLabels = computeAutoProgressionLabelMap();
+  const autoColors = computeAutoProgressionColorMap();
+  const samples = state.selectedFiles.map((file, i) => {
+    const assignment = state.progressionAssignments[file.path] || {};
+    const role = assignment.role || getDefaultProgressionRole(i, total);
+    const autoLabel = String(autoLabels[file.path] || getProgressionRoleBaseLabel(role));
+    const manualLabel = (assignment.userLabel === true ? String(assignment.label || '').trim() : '');
+    const active = assignment.active !== false;
+    return {
+      path: file.path,
+      name: file.name || file.path.split(/[\\/]/).pop() || '',
+      role,
+      label: manualLabel || autoLabel,
+      color: assignment.userColor === true
+        ? (assignment.color || autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length])
+        : (autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length]),
+      active,
+    };
+  });
+  return activeOnly ? samples.filter((s) => s.active) : samples;
+}
+
+function updateRangeWithTimes(range, times) {
+  if (!Array.isArray(times)) return range;
+  let [minX, maxX] = range;
+  times.forEach((t) => {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return;
+    if (n < minX) minX = n;
+    if (n > maxX) maxX = n;
+  });
+  return [minX, maxX];
+}
+
+function normalizeChromatogramSeriesBaseline(series, anchor = 'last') {
+  if (!series || typeof series !== 'object') return null;
+
+  const times = Array.isArray(series.times) ? series.times.slice() : [];
+  const intensities = Array.isArray(series.intensities) ? series.intensities.slice() : [];
+  const count = Math.min(times.length, intensities.length);
+  if (count <= 0) {
+    return { ...series, times, intensities };
+  }
+
+  const useFirst = String(anchor).toLowerCase() === 'first';
+  const start = useFirst ? 0 : count - 1;
+  const end = useFirst ? count : -1;
+  const step = useFirst ? 1 : -1;
+  let baselineIndex = -1;
+
+  for (let i = start; i !== end; i += step) {
+    const time = Number(times[i]);
+    const intensity = Number(intensities[i]);
+    if (!Number.isFinite(time) || !Number.isFinite(intensity)) continue;
+    baselineIndex = i;
+    break;
+  }
+
+  if (baselineIndex < 0) {
+    return { ...series, times, intensities };
+  }
+
+  const baseline = Number(intensities[baselineIndex]);
+  for (let i = 0; i < count; i += 1) {
+    const value = Number(intensities[i]);
+    if (!Number.isFinite(value)) continue;
+    intensities[i] = value - baseline;
+  }
+
+  return { ...series, times, intensities };
+}
+
+function computeProgressionXRange(data) {
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+
+  (data.uv_progression || []).forEach((s) => {
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times);
+  });
+  (data.tic_progression || []).forEach((s) => {
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times);
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times_pos);
+    [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times_neg);
+  });
+  (data.eic_progressions || []).forEach((group) => {
+    (group.samples || []).forEach((s) => {
+      [minX, maxX] = updateRangeWithTimes([minX, maxX], s?.times);
+    });
+  });
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || maxX <= minX) return null;
+  return [minX, maxX];
+}
+
+function getProgressionBaseTitle() {
+  const progTitle = document.getElementById('label-prog-title');
+  return (progTitle && progTitle.value && progTitle.value.trim()) || 'Time Progression Analysis';
+}
+
+function formatProgressionPolarityLabel(polarity) {
+  return polarity === 'negative' ? ' (−)' : ' (+)';
+}
+
+function buildProgressionEicTitle(eicGroup) {
+  const mz = Number(eicGroup?.mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(2) : '?';
+  return `${getProgressionBaseTitle()} - EIC m/z ${mzLabel}${formatProgressionPolarityLabel(eicGroup?.polarity)}`;
+}
+
+function buildProgressionExportStyle() {
+  return {
+    fig_width: 6.0,
+    line_width: 0.8,
+    show_grid: false,
+    panel_width_multiplier: 2.0,
+    panel_height_multiplier: 1.0,
+  };
+}
+
+function buildProgressionSampleNameText(progressionSamples) {
+  return (progressionSamples || [])
+    .map((sample, index) => {
+      const explicitName = String(sample?.name || '').trim();
+      if (explicitName) return explicitName.replace(/\.[dD]$/, '');
+      const pathName = String(sample?.path || '').split(/[\\/]/).pop() || '';
+      if (pathName) return pathName.replace(/\.[dD]$/, '');
+      return `Sample ${index + 1}`;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+function buildProgressionPdfFilename(progressionSamples) {
+  const baseTitle = sanitizeDownloadFilename(getProgressionBaseTitle());
+  const sampleText = buildProgressionSampleNameText(progressionSamples);
+  return sanitizeDownloadFilename(sampleText ? `${baseTitle} ${sampleText}` : baseTitle);
+}
+
+function buildProgressionPanelFilename(panelLabel, progressionSamples) {
+  const sampleText = buildProgressionSampleNameText(progressionSamples);
+  return sanitizeDownloadFilename(sampleText ? `${panelLabel} ${sampleText}` : panelLabel);
+}
+
+function buildProgressionEicFilename(eicGroup, progressionSamples) {
+  const mz = Number(eicGroup?.mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(1) : 'EIC';
+  const sampleText = buildProgressionSampleNameText(progressionSamples);
+  return sanitizeDownloadFilename(sampleText ? `${mzLabel} ${sampleText}` : mzLabel);
+}
+
+function buildProgressionPanelTraces(sampleSeries, progressionSamples, options = {}) {
+  const getTimes = typeof options.getTimes === 'function'
+    ? options.getTimes
+    : (series) => series?.times;
+  const getIntensities = typeof options.getIntensities === 'function'
+    ? options.getIntensities
+    : (series) => series?.intensities;
+
+  return (progressionSamples || []).map((sampleMeta, index) => {
+    const series = Array.isArray(sampleSeries) ? sampleSeries[index] : null;
+    const times = getTimes(series);
+    const intensities = getIntensities(series);
+    return {
+      times: Array.isArray(times) ? times : [],
+      intensities: Array.isArray(intensities) ? intensities : [],
+      label: sampleMeta?.label || `Sample ${index + 1}`,
+      color: sampleMeta?.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+    };
+  });
+}
+
+function buildProgressionPanelExportPayloads() {
+  if (!state.progressionData) return [];
+
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  if (progressionSamples.length === 0) return [];
+
+  const baseTitle = getProgressionBaseTitle();
+  const xRange = computeProgressionXRange(state.progressionData);
+  const style = buildProgressionExportStyle();
+  const panels = [];
+
+  if (Array.isArray(state.progressionData.uv_progression) && state.progressionData.uv_progression.length > 0) {
+    panels.push({
+      title: `${baseTitle} - UV`,
+      x_label: 'Time (min)',
+      y_label: 'Absorbance (mAU)',
+      x_range: xRange,
+      style,
+      traces: buildProgressionPanelTraces(state.progressionData.uv_progression, progressionSamples),
+    });
+  }
+
+  if (Array.isArray(state.progressionData.tic_progression) && state.progressionData.tic_progression.length > 0) {
+    const hasDual = state.progressionData.tic_progression.some((sample) => sample?.has_dual_polarity);
+    if (hasDual) {
+      panels.push({
+        title: `${baseTitle} - TIC (+)`,
+        x_label: 'Time (min)',
+        y_label: 'Intensity',
+        x_range: xRange,
+        style,
+        traces: buildProgressionPanelTraces(
+          state.progressionData.tic_progression,
+          progressionSamples,
+          {
+            getTimes: (series) => series?.times_pos || series?.times,
+            getIntensities: (series) => series?.intensities_pos || series?.intensities,
+          }
+        ),
+      });
+      panels.push({
+        title: `${baseTitle} - TIC (−)`,
+        x_label: 'Time (min)',
+        y_label: 'Intensity',
+        x_range: xRange,
+        style,
+        traces: buildProgressionPanelTraces(
+          state.progressionData.tic_progression,
+          progressionSamples,
+          {
+            getTimes: (series) => series?.times_neg || series?.times,
+            getIntensities: (series) => series?.intensities_neg || series?.intensities,
+          }
+        ),
+      });
+    } else {
+      panels.push({
+        title: `${baseTitle} - TIC`,
+        x_label: 'Time (min)',
+        y_label: 'Intensity',
+        x_range: xRange,
+        style,
+        traces: buildProgressionPanelTraces(state.progressionData.tic_progression, progressionSamples),
+      });
+    }
+  }
+
+  (state.progressionData.eic_progressions || []).forEach((eicGroup) => {
+    const polarityLabel = formatProgressionPolarityLabel(eicGroup?.polarity);
+    const mz = Number(eicGroup?.mz);
+    const mzLabel = Number.isFinite(mz) ? mz.toFixed(2) : '?';
+    panels.push({
+      title: `${baseTitle} - EIC m/z ${mzLabel}${polarityLabel}`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      traces: buildProgressionPanelTraces(eicGroup?.samples, progressionSamples),
+    });
+  });
+
+  return panels.filter((panel) => Array.isArray(panel.traces) && panel.traces.some((trace) => trace.times.length > 0 && trace.intensities.length > 0));
+}
+
+function buildProgressionPdfExportPayload() {
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  const panels = buildProgressionPanelExportPayloads();
+  if (panels.length === 0) return null;
+  return {
+    filename_base: buildProgressionPdfFilename(progressionSamples),
+    panels,
+  };
+}
+
+function buildProgressionEicExportPayload(groupIndex) {
+  if (!state.progressionData || !Array.isArray(state.progressionData.eic_progressions)) return null;
+  const eicGroup = state.progressionData.eic_progressions[groupIndex];
+  if (!eicGroup || !Array.isArray(eicGroup.samples)) return null;
+
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  const traces = buildProgressionPanelTraces(eicGroup.samples, progressionSamples);
+
+  return {
+    title: buildProgressionEicTitle(eicGroup),
+    x_label: 'Time (min)',
+    y_label: 'Intensity',
+    x_range: computeProgressionXRange(state.progressionData),
+    style: buildProgressionExportStyle(),
+    filename_base: buildProgressionEicFilename(eicGroup, progressionSamples),
+    traces,
+  };
+}
+
+function buildProgressionStandardPanelExportPayload(panelKey) {
+  if (!state.progressionData) return null;
+
+  const progressionSamples = getProgressionSamples({ activeOnly: true });
+  if (progressionSamples.length === 0) return null;
+
+  const baseTitle = getProgressionBaseTitle();
+  const xRange = computeProgressionXRange(state.progressionData);
+  const style = buildProgressionExportStyle();
+
+  if (panelKey === 'uv') {
+    if (!Array.isArray(state.progressionData.uv_progression) || state.progressionData.uv_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - UV`,
+      x_label: 'Time (min)',
+      y_label: 'Absorbance (mAU)',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('UV', progressionSamples),
+      traces: buildProgressionPanelTraces(state.progressionData.uv_progression, progressionSamples),
+    };
+  }
+
+  if (panelKey === 'tic') {
+    if (!Array.isArray(state.progressionData.tic_progression) || state.progressionData.tic_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - TIC`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('TIC', progressionSamples),
+      traces: buildProgressionPanelTraces(state.progressionData.tic_progression, progressionSamples),
+    };
+  }
+
+  if (panelKey === 'tic-pos') {
+    if (!Array.isArray(state.progressionData.tic_progression) || state.progressionData.tic_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - TIC (+)`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('TIC positive', progressionSamples),
+      traces: buildProgressionPanelTraces(
+        state.progressionData.tic_progression,
+        progressionSamples,
+        {
+          getTimes: (series) => series?.times_pos || series?.times,
+          getIntensities: (series) => series?.intensities_pos || series?.intensities,
+        }
+      ),
+    };
+  }
+
+  if (panelKey === 'tic-neg') {
+    if (!Array.isArray(state.progressionData.tic_progression) || state.progressionData.tic_progression.length === 0) return null;
+    return {
+      title: `${baseTitle} - TIC (−)`,
+      x_label: 'Time (min)',
+      y_label: 'Intensity',
+      x_range: xRange,
+      style,
+      filename_base: buildProgressionPanelFilename('TIC negative', progressionSamples),
+      traces: buildProgressionPanelTraces(
+        state.progressionData.tic_progression,
+        progressionSamples,
+        {
+          getTimes: (series) => series?.times_neg || series?.times,
+          getIntensities: (series) => series?.intensities_neg || series?.intensities,
+        }
+      ),
+    };
+  }
+
+  return null;
+}
+
+function appendProgressionDownloadRow(container, onClick) {
+  if (!container || typeof onClick !== 'function') return;
+  const downloadRow = document.createElement('div');
+  downloadRow.className = 'single-eic-download-row';
+  downloadRow.innerHTML = '<button class="btn btn-sm">Download PDF</button>';
+  downloadRow.querySelector('button')?.addEventListener('click', onClick);
+  container.appendChild(downloadRow);
+}
+
+async function exportProgressionEicPanel(groupIndex) {
+  if (!state.progressionData) {
+    toast('Generate progression first', 'warning');
+    return;
+  }
+
+  readProgressionAssignmentsFromDOM();
+  const payload = buildProgressionEicExportPayload(groupIndex);
+  if (!payload) {
+    toast('Progression panel not available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportProgressionPanel({
+      ...payload,
+      format: 'pdf',
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${payload.filename_base}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportProgressionStandardPanel(panelKey) {
+  if (!state.progressionData) {
+    toast('Generate progression first', 'warning');
+    return;
+  }
+
+  readProgressionAssignmentsFromDOM();
+  const payload = buildProgressionStandardPanelExportPayload(panelKey);
+  if (!payload) {
+    toast('Progression panel not available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportProgressionPanel({
+      ...payload,
+      format: 'pdf',
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${payload.filename_base}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function stripUptakeAssayBundleSuffix(fileName) {
+  return String(fileName || '').replace(/\.(?:d|sirslt|rslt|olax)$/i, '');
+}
+
+function inferUptakeAssayConcentration(fileName) {
+  const match = String(fileName || '').match(/CC\s*([1-6])(?:\b|[^0-9])/i) || String(fileName || '').match(/CC([1-6])/i);
+  if (!match) return '';
+  const concentrationMap = {
+    1: 0,
+    2: 6.25,
+    3: 12.5,
+    4: 25,
+    5: 50,
+    6: 100,
+  };
+  const value = concentrationMap[parseInt(match[1], 10)];
+  return Number.isFinite(value) ? String(value) : '';
+}
+
+function inferUptakeAssayRole(fileName) {
+  return inferUptakeAssayConcentration(fileName) !== '' ? 'calibration' : 'sample';
+}
+
+function inferUptakeAssaySampleLabel(fileName) {
+  return stripUptakeAssayBundleSuffix(fileName);
+}
+
+function syncUptakeAssayEntriesToSelectedFiles() {
+  const next = {};
+  state.selectedFiles.forEach((file, index) => {
+    const existing = state.uptakeAssayEntries[file.path] || {};
+    const inferredConcentration = inferUptakeAssayConcentration(file.name);
+    const inferredRole = inferUptakeAssayRole(file.name);
+    const inferredLabel = inferUptakeAssaySampleLabel(file.name);
+    next[file.path] = {
+      active: existing.active !== false,
+      role: existing.role === 'calibration' || existing.role === 'sample' ? existing.role : inferredRole,
+      concentration: existing.concentration != null && String(existing.concentration).trim() !== ''
+        ? String(existing.concentration)
+        : inferredConcentration,
+      assayLabel: existing.assayLabel != null && String(existing.assayLabel).trim() !== ''
+        ? String(existing.assayLabel)
+        : inferredLabel,
+      color: existing.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+    };
+  });
+  state.uptakeAssayEntries = next;
+}
+
+function refreshUptakeAssayInputsIfNeeded() {
+  const tab = document.getElementById('tab-uptake-assay-cc');
+  const container = document.getElementById('uptake-assay-samples');
+  if (!tab || !container) return;
+  const tabIsVisible = !tab.classList.contains('hidden');
+  if (tabIsVisible || container.children.length > 0) {
+    renderUptakeAssayEntries();
+  }
+}
+
+function getUptakeAssaySamples(options = {}) {
+  const activeOnly = options.activeOnly !== false;
+  return state.selectedFiles
+    .map((file, index) => {
+      const entry = state.uptakeAssayEntries[file.path] || {};
+      const sampleName = stripUptakeAssayBundleSuffix(file.name || file.path.split(/[\\/]/).pop() || '');
+      return {
+        path: file.path,
+        name: sampleName,
+        active: entry.active !== false,
+        role: entry.role === 'calibration' ? 'calibration' : 'sample',
+        concentration: entry.concentration,
+        assayLabel: String(entry.assayLabel || sampleName).trim() || sampleName,
+        color: entry.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+      };
+    })
+    .filter((sample) => (activeOnly ? sample.active : true));
+}
+
+function getUptakeAssaySettings() {
+  return {
+    mz: parseFloat(document.getElementById('uptake-assay-mz')?.value),
+    polarity: document.getElementById('uptake-assay-polarity')?.value === 'negative' ? 'negative' : 'positive',
+    start: parseFloat(document.getElementById('uptake-assay-start')?.value),
+    end: parseFloat(document.getElementById('uptake-assay-end')?.value),
+    mzWindow: parseFloat(document.getElementById('mz-window')?.value || '0.5') || 0.5,
+    smooth: parseInt(document.getElementById('eic-smoothing')?.value, 10) || 0,
+  };
+}
+
+function computeUptakeAssayFit(points) {
+  const usable = (Array.isArray(points) ? points : []).filter((point) =>
+    Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))
+  );
+  if (usable.length < 2) return null;
+  const xVals = usable.map((point) => Number(point.x));
+  const yVals = usable.map((point) => Number(point.y));
+  if (new Set(xVals.map((x) => x.toFixed(9))).size < 2) return null;
+
+  const xMean = xVals.reduce((sum, value) => sum + value, 0) / xVals.length;
+  const yMean = yVals.reduce((sum, value) => sum + value, 0) / yVals.length;
+  let numerator = 0;
+  let denominator = 0;
+  for (let i = 0; i < xVals.length; i++) {
+    numerator += (xVals[i] - xMean) * (yVals[i] - yMean);
+    denominator += (xVals[i] - xMean) ** 2;
+  }
+  if (denominator === 0) return null;
+  const slope = numerator / denominator;
+  const intercept = yMean - slope * xMean;
+  const fitted = xVals.map((x) => (slope * x) + intercept);
+  const ssRes = yVals.reduce((sum, y, index) => sum + ((y - fitted[index]) ** 2), 0);
+  const ssTot = yVals.reduce((sum, y) => sum + ((y - yMean) ** 2), 0);
+  const rSquared = ssTot <= 0 ? 1 : 1 - (ssRes / ssTot);
+  return { slope, intercept, rSquared, r_squared: rSquared };
+}
+
+function getUptakeAssayMzLabel(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  const mz = Number(source?.mz);
+  return Number.isFinite(mz) ? mz.toFixed(2) : '?';
+}
+
+function buildUptakeAssayOverlayTitle(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  return `Uptake Assay CC - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
+}
+
+function buildUptakeAssayCurveTitle(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  return `Calibration Curve - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
+}
+
+function buildUptakeAssayBarTitle(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  return `Uptake Assay - EIC m/z ${getUptakeAssayMzLabel(source)}${formatProgressionPolarityLabel(source?.polarity)}`;
+}
+
+function buildUptakeAssayAreaLabel(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  const start = Number(source?.start);
+  const end = Number(source?.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return `Integrated Area (${start.toFixed(3)}-${end.toFixed(3)} min)`;
+  }
+  return 'Integrated Area';
+}
+
+function buildUptakeAssayFilenameBase(dataOrSettings = null) {
+  const source = dataOrSettings || getUptakeAssaySettings();
+  const mzLabel = getUptakeAssayMzLabel(source);
+  return sanitizeDownloadFilename(`Uptake Assay CC ${mzLabel}`);
+}
+
+function buildUptakeAssayExportStyle() {
+  return {
+    fig_width: 6.0,
+    line_width: 2.0,
+    point_size: 26.0,
+    point_edge_width: 0.8,
+    line_color: '#1f77b4',
+    point_face_color: '#1f77b4',
+    point_edge_color: '#0d4f8a',
+  };
+}
+
+function getUptakeAssayCalibrationRawPointsFromData(data) {
+  const samples = Array.isArray(data?.samples) ? data.samples : [];
+  return samples
+    .map((sample) => {
+      const entry = state.uptakeAssayEntries[sample.path] || {};
+      if ((entry.role || 'sample') !== 'calibration') return null;
+      return {
+        x: parseFloat(entry.concentration),
+        y: Number(sample.area),
+        label: sample.name,
+        path: sample.path,
+      };
+    })
+    .filter(Boolean)
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
+}
+
+function getUptakeAssayPointsFromData(data) {
+  const rawPoints = getUptakeAssayCalibrationRawPointsFromData(data);
+  const grouped = new Map();
+
+  rawPoints.forEach((point) => {
+    const key = Number(point.x).toFixed(9);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        x: Number(point.x),
+        points: [],
+      });
+    }
+    grouped.get(key).points.push(point);
+  });
+
+  return Array.from(grouped.values())
+    .map((group) => {
+      const yValues = group.points.map((point) => Number(point.y));
+      const replicateCount = yValues.length;
+      const meanArea = yValues.reduce((sum, value) => sum + value, 0) / replicateCount;
+      let sdArea = 0;
+      if (replicateCount >= 2) {
+        const variance = yValues.reduce((sum, value) => sum + ((value - meanArea) ** 2), 0) / (replicateCount - 1);
+        sdArea = Math.sqrt(Math.max(variance, 0));
+      }
+      const sampleNames = group.points.map((point) => point.label);
+      return {
+        x: group.x,
+        y: meanArea,
+        y_sd: sdArea,
+        replicate_count: replicateCount,
+        label: replicateCount > 1 ? `${group.x} μM (n=${replicateCount})` : sampleNames[0],
+        sample_names: sampleNames,
+      };
+    })
+    .sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
+}
+
+function calculateUptakeAssayConcentrationFromArea(area, fit) {
+  const slope = Number(fit?.slope);
+  const intercept = Number(fit?.intercept);
+  const numericArea = Number(area);
+  if (!Number.isFinite(numericArea) || !Number.isFinite(slope) || Math.abs(slope) < 1e-12 || !Number.isFinite(intercept)) {
+    return null;
+  }
+  return (numericArea - intercept) / slope;
+}
+
+function getUptakeAssayAssayRawPointsFromData(data, fit) {
+  const samples = Array.isArray(data?.samples) ? data.samples : [];
+  return samples
+    .map((sample) => {
+      const entry = state.uptakeAssayEntries[sample.path] || {};
+      if ((entry.role || 'sample') !== 'sample') return null;
+      const label = String(entry.assayLabel || sample.name || '').trim() || sample.name;
+      const concentration = calculateUptakeAssayConcentrationFromArea(sample.area, fit);
+      if (!Number.isFinite(concentration)) return null;
+      return {
+        x: label,
+        y: concentration,
+        label,
+        sample_name: sample.name,
+        path: sample.path,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getUptakeAssayAssayPointsFromData(data, fit) {
+  const rawPoints = getUptakeAssayAssayRawPointsFromData(data, fit);
+  const grouped = new Map();
+
+  rawPoints.forEach((point) => {
+    const key = String(point.label || '').trim();
+    if (!key) return;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        label: key,
+        points: [],
+      });
+    }
+    grouped.get(key).points.push(point);
+  });
+
+  return Array.from(grouped.values())
+    .map((group) => {
+      const yValues = group.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
+      if (yValues.length === 0) return null;
+      const replicateCount = yValues.length;
+      const meanConcentration = yValues.reduce((sum, value) => sum + value, 0) / replicateCount;
+      let sdConcentration = 0;
+      if (replicateCount >= 2) {
+        const variance = yValues.reduce((sum, value) => sum + ((value - meanConcentration) ** 2), 0) / (replicateCount - 1);
+        sdConcentration = Math.sqrt(Math.max(variance, 0));
+      }
+      return {
+        label: group.label,
+        x: group.label,
+        y: meanConcentration,
+        y_sd: sdConcentration,
+        replicate_count: replicateCount,
+        sample_names: group.points.map((point) => point.sample_name || point.label),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function getUptakeAssayPerSampleConcentrationMap(data, fit) {
+  const map = new Map();
+  (Array.isArray(data?.samples) ? data.samples : []).forEach((sample) => {
+    const entry = state.uptakeAssayEntries[sample.path] || {};
+    if ((entry.role || 'sample') !== 'sample') return;
+    const concentration = calculateUptakeAssayConcentrationFromArea(sample.area, fit);
+    if (Number.isFinite(concentration)) {
+      map.set(sample.path, concentration);
+    }
+  });
+  return map;
+}
+
+function renderUptakeAssayEntries() {
+  const container = document.getElementById('uptake-assay-samples');
+  if (!container) return;
+
+  syncUptakeAssayEntriesToSelectedFiles();
+  if (state.selectedFiles.length === 0) {
+    container.innerHTML = '<p class="muted">Select samples in the file browser first.</p>';
+    return;
+  }
+
+  const sampleAreas = new Map(
+    ((state.uptakeAssayData?.samples) || []).map((sample) => [sample.path, sample.area])
+  );
+  const calibrationPoints = state.uptakeAssayData ? getUptakeAssayPointsFromData(state.uptakeAssayData) : [];
+  const fit = computeUptakeAssayFit(calibrationPoints);
+  const sampleConcentrations = state.uptakeAssayData ? getUptakeAssayPerSampleConcentrationMap(state.uptakeAssayData, fit) : new Map();
+
+  let html = `<table class="uptake-assay-sample-table"><thead><tr>
+    <th>Use</th>
+    <th>Sample</th>
+    <th>Role</th>
+    <th>Concentration (<span class="unit-preserve-case">μM</span>)</th>
+    <th>Sample Name</th>
+    <th>Area</th>
+    <th>Calculated Conc. (<span class="unit-preserve-case">μM</span>)</th>
+  </tr></thead><tbody>`;
+
+  state.selectedFiles.forEach((file, index) => {
+    const entry = state.uptakeAssayEntries[file.path] || {};
+    const area = sampleAreas.get(file.path);
+    const isActive = entry.active !== false;
+    const role = entry.role === 'calibration' ? 'calibration' : 'sample';
+    const calculated = sampleConcentrations.get(file.path);
+    html += `<tr>
+      <td><input type="checkbox" class="uptake-assay-active" data-path="${escapeAttr(file.path)}" ${isActive ? 'checked' : ''}></td>
+      <td>
+        <div><strong>${escapeHtml(stripUptakeAssayBundleSuffix(String(file.name || '')))}</strong></div>
+        <div class="uptake-assay-sample-path">${escapeHtml(file.path)}</div>
+      </td>
+      <td>
+        <select class="uptake-assay-role uptake-assay-role-select" data-path="${escapeAttr(file.path)}">
+          <option value="calibration" ${role === 'calibration' ? 'selected' : ''}>Calibration</option>
+          <option value="sample" ${role === 'sample' ? 'selected' : ''}>Assay Sample</option>
+        </select>
+      </td>
+      <td class="uptake-assay-concentration-cell"><input type="number" class="uptake-assay-concentration" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.concentration ?? '')}" step="0.01" min="0" ${role === 'calibration' ? '' : 'disabled'}></td>
+      <td class="uptake-assay-label-cell"><input type="text" class="uptake-assay-label" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.assayLabel ?? stripUptakeAssayBundleSuffix(String(file.name || '')))}" ${role === 'sample' ? '' : 'disabled'}></td>
+      <td><span class="uptake-assay-area">${Number.isFinite(Number(area)) ? Number(area).toExponential(3) : '-'}</span></td>
+      <td><span class="uptake-assay-calc">${role === 'sample' && Number.isFinite(Number(calculated)) ? Number(calculated).toFixed(2) : '-'}</span></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+
+  container.querySelectorAll('.uptake-assay-active').forEach((input) => {
+    input.addEventListener('change', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.active = input.checked;
+      state.uptakeAssayEntries[path] = entry;
+      state.uptakeAssayData = null;
+      resetUptakeAssayView();
+      renderUptakeAssayEntries();
+    });
+  });
+
+  container.querySelectorAll('.uptake-assay-role').forEach((input) => {
+    input.addEventListener('change', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.role = input.value === 'calibration' ? 'calibration' : 'sample';
+      if (entry.role === 'calibration' && String(entry.concentration || '').trim() === '') {
+        const file = state.selectedFiles.find((item) => item.path === path);
+        if (file) entry.concentration = inferUptakeAssayConcentration(file.name);
+      }
+      if (entry.role === 'sample' && String(entry.assayLabel || '').trim() === '') {
+        const file = state.selectedFiles.find((item) => item.path === path);
+        if (file) entry.assayLabel = inferUptakeAssaySampleLabel(file.name);
+      }
+      state.uptakeAssayEntries[path] = entry;
+      if (state.uptakeAssayData) {
+        renderUptakeAssayData(state.uptakeAssayData);
+      } else {
+        renderUptakeAssayEntries();
+      }
+    });
+  });
+
+  container.querySelectorAll('.uptake-assay-concentration').forEach((input) => {
+    input.addEventListener('input', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.concentration = input.value;
+      state.uptakeAssayEntries[path] = entry;
+    });
+    input.addEventListener('change', () => {
+      if (state.uptakeAssayData) renderUptakeAssayData(state.uptakeAssayData);
+    });
+  });
+
+  container.querySelectorAll('.uptake-assay-label').forEach((input) => {
+    input.addEventListener('input', () => {
+      const path = input.dataset.path;
+      if (!path) return;
+      const entry = state.uptakeAssayEntries[path] || {};
+      entry.assayLabel = input.value;
+      state.uptakeAssayEntries[path] = entry;
+    });
+    input.addEventListener('change', () => {
+      if (state.uptakeAssayData) renderUptakeAssayData(state.uptakeAssayData);
+    });
+  });
+}
+
+function renderUptakeAssaySummary(data, fit, pointCount, assayPoints = []) {
+  const summary = document.getElementById('uptake-assay-summary');
+  if (!summary) return;
+  const sampleCount = Array.isArray(data?.samples) ? data.samples.length : 0;
+  const calibrationSampleCount = (Array.isArray(data?.samples) ? data.samples : []).filter((sample) => {
+    const entry = state.uptakeAssayEntries[sample.path] || {};
+    return (entry.role || 'sample') === 'calibration';
+  }).length;
+  const assaySampleCount = (Array.isArray(data?.samples) ? data.samples : []).filter((sample) => {
+    const entry = state.uptakeAssayEntries[sample.path] || {};
+    return (entry.role || 'sample') === 'sample';
+  }).length;
+  const calibrationReplicateGroupCount = getUptakeAssayPointsFromData(data).filter((point) => Number(point.replicate_count) > 1).length;
+  const assayReplicateGroupCount = (Array.isArray(assayPoints) ? assayPoints : []).filter((point) => Number(point.replicate_count) > 1).length;
+  const parts = [
+    `<div class="metric"><span class="dot blue"></span> Samples: ${sampleCount}</div>`,
+    `<div class="metric"><span class="dot green"></span> Calibration: ${calibrationSampleCount}</div>`,
+    `<div class="metric"><span class="dot red"></span> Assay: ${assaySampleCount}</div>`,
+    `<div class="metric"><span class="dot yellow"></span> Curve points: ${pointCount}</div>`,
+  ];
+  if (calibrationReplicateGroupCount > 0) {
+    parts.push(`<div class="metric"><span class="dot yellow"></span> Curve SD bars: ${calibrationReplicateGroupCount}</div>`);
+  }
+  if (assayReplicateGroupCount > 0) {
+    parts.push(`<div class="metric"><span class="dot blue"></span> Uptake SD bars: ${assayReplicateGroupCount}</div>`);
+  }
+  if (fit && Number.isFinite(fit.slope) && Number.isFinite(fit.intercept) && Number.isFinite(fit.rSquared)) {
+    parts.push(`<div class="metric"><span class="dot red"></span> y = ${fit.slope.toFixed(1)}x ${fit.intercept >= 0 ? '+' : '-'} ${Math.abs(fit.intercept).toFixed(1)}</div>`);
+    parts.push(`<div class="metric"><span class="dot yellow"></span> R2 = ${fit.rSquared.toFixed(4)}</div>`);
+  } else {
+    parts.push('<div class="metric"><span class="dot yellow"></span> Enter at least 2 calibration controls with numeric concentrations</div>');
+  }
+  summary.innerHTML = parts.join('');
+}
+
+function renderUptakeAssayData(data) {
+  renderUptakeAssayEntries();
+  if (!data || !Array.isArray(data.samples) || data.samples.length === 0) {
+    resetUptakeAssayView();
+    return;
+  }
+
+  setUptakeAssayEmptyState(false);
+  const overlaySamples = data.samples.map((sample, index) => ({
+    times: sample.times || [],
+    intensities: sample.intensities || [],
+    label: sample.name || `Sample ${index + 1}`,
+    color: sample.color || NPG_COLOR_PALETTE[index % NPG_COLOR_PALETTE.length],
+  }));
+  const points = getUptakeAssayPointsFromData(data);
+  const fit = computeUptakeAssayFit(points);
+  const assayPoints = getUptakeAssayAssayPointsFromData(data, fit);
+
+  charts.plotUptakeAssayOverlay('uptake-assay-overlay-plot', overlaySamples, {
+    title: buildUptakeAssayOverlayTitle(data),
+    yLabel: 'Intensity',
+    start: data.start,
+    end: data.end,
+  });
+  charts.plotCalibrationCurve('uptake-assay-curve-plot', points, fit, {
+    title: buildUptakeAssayCurveTitle(data),
+    xLabel: 'Concentration (μM)',
+    yLabel: buildUptakeAssayAreaLabel(data),
+  });
+  charts.plotUptakeAssayBarChart('uptake-assay-bar-plot', assayPoints, {
+    title: buildUptakeAssayBarTitle(data),
+    xLabel: 'Sample Name',
+    yLabel: 'Calculated Concentration (μM)',
+  });
+  renderUptakeAssaySummary(data, fit, points.length, assayPoints);
+  schedulePlotlyResize(['uptake-assay-overlay-plot', 'uptake-assay-curve-plot', 'uptake-assay-bar-plot']);
+}
+
+async function autoDetectUptakeAssayWindow() {
+  const settings = getUptakeAssaySettings();
+  if (!Number.isFinite(settings.mz) || settings.mz <= 0) {
+    toast('Enter a valid target m/z first', 'warning');
+    return;
+  }
+  const sample = getUptakeAssaySamples({ activeOnly: true })[0];
+  if (!sample) {
+    toast('Enable at least 1 sample first', 'warning');
+    return;
+  }
+
+  showLoading('Detecting uptake assay window...');
+  try {
+    const response = await api.findPeaks(sample.path, 'eic', {
+      mz: settings.mz,
+      mzWindow: settings.mzWindow,
+      ionMode: settings.polarity,
+      smooth: settings.smooth,
+      heightThreshold: 0.06,
+      prominence: 0.03,
+    });
+    const peaks = Array.isArray(response?.peaks) ? response.peaks : [];
+    if (peaks.length === 0) {
+      throw new Error('No EIC peaks found');
+    }
+    peaks.sort((a, b) => (Number(b.area) || Number(b.intensity) || 0) - (Number(a.area) || Number(a.intensity) || 0));
+    const bestPeak = peaks[0];
+    document.getElementById('uptake-assay-start').value = Number(bestPeak.start_time).toFixed(3);
+    document.getElementById('uptake-assay-end').value = Number(bestPeak.end_time).toFixed(3);
+    toast(`Window detected: ${Number(bestPeak.start_time).toFixed(3)} - ${Number(bestPeak.end_time).toFixed(3)} min`, 'success');
+  } catch (err) {
+    toast(`Auto window failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function runUptakeAssayCC() {
+  if (state.uptakeAssayLoadInFlight) return;
+  const samples = getUptakeAssaySamples({ activeOnly: true });
+  if (samples.length < 2) {
+    toast('Enable at least 2 samples first', 'warning');
+    return;
+  }
+  const calibrationSamples = samples.filter((sample) =>
+    sample.role === 'calibration' && Number.isFinite(parseFloat(sample.concentration))
+  );
+  if (calibrationSamples.length < 2) {
+    toast('Enable at least 2 calibration controls with numeric concentrations', 'warning');
+    return;
+  }
+
+  const settings = getUptakeAssaySettings();
+  if (!Number.isFinite(settings.mz) || settings.mz <= 0) {
+    toast('Enter a valid target m/z', 'warning');
+    return;
+  }
+  if (!Number.isFinite(settings.start) || !Number.isFinite(settings.end) || settings.end <= settings.start) {
+    toast('Enter a valid time window', 'warning');
+    return;
+  }
+
+  state.uptakeAssayLoadInFlight = true;
+  showLoading('Building uptake assay graphs...');
+  try {
+    const sampleResults = await Promise.all(samples.map(async (sample) => {
+      const [eicData, areaData] = await Promise.all([
+        api.getEIC(sample.path, settings.mz, settings.mzWindow, settings.smooth, settings.polarity),
+        api.getPeakArea(sample.path, 'eic', settings.start, settings.end, {
+          mz: settings.mz,
+          mzWindow: settings.mzWindow,
+          ionMode: settings.polarity,
+          smooth: settings.smooth,
+        }),
+      ]);
+      return {
+        path: sample.path,
+        name: sample.name,
+        color: sample.color,
+        times: Array.isArray(eicData?.times) ? eicData.times : [],
+        intensities: Array.isArray(eicData?.intensities) ? eicData.intensities : [],
+        area: Number(areaData?.area) || 0,
+      };
+    }));
+
+    state.uptakeAssayData = {
+      mz: settings.mz,
+      polarity: settings.polarity,
+      start: settings.start,
+      end: settings.end,
+      mzWindow: settings.mzWindow,
+      samples: sampleResults,
+    };
+    renderUptakeAssayData(state.uptakeAssayData);
+    toast('Uptake assay graphs built', 'success');
+  } catch (err) {
+    toast(`Uptake assay CC failed: ${err.message}`, 'error');
+  } finally {
+    state.uptakeAssayLoadInFlight = false;
+    hideLoading();
+  }
+}
+
+async function exportUptakeAssayCCPdf() {
+  if (!state.uptakeAssayData) {
+    toast('Build the uptake assay graphs first', 'warning');
+    return;
+  }
+  const points = getUptakeAssayPointsFromData(state.uptakeAssayData);
+  if (points.length < 2) {
+    toast('Enter at least 2 numeric concentrations first', 'warning');
+    return;
+  }
+
+  const fit = computeUptakeAssayFit(points);
+  const assayPoints = getUptakeAssayAssayPointsFromData(state.uptakeAssayData, fit);
+  const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+  const filenameBase = buildUptakeAssayFilenameBase(state.uptakeAssayData);
+
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportUptakeAssayCC({
+      points,
+      fit,
+      title: buildUptakeAssayCurveTitle(state.uptakeAssayData),
+      x_label: 'Concentration (μM)',
+      y_label: buildUptakeAssayAreaLabel(state.uptakeAssayData),
+      assay_points: assayPoints,
+      assay_title: buildUptakeAssayBarTitle(state.uptakeAssayData),
+      assay_y_label: 'Calculated Concentration (μM)',
+      filename_base: filenameBase,
+      style: buildUptakeAssayExportStyle(),
+      format: 'pdf',
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${filenameBase}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function initUptakeAssayCC() {
+  document.getElementById('btn-uptake-assay-auto-window')?.addEventListener('click', autoDetectUptakeAssayWindow);
+  document.getElementById('btn-uptake-assay-run')?.addEventListener('click', runUptakeAssayCC);
+  document.getElementById('btn-uptake-assay-export-pdf')?.addEventListener('click', exportUptakeAssayCCPdf);
+}
+
+// ===== Time Progression Tab =====
+function initProgression() {
+  document.getElementById('btn-load-progression').addEventListener('click', loadProgression);
+
+  document.querySelectorAll('.btn-export-prog').forEach(btn => {
+    btn.addEventListener('click', () => exportProgression(btn.dataset.format));
+  });
+}
+
+function renderProgressionAssignments() {
+  const container = document.getElementById('progression-assignments');
+  container.innerHTML = '';
+
+  if (state.selectedFiles.length < 2) {
+    state.progressionAssignments = {};
+    setProgressionEmptyState(true);
+    return;
+  }
+
+  if (!state.progressionData) setProgressionEmptyState(true);
+
+  syncProgressionAssignmentsToSelectedFiles();
+
+  const sampleDefs = getProgressionSamples({ activeOnly: false });
+  const autoColors = computeAutoProgressionColorMap();
+  state.selectedFiles.forEach((file, i) => {
+    const card = document.createElement('div');
+    const assignment = state.progressionAssignments[file.path] || {};
+    const isActive = assignment.active !== false;
+    card.className = `assignment-card${isActive ? '' : ' is-inactive'}`;
+    const defaultRole = sampleDefs[i]?.role || assignment.role || getDefaultProgressionRole(i, state.selectedFiles.length);
+    const defaultLabel = sampleDefs[i]?.label || buildAutoProgressionLabel(defaultRole, 1, 1);
+    const defaultColor = assignment.userColor === true
+      ? (assignment.color || autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length])
+      : (autoColors[file.path] || NPG_COLOR_PALETTE[i % NPG_COLOR_PALETTE.length]);
+
+    card.innerHTML = `
+      <div class="assignment-card-head">
+        <label class="prog-active-toggle" title="Include this sample in Time Progression (tab only)">
+          <input type="checkbox" class="prog-active" data-path="${escapeAttr(file.path)}" ${isActive ? 'checked' : ''}>
+          <span class="prog-active-name" title="${escapeAttr(file.path)}">${escapeHtml(file.name)}</span>
+        </label>
+      </div>
+      <label>Role</label>
+      <select class="prog-role" data-path="${escapeAttr(file.path)}" ${isActive ? '' : 'disabled'}>
+        <option value="initial" ${defaultRole === 'initial' ? 'selected' : ''}>Initial (t=0)</option>
+        <option value="mid" ${defaultRole === 'mid' ? 'selected' : ''}>Mid Timepoint</option>
+        <option value="final" ${defaultRole === 'final' ? 'selected' : ''}>Overnight / Final</option>
+      </select>
+      <label>Custom Label</label>
+      <div class="prog-label-row">
+        <input type="text" class="prog-label" data-path="${escapeAttr(file.path)}" placeholder="${escapeAttr(file.name)}" value="${escapeAttr(defaultLabel)}" ${isActive ? '' : 'disabled'}>
+        <input type="color" class="prog-color" data-path="${escapeAttr(file.path)}" value="${escapeAttr(defaultColor)}" title="Sample color" ${isActive ? '' : 'disabled'}>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+
+  container.querySelectorAll('.prog-active').forEach((el) => {
+    el.addEventListener('change', () => {
+      readProgressionAssignmentsFromDOM();
+      renderProgressionAssignments();
+      if (state.progressionData) loadProgression();
+    });
+  });
+
+  container.querySelectorAll('.prog-role').forEach((el) => {
+    el.addEventListener('change', () => {
+      readProgressionAssignmentsFromDOM();
+      renderProgressionAssignments();
+    });
+  });
+  container.querySelectorAll('.prog-label, .prog-color').forEach((el) => {
+    el.addEventListener('change', readProgressionAssignmentsFromDOM);
+    if (el.classList.contains('prog-label')) {
+      el.addEventListener('input', readProgressionAssignmentsFromDOM);
+    }
+  });
+}
+
+async function loadProgression() {
+  if (state.progressionLoadInFlight) return;
+  if (state.selectedFiles.length < 2) {
+    toast('Select at least 2 samples', 'warning');
+    return;
+  }
+  const assignmentsContainer = document.getElementById('progression-assignments');
+  if (assignmentsContainer && assignmentsContainer.querySelectorAll('.prog-role').length === 0) {
+    renderProgressionAssignments();
+  }
+  readProgressionAssignmentsFromDOM();
+  const samples = getProgressionSamples({ activeOnly: true });
+  if (samples.length < 2) {
+    toast('Enable at least 2 samples in Time Progression', 'warning');
+    return;
+  }
+
+  const wavelengths = getSelectedWavelengths();
+  const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value);
+  const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value);
+  const mzWindow = parseFloat(document.getElementById('mz-window').value);
+
+  state.progressionLoadInFlight = true;
+  showLoading('Generating progression...');
+  try {
+    // Fetch data for each sample in parallel
+    const perSample = await Promise.all(samples.map(async (s) => {
+      const result = { path: s.path, role: s.role, label: s.label };
+
+      // UV for first selected wavelength
+      if (wavelengths.length > 0) {
+        try {
+          result.uv = await api.getUVChromatogram(s.path, wavelengths[0], uvSmoothing);
+        } catch { result.uv = null; }
+      }
+
+      // TIC
+      try {
+        result.tic = await api.getTIC(s.path);
+      } catch { result.tic = null; }
+
+      // EICs
+      result.eics = [];
+      for (const t of state.mzTargets) {
+        const mz = t.mz; const polarity = t.polarity || 'positive';
+        try {
+          const eic = await api.getEIC(s.path, mz, mzWindow, eicSmoothing, polarity);
+          result.eics.push({ mz, polarity, ...eic });
+        } catch { result.eics.push({ mz, polarity, times: [], intensities: [] }); }
+      }
+
+      return result;
+    }));
+
+    // Reshape into progression format
+    const data = {};
+
+    // UV progression
+    const uvData = perSample.map((s) => normalizeChromatogramSeriesBaseline(s.uv, 'last'));
+    if (uvData.some(Boolean)) {
+      data.uv_progression = uvData;
+    }
+
+    // TIC progression
+    const ticData = perSample.map((s) => s.tic || null);
+    if (ticData.some(Boolean)) {
+      data.tic_progression = ticData;
+    }
+
+    // EIC progressions (one per m/z target)
+    if (state.mzTargets.length > 0) {
+      data.eic_progressions = state.mzTargets.map((t, mi) => ({
+        mz: t.mz, polarity: t.polarity || 'positive',
+        samples: perSample.map(s => s.eics[mi] || { times: [], intensities: [] }),
+      }));
+    }
+
+    state.progressionData = data;
+    renderProgression(data, samples);
+    renderReportSummary();
+    toast('Progression generated', 'success');
+  } catch (err) {
+    const msg = typeof err === 'object' ? (err.message || JSON.stringify(err)) : String(err);
+    toast(`Progression failed: ${msg}`, 'error');
+  } finally {
+    state.progressionLoadInFlight = false;
+    hideLoading();
+  }
+}
+
+function renderProgression(data, samples) {
+  const hasAnyProgression =
+    Boolean(data.uv_progression) ||
+    Boolean(data.tic_progression) ||
+    (Array.isArray(data.eic_progressions) && data.eic_progressions.length > 0);
+
+  if (!hasAnyProgression) {
+    setProgressionEmptyState(true);
+    return;
+  }
+
+  // Make plot container visible before Plotly renders to avoid first-render
+  // width underestimation (half-width charts until second click).
+  setProgressionEmptyState(false);
+  const container = document.getElementById('progression-plots');
+  container.innerHTML = '';
+
+  const colors = {
+    initial: document.getElementById('color-initial').value,
+    mid: document.getElementById('color-mid').value,
+    final: document.getElementById('color-final').value,
+  };
+
+  const baseTitle = getProgressionBaseTitle();
+  const xRange = computeProgressionXRange(data);
+  const progressionPlotIds = [];
+
+  // UV progression
+  if (data.uv_progression) {
+    const div = document.createElement('div');
+    div.className = 'plot-container';
+    div.id = 'prog-uv-plot';
+    container.appendChild(div);
+    progressionPlotIds.push(div.id);
+
+    const uvSamples = data.uv_progression.map((s, i) => ({
+      times: s?.times || [],
+      intensities: s?.intensities || [],
+      label: samples[i]?.label || `Sample ${i + 1}`,
+      role: samples[i]?.role || 'mid',
+      color: samples[i]?.color,
+    }));
+    charts.plotProgression('prog-uv-plot', uvSamples, colors, {
+      title: `${baseTitle} - UV`,
+      yLabel: 'Absorbance (mAU)',
+      xRange,
+    });
+    appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('uv'));
+  }
+
+  // TIC progression
+  if (data.tic_progression) {
+    const hasDual = data.tic_progression.some((s) => s?.has_dual_polarity);
+    if (hasDual) {
+      // Positive panel
+      const posDiv = document.createElement('div');
+      posDiv.className = 'plot-container';
+      posDiv.id = 'prog-tic-pos-plot';
+      container.appendChild(posDiv);
+      progressionPlotIds.push(posDiv.id);
+      const ticPosSamples = data.tic_progression.map((s, i) => ({
+        times: s?.times_pos || s?.times || [],
+        intensities: s?.intensities_pos || s?.intensities || [],
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      charts.plotProgression('prog-tic-pos-plot', ticPosSamples, colors, {
+        title: `${baseTitle} - TIC (+)`,
+        yLabel: 'Intensity',
+        xRange,
+      });
+      appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('tic-pos'));
+
+      // Negative panel
+      const negDiv = document.createElement('div');
+      negDiv.className = 'plot-container';
+      negDiv.id = 'prog-tic-neg-plot';
+      container.appendChild(negDiv);
+      progressionPlotIds.push(negDiv.id);
+      const ticNegSamples = data.tic_progression.map((s, i) => ({
+        times: s?.times_neg || s?.times || [],
+        intensities: s?.intensities_neg || s?.intensities || [],
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      charts.plotProgression('prog-tic-neg-plot', ticNegSamples, colors, {
+        title: `${baseTitle} - TIC (−)`,
+        yLabel: 'Intensity',
+        xRange,
+      });
+      appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('tic-neg'));
+    } else {
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = 'prog-tic-plot';
+      container.appendChild(div);
+      progressionPlotIds.push(div.id);
+      const ticSamples = data.tic_progression.map((s, i) => ({
+        times: s?.times || [],
+        intensities: s?.intensities || [],
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      charts.plotProgression('prog-tic-plot', ticSamples, colors, {
+        title: `${baseTitle} - TIC`,
+        yLabel: 'Intensity',
+        xRange,
+      });
+      appendProgressionDownloadRow(container, () => exportProgressionStandardPanel('tic'));
+    }
+  }
+
+  // EIC progressions
+  if (data.eic_progressions) {
+    data.eic_progressions.forEach((eicGroup, gi) => {
+      const div = document.createElement('div');
+      div.className = 'plot-container';
+      div.id = `prog-eic-plot-${gi}`;
+      container.appendChild(div);
+      progressionPlotIds.push(div.id);
+
+      const eicSamples = eicGroup.samples.map((s, i) => ({
+        times: s?.times || [],
+        intensities: s?.intensities || [],
+        label: samples[i]?.label || `Sample ${i + 1}`,
+        role: samples[i]?.role || 'mid',
+        color: samples[i]?.color,
+      }));
+      const polarityLabel = formatProgressionPolarityLabel(eicGroup.polarity);
+      charts.plotProgression(`prog-eic-plot-${gi}`, eicSamples, colors, {
+        title: `${baseTitle} - EIC m/z ${eicGroup.mz.toFixed(2)}${polarityLabel}`,
+        yLabel: 'Intensity',
+        xRange,
+      });
+
+      appendProgressionDownloadRow(container, () => exportProgressionEicPanel(gi));
+    });
+  }
+  schedulePlotlyResize(progressionPlotIds);
+}
+
+async function exportProgression(format) {
+  if (!state.progressionData) {
+    toast('Generate progression first', 'warning');
+    return;
+  }
+  if (String(format).toLowerCase() !== 'pdf') {
+    await exportAllPlots('tab-progression', 'progression', format);
+    return;
+  }
+
+  readProgressionAssignmentsFromDOM();
+  const payload = buildProgressionPdfExportPayload();
+  if (!payload) {
+    toast('No progression panels available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  showLoading('Exporting PDF...');
+  try {
+    const response = await api.exportProgressionPdf({
+      ...payload,
+      dpi,
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${payload.filename_base}.pdf`);
+    toast('Exported PDF', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ===== Area Calculation Tab =====
+function getAreaCalculationMode(data = null) {
+  const explicitMode = String(data?.mode || '').toLowerCase();
+  if (explicitMode === 'uv' || explicitMode === 'eic') return explicitMode;
+  return document.getElementById('eic-signal-type')?.value === 'uv' ? 'uv' : 'eic';
+}
+
+function isUvAreaCalculationMode(data = null) {
+  return getAreaCalculationMode(data) === 'uv';
+}
+
+function getAreaCalculationSampleName(samplePath = '') {
+  const loaded = state.loadedSamples[samplePath];
+  if (loaded && String(loaded.name || '').trim()) return String(loaded.name).trim();
+  const file = state.selectedFiles.find((entry) => entry.path === samplePath);
+  if (file && String(file.name || '').trim()) return String(file.name).trim();
+  return String(samplePath || '').split(/[\\/]/).pop() || 'Sample';
+}
+
+function getAreaCalculationWavelength(samplePath = '') {
+  const selected = getSelectedWavelengths().filter((wl) => Number.isFinite(Number(wl)));
+  if (selected.length > 0) return Number(selected[0]);
+
+  const loaded = state.loadedSamples[samplePath];
+  const wavelengths = Array.isArray(loaded?.uv_wavelengths)
+    ? loaded.uv_wavelengths
+    : Array.isArray(loaded?.wavelengths)
+      ? loaded.wavelengths
+      : [];
+  const first = Number(wavelengths[0]);
+  if (Number.isFinite(first)) return first;
+  return Number.NaN;
+}
+
+function getAreaCalculationTargetLabel(target) {
+  if (target?.signal_type === 'uv') {
+    const wavelength = Number(target?.wavelength);
+    return Number.isFinite(wavelength) ? `UV ${wavelength.toFixed(0)} nm` : 'UV';
+  }
+
+  const mz = Number(target?.mz ?? target?.target_mz);
+  const mzLabel = Number.isFinite(mz) ? mz.toFixed(2) : '?';
+  const polarityLabel = target?.polarity === 'negative' ? ' (−)' : ' (+)';
+  return `m/z ${mzLabel}${polarityLabel}`;
+}
+
+function getAreaCalculationItemLabel(target) {
+  return target?.signal_type === 'uv' ? 'Area' : 'Peak';
+}
+
+function updateAreaCalculationModeUI() {
+  const isUv = isUvAreaCalculationMode();
+  const mzToolbar = document.getElementById('eic-mz-toolbar');
+  const overlayWrap = document.getElementById('eic-overlay-wrap');
+  const normalizeWrap = document.getElementById('eic-normalize-wrap');
+  const uvAreaPdfButton = document.getElementById('btn-export-uv-area-pdf');
+  const runButton = document.getElementById('btn-run-eic');
+  const note = document.getElementById('eic-batch-mode-note');
+  const overlay = document.getElementById('eic-overlay');
+  const normalize = document.getElementById('eic-normalize');
+
+  if (mzToolbar) mzToolbar.classList.toggle('hidden', isUv);
+  if (overlayWrap) overlayWrap.classList.toggle('hidden', isUv);
+  if (normalizeWrap) normalizeWrap.classList.toggle('hidden', isUv);
+  if (uvAreaPdfButton) uvAreaPdfButton.classList.toggle('hidden', !isUv);
+  if (overlay) overlay.disabled = isUv;
+  if (normalize) normalize.disabled = isUv;
+  if (runButton) runButton.textContent = isUv ? 'Load UV Area' : 'Run Area Analysis';
+  if (note) {
+    note.textContent = isUv
+      ? 'UV mode uses the first checked UV wavelength from Settings. Drag on the UV trace to add area windows, or add one manually and adjust start/end.'
+      : 'EIC mode uses the current m/z targets and keeps the existing peak-area workflow.';
+  }
+}
+
+function initEICBatch() {
+  document.getElementById('btn-run-eic').addEventListener('click', runEICBatch);
+  document.getElementById('btn-export-eic-csv').addEventListener('click', exportEICCSV);
+  document.getElementById('btn-export-uv-area-pdf')?.addEventListener('click', exportUVAreaPDF);
+  document.getElementById('eic-overlay').addEventListener('change', reRenderEICBatch);
+  document.getElementById('eic-normalize').addEventListener('change', reRenderEICBatch);
+  document.getElementById('eic-signal-type')?.addEventListener('change', () => {
+    state.eicBatchData = null;
+    state.eicBatchOriginalData = null;
+    state.eicCollapsedSections = {};
+    resetEICBatchView();
+    renderReportSummary();
+    updateAreaCalculationModeUI();
+  });
+  const eicAddBtn = document.getElementById('btn-eic-add-mz');
+  const eicAddInput = document.getElementById('eic-mz-add-input');
+  if (eicAddBtn && eicAddInput) {
+    eicAddBtn.addEventListener('click', () => addMzTargetFromInput(eicAddInput));
+    eicAddInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addMzTargetFromInput(eicAddInput);
+    });
+  }
+  updateAreaCalculationModeUI();
+}
+
+async function runEICBatch() {
+  const samplePath = document.getElementById('eic-sample-select').value;
+  const mode = getAreaCalculationMode();
+  if (!samplePath) {
+    toast('Select a sample first', 'warning');
+    return;
+  }
+  if (mode === 'eic' && state.mzTargets.length === 0) {
+    toast('Add target m/z values in Settings first', 'warning');
+    return;
+  }
+
+  showLoading(mode === 'uv' ? 'Loading UV area trace...' : 'Running area analysis...');
+  try {
+    let data;
+    if (mode === 'uv') {
+      const wavelength = getAreaCalculationWavelength(samplePath);
+      if (!Number.isFinite(wavelength)) {
+        toast('Select a UV wavelength in Settings first', 'warning');
+        return;
+      }
+
+      const uvTrace = await api.getUVChromatogram(
+        samplePath,
+        wavelength,
+        parseInt(document.getElementById('uv-smoothing').value, 10)
+      );
+
+      if (!Array.isArray(uvTrace?.times) || uvTrace.times.length === 0 || !Array.isArray(uvTrace?.intensities)) {
+        throw new Error(`No UV data available at ${wavelength.toFixed(0)} nm`);
+      }
+
+      data = {
+        mode: 'uv',
+        sample_path: samplePath,
+        sample_name: getAreaCalculationSampleName(samplePath),
+        targets: [{
+          signal_type: 'uv',
+          wavelength,
+          label: `UV ${wavelength.toFixed(0)} nm`,
+          title: `UV ${wavelength.toFixed(0)} nm`,
+          yLabel: 'Absorbance (mAU)',
+          times: uvTrace.times || [],
+          intensities: uvTrace.intensities || [],
+          peaks: [],
+        }],
+      };
+    } else {
+      data = await api.runEICBatch({
+        path: samplePath,
+        targets: state.mzTargets,
+        mz_window: parseFloat(document.getElementById('mz-window').value),
+        smoothing: parseInt(document.getElementById('eic-smoothing').value, 10),
+      });
+      data.mode = 'eic';
+      data.sample_path = samplePath;
+      data.sample_name = getAreaCalculationSampleName(samplePath);
+      if (Array.isArray(data?.targets)) {
+        data.targets.forEach((target) => normalizeTargetAutoPeaks(target));
+      }
+    }
+
+    state.eicCollapsedSections = {};
+    state.eicBatchData = data;
+    state.eicBatchOriginalData = deepClone(data);
+    renderEICBatch(data);
+    renderReportSummary();
+    toast('Area analysis complete', 'success');
+  } catch (err) {
+    toast(`Area analysis failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function renderEICBatch(data) {
+  setEICBatchEmptyState(false);
+  updateAreaCalculationModeUI();
+
+  const isUv = isUvAreaCalculationMode(data);
+  const overlay = !isUv && document.getElementById('eic-overlay').checked;
+  const normalize = !isUv && document.getElementById('eic-normalize').checked;
+
+  // Combined/overlay plot
+  const plotDiv = document.getElementById('eic-combined-plot');
+  plotDiv.innerHTML = '';
+  plotDiv.id = 'eic-combined-plot';
+  plotDiv.classList.toggle('hidden', isUv);
+
+  if (data.targets && data.targets.length > 0) {
+    if (!isUv) {
+      if (overlay) {
+        charts.plotEICOverlay('eic-combined-plot', data.targets, { normalize, title: 'EIC Overlay - All Targets' });
+      } else {
+        charts.plotEICOverlay('eic-combined-plot', data.targets, { normalize, title: 'EIC Combined View' });
+      }
+    }
+  }
+
+  // Per-target expandable sections
+  const sectionsContainer = document.getElementById('eic-peak-sections');
+  sectionsContainer.querySelectorAll('.eic-section-body').forEach((body) => {
+    const match = body.id.match(/^eic-section-body-(\d+)$/);
+    if (match) {
+      state.eicCollapsedSections[match[1]] = body.classList.contains('collapsed');
+    }
+  });
+  sectionsContainer.innerHTML = '';
+
+  if (data.targets) {
+    data.targets.forEach((target, ti) => {
+      const section = document.createElement('div');
+      section.className = 'eic-section';
+      const isCollapsed = state.eicCollapsedSections[String(ti)] === true;
+
+      const peakCount = target.peaks ? target.peaks.length : 0;
+      const itemLabel = getAreaCalculationItemLabel(target);
+      const targetLabel = getAreaCalculationTargetLabel(target);
+      section.innerHTML = `
+        <div class="eic-section-header" data-toggle="eic-section-body-${ti}">
+          <span>${escapeHtml(targetLabel)} (${peakCount} ${escapeHtml(itemLabel.toLowerCase())}${peakCount !== 1 ? 's' : ''})</span>
+          <span class="chevron" style="${isCollapsed ? 'transform: rotate(-90deg);' : ''}">&#9660;</span>
+        </div>
+        <div id="eic-section-body-${ti}" class="eic-section-body${isCollapsed ? ' collapsed' : ''}">
+          <div id="eic-detail-plot-${ti}" class="plot-container" style="min-height:250px;"></div>
+          <div id="eic-peaks-${ti}"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <button type="button" class="btn btn-sm" data-target-idx="${ti}" style="margin-top:0;">+ Add ${escapeHtml(itemLabel)} Manually</button>
+            ${target.signal_type === 'uv'
+              ? `<button type="button" class="btn btn-sm" data-clear-target-idx="${ti}" style="margin-top:0;">Clear Areas</button>`
+              : `<button type="button" class="btn btn-sm" data-reset-target-idx="${ti}" style="margin-top:0;">Reset to Auto Peaks</button>`}
+          </div>
+        </div>
+      `;
+
+      sectionsContainer.appendChild(section);
+
+      // Toggle section
+      section.querySelector('.eic-section-header').addEventListener('click', function () {
+        const body = document.getElementById(`eic-section-body-${ti}`);
+        body.classList.toggle('collapsed');
+        state.eicCollapsedSections[String(ti)] = body.classList.contains('collapsed');
+        this.querySelector('.chevron').style.transform = body.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
+      });
+
+      // Render detail plot
+      charts.plotEICWithPeaks(`eic-detail-plot-${ti}`, target, {
+        title: target.signal_type === 'uv' ? `${targetLabel} (${escapeHtml(data.sample_name || 'Sample')})` : `EIC ${targetLabel}`,
+        seriesLabel: targetLabel,
+        yLabel: target.signal_type === 'uv' ? 'Absorbance (mAU)' : 'Intensity',
+        baselineMode: target.signal_type === 'uv' ? 'linear-endpoints' : undefined,
+        areaItemLabel: itemLabel,
+        normalize,
+        dragmode: target.signal_type === 'uv' ? 'select' : 'zoom',
+        selectdirection: target.signal_type === 'uv' ? 'h' : undefined,
+      });
+      if (target.signal_type === 'uv') bindAreaCalculationDragSelection(`eic-detail-plot-${ti}`, ti);
+
+      // Render peak rows
+      renderPeakRows(ti, target);
+
+      // Manual peak add
+      section.querySelector(`button[data-target-idx="${ti}"]`).addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        addManualPeak(ti);
+      });
+
+      if (target.signal_type === 'uv') {
+        section.querySelector(`button[data-clear-target-idx="${ti}"]`).addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          clearTargetAreas(ti);
+        });
+      } else {
+        section.querySelector(`button[data-reset-target-idx="${ti}"]`).addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          resetTargetToAutoPeaks(ti);
+        });
+      }
+    });
+  }
+
+  // Results table
+  renderEICResultsTable(data);
+}
+
+function findClosestTimeIndex(times, value) {
+  if (!Array.isArray(times) || times.length === 0) return -1;
+  const target = Number(value);
+  if (!Number.isFinite(target)) return 0;
+
+  let lo = 0;
+  let hi = times.length - 1;
+  if (target <= Number(times[lo])) return lo;
+  if (target >= Number(times[hi])) return hi;
+
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (Number(times[mid]) <= target) lo = mid;
+    else hi = mid;
+  }
+
+  return Math.abs(Number(times[lo]) - target) <= Math.abs(Number(times[hi]) - target) ? lo : hi;
+}
+
+function interpolateChromatogramValue(times, intensities, timeValue) {
+  if (!Array.isArray(times) || !Array.isArray(intensities) || times.length !== intensities.length || times.length === 0) {
+    return 0;
+  }
+
+  const target = Number(timeValue);
+  if (!Number.isFinite(target)) return Number(intensities[0]) || 0;
+  if (times.length === 1) return Number(intensities[0]) || 0;
+
+  const firstTime = Number(times[0]);
+  const lastTime = Number(times[times.length - 1]);
+  if (target <= firstTime) return Number(intensities[0]) || 0;
+  if (target >= lastTime) return Number(intensities[intensities.length - 1]) || 0;
+
+  let lo = 0;
+  let hi = times.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (Number(times[mid]) <= target) lo = mid;
+    else hi = mid;
+  }
+
+  const x0 = Number(times[lo]);
+  const x1 = Number(times[hi]);
+  const y0 = Number(intensities[lo]) || 0;
+  const y1 = Number(intensities[hi]) || 0;
+  if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) return y0;
+  const t = (target - x0) / (x1 - x0);
+  return y0 + ((y1 - y0) * t);
+}
+
+function buildChromatogramWindow(times, intensities, start, end) {
+  if (!Array.isArray(times) || !Array.isArray(intensities) || times.length !== intensities.length || times.length === 0) {
+    return { times: [], intensities: [] };
+  }
+
+  const rawStart = Number(start);
+  const rawEnd = Number(end);
+  if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) {
+    return { times: [], intensities: [] };
+  }
+
+  const s = Math.min(rawStart, rawEnd);
+  const e = Math.max(rawStart, rawEnd);
+  if (!(e > s)) return { times: [], intensities: [] };
+
+  const windowTimes = [s];
+  const windowInts = [interpolateChromatogramValue(times, intensities, s)];
+
+  for (let i = 0; i < times.length; i++) {
+    const t = Number(times[i]);
+    if (t > s && t < e) {
+      windowTimes.push(t);
+      windowInts.push(Number(intensities[i]) || 0);
+    }
+  }
+
+  windowTimes.push(e);
+  windowInts.push(interpolateChromatogramValue(times, intensities, e));
+
+  return { times: windowTimes, intensities: windowInts };
+}
+
+function calculateWindowArea(windowTimes, windowInts, baselineMode = 'zero') {
+  if (!Array.isArray(windowTimes) || !Array.isArray(windowInts) || windowTimes.length !== windowInts.length || windowTimes.length < 2) {
+    return 0;
+  }
+
+  const startTime = Number(windowTimes[0]);
+  const endTime = Number(windowTimes[windowTimes.length - 1]);
+  const startInt = Number(windowInts[0]) || 0;
+  const endInt = Number(windowInts[windowInts.length - 1]) || 0;
+  const span = endTime - startTime;
+
+  let area = 0;
+  for (let i = 0; i < windowTimes.length - 1; i++) {
+    const x0 = Number(windowTimes[i]);
+    const x1 = Number(windowTimes[i + 1]);
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 <= x0) continue;
+
+    let y0 = Number(windowInts[i]) || 0;
+    let y1 = Number(windowInts[i + 1]) || 0;
+    if (baselineMode === 'linear-endpoints' && span > 0) {
+      const t0 = (x0 - startTime) / span;
+      const t1 = (x1 - startTime) / span;
+      const b0 = startInt + ((endInt - startInt) * t0);
+      const b1 = startInt + ((endInt - startInt) * t1);
+      y0 = Math.max(0, y0 - b0);
+      y1 = Math.max(0, y1 - b1);
+    }
+
+    area += (x1 - x0) * (y0 + y1) / 2;
+  }
+
+  return area;
+}
+
+function findValleyIndex(intensities, leftIdx, rightIdx) {
+  const n = Array.isArray(intensities) ? intensities.length : 0;
+  if (n === 0) return 0;
+  let left = Math.max(0, Math.min(n - 1, Math.floor(leftIdx)));
+  let right = Math.max(0, Math.min(n - 1, Math.floor(rightIdx)));
+  if (right < left) {
+    const tmp = left;
+    left = right;
+    right = tmp;
+  }
+  let valleyIdx = left;
+  let valleyVal = Number(intensities[left]) || 0;
+  for (let i = left + 1; i <= right; i++) {
+    const v = Number(intensities[i]) || 0;
+    if (v < valleyVal) {
+      valleyVal = v;
+      valleyIdx = i;
+    }
+  }
+  return valleyIdx;
+}
+
+function findThresholdEdgeIndex(intensities, apexIdx, limitIdx, threshold, direction) {
+  const n = Array.isArray(intensities) ? intensities.length : 0;
+  if (n === 0) return 0;
+  let apex = Math.max(0, Math.min(n - 1, Math.floor(apexIdx)));
+  let limit = Math.max(0, Math.min(n - 1, Math.floor(limitIdx)));
+  const thr = Number.isFinite(Number(threshold)) ? Number(threshold) : 0;
+
+  let edge = apex;
+  if (direction < 0) {
+    if (limit > apex) limit = apex;
+    for (let i = apex; i >= limit; i--) {
+      edge = i;
+      const v = Number(intensities[i]) || 0;
+      if (v <= thr) break;
+    }
+  } else {
+    if (limit < apex) limit = apex;
+    for (let i = apex; i <= limit; i++) {
+      edge = i;
+      const v = Number(intensities[i]) || 0;
+      if (v <= thr) break;
+    }
+  }
+  return edge;
+}
+
+function normalizeTargetAutoPeaks(target) {
+  if (!target || !Array.isArray(target.peaks) || target.peaks.length === 0) return;
+  if (target.peaks.some(p => (p.type || 'auto') !== 'auto')) return;
+
+  const times = Array.isArray(target.times) ? target.times.map(v => Number(v)) : [];
+  const intensities = Array.isArray(target.intensities) ? target.intensities.map(v => Number(v)) : [];
+  if (times.length < 3 || times.length !== intensities.length) return;
+
+  const nPts = times.length;
+  const clippedInts = intensities.map(v => (Number.isFinite(v) ? Math.max(0, v) : 0));
+  const maxInt = Math.max(...clippedInts, 0);
+  if (maxInt <= 0) return;
+
+  const sortedInts = [...clippedInts].sort((a, b) => a - b);
+  const p10 = sortedInts[Math.floor((sortedInts.length - 1) * 0.10)] || 0;
+  const noiseFloor = Math.max(p10, maxInt * 0.002);
+
+  const peakWrappers = target.peaks.map((peak) => {
+    const apexGuess = Number.isFinite(Number(peak.apex))
+      ? Number(peak.apex)
+      : ((Number(peak.start) + Number(peak.end)) / 2);
+    let apexIdx = findClosestTimeIndex(times, apexGuess);
+    if (apexIdx < 0) apexIdx = 0;
+
+    const startIdx = findClosestTimeIndex(times, Number(peak.start));
+    const endIdx = findClosestTimeIndex(times, Number(peak.end));
+    if (startIdx >= 0 && endIdx >= 0) {
+      const left = Math.min(startIdx, endIdx);
+      const right = Math.max(startIdx, endIdx);
+      let localMaxIdx = apexIdx;
+      if (localMaxIdx < left || localMaxIdx > right) localMaxIdx = left;
+      for (let i = left; i <= right; i++) {
+        if (clippedInts[i] > clippedInts[localMaxIdx]) localMaxIdx = i;
+      }
+      apexIdx = localMaxIdx;
+    }
+
+    return { peak, apexIdx };
+  });
+
+  peakWrappers.sort((a, b) => {
+    if (a.apexIdx !== b.apexIdx) return a.apexIdx - b.apexIdx;
+    return (Number(a.peak.start) || 0) - (Number(b.peak.start) || 0);
+  });
+
+  for (let i = 1; i < peakWrappers.length; i++) {
+    if (peakWrappers[i].apexIdx <= peakWrappers[i - 1].apexIdx) {
+      peakWrappers[i].apexIdx = Math.min(nPts - 1, peakWrappers[i - 1].apexIdx + 1);
+    }
+  }
+
+  const valleys = [];
+  for (let i = 0; i < peakWrappers.length - 1; i++) {
+    valleys.push(findValleyIndex(clippedInts, peakWrappers[i].apexIdx, peakWrappers[i + 1].apexIdx));
+  }
+
+  for (let i = 0; i < peakWrappers.length; i++) {
+    const item = peakWrappers[i];
+    const hardLeft = i === 0 ? 0 : valleys[i - 1];
+    const hardRight = i === peakWrappers.length - 1 ? (nPts - 1) : valleys[i];
+    const apexIdx = Math.max(hardLeft, Math.min(hardRight, item.apexIdx));
+    const apexInt = clippedInts[apexIdx];
+    const threshold = Math.max(noiseFloor, apexInt * 0.03);
+
+    let startIdx = findThresholdEdgeIndex(clippedInts, apexIdx, hardLeft, threshold, -1);
+    let endIdx = findThresholdEdgeIndex(clippedInts, apexIdx, hardRight, threshold, 1);
+
+    startIdx = Math.max(hardLeft, Math.min(startIdx, hardRight));
+    endIdx = Math.max(hardLeft, Math.min(endIdx, hardRight));
+    if (endIdx <= startIdx) {
+      startIdx = hardLeft;
+      endIdx = hardRight;
+    }
+    if (endIdx <= startIdx) {
+      endIdx = Math.min(nPts - 1, startIdx + 1);
+    }
+
+    item.peak.start = Number(times[startIdx]);
+    item.peak.end = Number(times[endIdx]);
+    item.peak.apex = Number(times[apexIdx]);
+  }
+
+  target.peaks = peakWrappers.map(item => item.peak);
+  sortTargetPeaksByStart(target);
+  enforcePeakBoundaries(target, 0, {});
+  recalculateTargetPeaks(target);
+}
+
+function sortTargetPeaksByStart(target) {
+  if (!target || !Array.isArray(target.peaks)) return;
+  target.peaks.sort((a, b) => {
+    const sa = Number.isFinite(Number(a.start)) ? Number(a.start) : Number.POSITIVE_INFINITY;
+    const sb = Number.isFinite(Number(b.start)) ? Number(b.start) : Number.POSITIVE_INFINITY;
+    return sa - sb;
+  });
+}
+
+function recalculatePeakMetrics(target, peak) {
+  const times = Array.isArray(target.times) ? target.times : [];
+  const intensities = Array.isArray(target.intensities) ? target.intensities : [];
+  if (times.length === 0 || intensities.length === 0 || times.length !== intensities.length) {
+    peak.area = 0;
+    peak.apex = Number(peak.start) || 0;
+    peak.times = [];
+    peak.intensities = [];
+    return;
+  }
+
+  const tMin = Number(times[0]);
+  const tMax = Number(times[times.length - 1]);
+  let start = Number(peak.start);
+  let end = Number(peak.end);
+  if (!Number.isFinite(start)) start = tMin;
+  if (!Number.isFinite(end)) end = start;
+  start = Math.max(tMin, Math.min(tMax, start));
+  end = Math.max(tMin, Math.min(tMax, end));
+  if (end < start) {
+    const temp = start;
+    start = end;
+    end = temp;
+  }
+  peak.start = start;
+  peak.end = end;
+
+  const window = buildChromatogramWindow(times, intensities, start, end);
+  if (window.times.length < 2) {
+    peak.area = 0;
+    peak.apex = start;
+    peak.times = [];
+    peak.intensities = [];
+    return;
+  }
+
+  peak.times = window.times;
+  peak.intensities = window.intensities;
+  peak.area = calculateWindowArea(
+    window.times,
+    window.intensities,
+    target?.signal_type === 'uv' ? 'linear-endpoints' : 'zero'
+  );
+
+  let apexIdx = 0;
+  let apexInt = Number(window.intensities[0]) || 0;
+  for (let i = 1; i < window.intensities.length; i++) {
+    const val = Number(window.intensities[i]) || 0;
+    if (val > apexInt) {
+      apexInt = val;
+      apexIdx = i;
+    }
+  }
+  peak.apex = Number(window.times[apexIdx]);
+}
+
+function recalculateTargetPeaks(target) {
+  if (!target || !Array.isArray(target.peaks)) return;
+  target.peaks.forEach((peak) => recalculatePeakMetrics(target, peak));
+}
+
+function enforcePeakBoundaries(target, movedIdx, changeInfo = {}) {
+  if (!target || !Array.isArray(target.peaks) || target.peaks.length === 0) return;
+  const peaks = target.peaks;
+  const moved = peaks[movedIdx];
+  if (!moved) return;
+
+  if (changeInfo.field === 'end' && movedIdx < peaks.length - 1) {
+    const next = peaks[movedIdx + 1];
+    const prevNextStart = Number(changeInfo.prevNextStart);
+    if (changeInfo.wasTouchingNext && Number.isFinite(prevNextStart) && moved.end > prevNextStart) {
+      next.start = moved.end;
+    }
+  }
+
+  for (let i = 0; i < peaks.length; i++) {
+    const p = peaks[i];
+    let s = Number(p.start);
+    let e = Number(p.end);
+    if (!Number.isFinite(s)) s = 0;
+    if (!Number.isFinite(e)) e = s;
+    if (e < s) e = s;
+    p.start = s;
+    p.end = e;
+  }
+
+  for (let i = 0; i < peaks.length - 1; i++) {
+    const current = peaks[i];
+    const next = peaks[i + 1];
+    if (current.end > next.start) {
+      if (changeInfo.field === 'end' && i === movedIdx && changeInfo.wasTouchingNext) {
+        next.start = current.end;
+      } else {
+        current.end = next.start;
+      }
+    }
+    if (current.end < current.start) current.end = current.start;
+    if (next.start < current.end) next.start = current.end;
+    if (next.end < next.start) next.end = next.start;
+  }
+}
+
+function getTargetRelativeAreaContext(target) {
+  const peaks = Array.isArray(target?.peaks) ? target.peaks : [];
+  const includedPeaks = peaks.filter((peak) => peak?.selected !== false);
+  const totalArea = includedPeaks.reduce((sum, peak) => {
+    const area = Number(peak?.area);
+    return Number.isFinite(area) && area > 0 ? (sum + area) : sum;
+  }, 0);
+  return {
+    includedCount: includedPeaks.length,
+    totalArea,
+  };
+}
+
+function getPeakRelativeAreaPercent(target, peak) {
+  if (!peak || peak.selected === false) return Number.NaN;
+  const area = Number(peak.area);
+  if (!Number.isFinite(area) || area < 0) return Number.NaN;
+  const context = getTargetRelativeAreaContext(target);
+  if (!(context.totalArea > 0)) return Number.NaN;
+  return (area / context.totalArea) * 100.0;
+}
+
+function convertAreaMinutesToSeconds(area) {
+  return Number.isFinite(area) ? (area * 60.0) : Number.NaN;
+}
+
+function formatAreaCalculationValue(value) {
+  if (!Number.isFinite(value)) return '-';
+  const absValue = Math.abs(value);
+  const maximumFractionDigits = (absValue > 0 && absValue < 0.001) ? 10 : 6;
+  return value.toLocaleString('en-US', {
+    useGrouping: false,
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  });
+}
+
+function renderPeakRows(targetIdx, target) {
+  const container = document.getElementById(`eic-peaks-${targetIdx}`);
+  container.innerHTML = '';
+  const itemLabel = getAreaCalculationItemLabel(target);
+
+  if (!target.peaks || target.peaks.length === 0) {
+    container.innerHTML = target?.signal_type === 'uv'
+      ? '<p class="muted" style="padding:6px 0;">No areas selected yet. Drag on the UV trace or add one manually.</p>'
+      : '<p class="muted" style="padding:6px 0;">No peaks detected</p>';
+    return;
+  }
+
+  sortTargetPeaksByStart(target);
+  recalculateTargetPeaks(target);
+
+  target.peaks.forEach((peak, pi) => {
+    const startVal = Number.isFinite(peak.start) ? peak.start : 0;
+    const endVal = Number.isFinite(peak.end) ? peak.end : startVal;
+    const areaVal = Number.isFinite(peak.area) ? peak.area : 0;
+    const areaSecondsVal = convertAreaMinutesToSeconds(areaVal);
+    const relAreaPct = getPeakRelativeAreaPercent(target, peak);
+    const relAreaLabel = Number.isFinite(relAreaPct) ? `${relAreaPct.toFixed(1)}%` : '-';
+    const row = document.createElement('div');
+    row.className = 'peak-row';
+    row.innerHTML = `
+      <input type="checkbox" class="peak-check" data-ti="${targetIdx}" data-pi="${pi}" ${peak.selected !== false ? 'checked' : ''}>
+      <span>${escapeHtml(itemLabel)} ${pi + 1}</span>
+      <label style="display:flex;align-items:center;gap:4px;margin:0;">Start: <input type="number" class="peak-start" data-ti="${targetIdx}" data-pi="${pi}" value="${startVal.toFixed(3)}" step="0.01" style="width:80px;"></label>
+      <label style="display:flex;align-items:center;gap:4px;margin:0;">End: <input type="number" class="peak-end" data-ti="${targetIdx}" data-pi="${pi}" value="${endVal.toFixed(3)}" step="0.01" style="width:80px;"></label>
+      <span class="area-val">Area: ${formatAreaCalculationValue(areaVal)} (a.u.*min) | ${formatAreaCalculationValue(areaSecondsVal)} (a.u.*s) | Rel: ${relAreaLabel}</span>
+    `;
+    container.appendChild(row);
+
+    // Peak checkbox toggle
+    row.querySelector('.peak-check').addEventListener('change', (e) => {
+      state.eicBatchData.targets[targetIdx].peaks[pi].selected = e.target.checked;
+      reRenderEICBatch({ preserveScroll: true });
+    });
+
+    // Peak start/end edit
+    row.querySelector('.peak-start').addEventListener('change', (e) => {
+      const targetRef = state.eicBatchData.targets[targetIdx];
+      const peaks = targetRef.peaks || [];
+      const current = peaks[pi];
+      if (!current) return;
+      const nextVal = parseFloat(e.target.value);
+      if (!Number.isFinite(nextVal)) return;
+      current.start = nextVal;
+      enforcePeakBoundaries(targetRef, pi, { field: 'start' });
+      recalculateTargetPeaks(targetRef);
+      reRenderEICBatch({ preserveScroll: true });
+    });
+    row.querySelector('.peak-end').addEventListener('change', (e) => {
+      const targetRef = state.eicBatchData.targets[targetIdx];
+      const peaks = targetRef.peaks || [];
+      const current = peaks[pi];
+      if (!current) return;
+      const oldEnd = Number(current.end);
+      const next = peaks[pi + 1];
+      const oldNextStart = next ? Number(next.start) : NaN;
+      const nextVal = parseFloat(e.target.value);
+      if (!Number.isFinite(nextVal)) return;
+      current.end = nextVal;
+      enforcePeakBoundaries(targetRef, pi, {
+        field: 'end',
+        prevNextStart: oldNextStart,
+        wasTouchingNext: Number.isFinite(oldEnd) && Number.isFinite(oldNextStart) && Math.abs(oldEnd - oldNextStart) <= 1e-6,
+      });
+      recalculateTargetPeaks(targetRef);
+      reRenderEICBatch({ preserveScroll: true });
+    });
+  });
+}
+
+function bindAreaCalculationDragSelection(plotId, targetIdx) {
+  const plot = document.getElementById(plotId);
+  const target = state.eicBatchData?.targets?.[targetIdx];
+  if (!plot || typeof plot.on !== 'function' || !target || target.signal_type !== 'uv') return;
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_selected');
+  }
+
+  plot.on('plotly_selected', (eventData) => {
+    if (!eventData) return;
+    const points = Array.isArray(eventData.points) ? eventData.points : [];
+    const startRaw = eventData.range?.x?.[0] ?? points[0]?.x;
+    const endRaw = eventData.range?.x?.[1] ?? points[points.length - 1]?.x;
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    if ((end - start) < 0.02) return;
+
+    addManualPeak(targetIdx, {
+      start,
+      end,
+      silentToast: true,
+    });
+    toast('Area window added. Adjust start/end if needed.', 'success');
+  });
+}
+
+function addManualPeak(targetIdx, options = {}) {
+  const target = state.eicBatchData.targets[targetIdx];
+  if (!target.peaks) target.peaks = [];
+
+  const times = target.times;
+  if (!Array.isArray(times) || times.length === 0) {
+    toast(`Cannot add manual ${getAreaCalculationItemLabel(target).toLowerCase()}: no chromatogram time axis available`, 'warning');
+    return;
+  }
+
+  let start = Number(options.start);
+  let end = Number(options.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    const mid = times[Math.floor(times.length / 2)];
+    const span = (times[times.length - 1] - times[0]) * 0.05;
+    start = mid - span;
+    end = mid + span;
+  }
+
+  const peak = {
+    start,
+    end,
+    apex: (start + end) / 2,
+    area: 0,
+    type: 'manual',
+    selected: true,
+    times: [],
+    intensities: [],
+  };
+  target.peaks.push(peak);
+
+  sortTargetPeaksByStart(target);
+  const insertedIdx = Math.max(0, target.peaks.indexOf(peak));
+  enforcePeakBoundaries(target, insertedIdx, { field: 'end' });
+  recalculateTargetPeaks(target);
+  reRenderEICBatch({ preserveScroll: true });
+  if (options.silentToast !== true) {
+    const itemLabel = getAreaCalculationItemLabel(target);
+    toast(`${itemLabel} window added. Adjust start/end times.`, 'info');
+  }
+}
+
+function clearTargetAreas(targetIdx) {
+  const target = state.eicBatchData?.targets?.[targetIdx];
+  if (!target) return;
+  target.peaks = [];
+  reRenderEICBatch({ preserveScroll: true });
+  toast('Cleared UV area windows', 'success');
+}
+
+function resetTargetToAutoPeaks(targetIdx) {
+  const currentTarget = state.eicBatchData?.targets?.[targetIdx];
+  const originalTarget = state.eicBatchOriginalData?.targets?.[targetIdx];
+  if (!currentTarget || !originalTarget || !Array.isArray(originalTarget.peaks)) {
+    toast('Auto peaks are not available for this target', 'warning');
+    return;
+  }
+
+  currentTarget.peaks = deepClone(originalTarget.peaks);
+  sortTargetPeaksByStart(currentTarget);
+  enforcePeakBoundaries(currentTarget, 0, {});
+  recalculateTargetPeaks(currentTarget);
+  reRenderEICBatch({ preserveScroll: true });
+  toast('Restored auto-calculated peaks', 'success');
+}
+
+function reRenderEICBatch(options = {}) {
+  if (state.eicBatchData) {
+    const preserveScroll = options.preserveScroll !== false;
+    const panel = document.getElementById('tab-eic-batch');
+    const prevScrollTop = (preserveScroll && panel) ? panel.scrollTop : null;
+    renderEICBatch(state.eicBatchData);
+    if (preserveScroll && panel && prevScrollTop != null) {
+      requestAnimationFrame(() => {
+        panel.scrollTop = prevScrollTop;
+        requestAnimationFrame(() => {
+          panel.scrollTop = prevScrollTop;
+        });
+      });
+    }
+  }
+}
+
+function renderEICResultsTable(data) {
+  const container = document.getElementById('eic-results-table-container');
+  container.innerHTML = '';
+
+  if (!data.targets || data.targets.length === 0) return;
+
+  const rows = [];
+  data.targets.forEach(target => {
+    if (target.peaks) {
+      target.peaks.forEach((peak, pi) => {
+        rows.push({
+          signal: getAreaCalculationTargetLabel(target),
+          itemLabel: getAreaCalculationItemLabel(target),
+          itemIndex: pi + 1,
+          type: peak.type || 'auto',
+          apex: peak.apex,
+          start: peak.start,
+          end: peak.end,
+          area: peak.area,
+          areaSeconds: convertAreaMinutesToSeconds(Number(peak.area)),
+          relativeAreaPct: getPeakRelativeAreaPercent(target, peak),
+        });
+      });
+    }
+  });
+
+  if (rows.length === 0) {
+    container.innerHTML = isUvAreaCalculationMode(data)
+      ? '<p class="placeholder-msg">No areas defined yet</p>'
+      : '<p class="placeholder-msg">No peaks found</p>';
+    return;
+  }
+
+  let html = `<div class="data-table-wrapper"><table class="data-table">
+    <thead><tr>
+      <th>Signal</th><th>Item</th><th>Type</th><th>Apex (min)</th><th>Start (min)</th><th>End (min)</th><th>Area (a.u.*min)</th><th>Area (a.u.*s)</th><th>Rel. Area (%)</th>
+    </tr></thead><tbody>`;
+
+  rows.forEach(r => {
+    const startVal = Number.isFinite(r.start) ? r.start.toFixed(3) : '-';
+    const endVal = Number.isFinite(r.end) ? r.end.toFixed(3) : '-';
+    const areaVal = formatAreaCalculationValue(r.area);
+    const areaSecondsVal = formatAreaCalculationValue(r.areaSeconds);
+    const relativeAreaVal = Number.isFinite(r.relativeAreaPct) ? r.relativeAreaPct.toFixed(1) : '-';
+    html += `<tr>
+      <td>${escapeHtml(r.signal)}</td>
+      <td>${escapeHtml(r.itemLabel)} ${r.itemIndex}</td>
+      <td>${r.type}</td>
+      <td>${r.apex != null ? r.apex.toFixed(3) : '-'}</td>
+      <td>${startVal}</td>
+      <td>${endVal}</td>
+      <td>${areaVal}</td>
+      <td>${areaSecondsVal}</td>
+      <td>${relativeAreaVal}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+async function exportEICCSV() {
+  if (!state.eicBatchData) {
+    toast('Run area analysis first', 'warning');
+    return;
+  }
+
+  const rows = [['Signal', 'Item', 'Type', 'Apex (min)', 'Start (min)', 'End (min)', 'Area (a.u.*min)', 'Area (a.u.*s)', 'Rel. Area (%)']];
+  state.eicBatchData.targets.forEach(target => {
+    (target.peaks || []).forEach((peak, pi) => {
+      const relativeAreaPct = getPeakRelativeAreaPercent(target, peak);
+      const areaVal = Number(peak.area);
+      const areaSecondsVal = convertAreaMinutesToSeconds(areaVal);
+      rows.push([
+        getAreaCalculationTargetLabel(target),
+        `${getAreaCalculationItemLabel(target)} ${pi + 1}`,
+        peak.type || 'auto',
+        Number.isFinite(peak.apex) ? peak.apex.toFixed(3) : '',
+        Number.isFinite(peak.start) ? peak.start.toFixed(3) : '',
+        Number.isFinite(peak.end) ? peak.end.toFixed(3) : '',
+        Number.isFinite(areaVal) ? formatAreaCalculationValue(areaVal) : '',
+        Number.isFinite(areaSecondsVal) ? formatAreaCalculationValue(areaSecondsVal) : '',
+        Number.isFinite(relativeAreaPct) ? relativeAreaPct.toFixed(2) : '',
+      ]);
+    });
+  });
+
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  downloadBlob(blob, 'area_calculation_results.csv');
+  toast('CSV exported', 'success');
+}
+
+async function exportUVAreaPDF() {
+  const data = state.eicBatchData;
+  const target = data?.targets?.find((entry) => entry?.signal_type === 'uv');
+  if (!target || !Array.isArray(target.times) || target.times.length === 0) {
+    toast('Load a UV area trace first', 'warning');
+    return;
+  }
+
+  const sampleName = String(data.sample_name || getAreaCalculationSampleName(data.sample_path || '') || 'sample');
+  const wavelength = Number(target.wavelength);
+  const wavelengthLabel = Number.isFinite(wavelength) ? `${wavelength.toFixed(0)}nm` : 'uv';
+  const filenameBase = `${sanitizeFilename(sampleName.replace(/\.d$/i, ''))}_uv_${wavelengthLabel}_area`;
+  const baseStyle = buildCurrentDeconvStyle();
+  const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+
+  showLoading('Exporting UV area PDF...');
+  try {
+    const response = await api.exportUVArea({
+      dpi,
+      filename_base: filenameBase,
+      sample_name: sampleName,
+      wavelength: Number.isFinite(wavelength) ? wavelength : null,
+      times: target.times,
+      intensities: target.intensities,
+      areas: (target.peaks || []).map((area) => ({
+        start: area.start,
+        end: area.end,
+        area: area.area,
+        selected: area.selected !== false,
+      })),
+      style: {
+        fig_width: baseStyle.fig_width,
+        line_width: baseStyle.line_width,
+        show_grid: false,
+        show_title: baseStyle.deconv_show_title !== false,
+        x_axis_width_multiplier: 2.0,
+      },
+    });
+    const blob = await backendResponseToBlob(response);
+    const filename = getFilenameFromContentDisposition(
+      response.headers.get('content-disposition'),
+      `${filenameBase}.pdf`,
+    );
+    downloadBlob(blob, filename);
+    toast('Exported UV area PDF', 'success');
+  } catch (err) {
+    toast(`UV area PDF export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ===== Deconvolution Tab =====
+function getGlobalDeconvMassRangeParams() {
+  const massLowRaw = document.getElementById('mass-axis-min')?.value ?? '';
+  const massHighRaw = document.getElementById('mass-axis-max')?.value ?? '';
+  const massLow = parseFloat(massLowRaw);
+  const massHigh = parseFloat(massHighRaw);
+  const params = {};
+  if (massLowRaw !== '' && Number.isFinite(massLow)) params.mass_range_low = massLow;
+  if (massHighRaw !== '' && Number.isFinite(massHigh)) params.mass_range_high = massHigh;
+  return params;
+}
+
+function getDefaultDeconvMwAlgorithmForPath(path) {
+  const basePath = String(path || '').split('::')[0].trim().toLowerCase();
+  return basePath.endsWith('.sirslt') ? 'centroid' : DECONV_EXPERT_DEFAULTS.mwAlgorithm;
+}
+
+function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
+  const select = document.getElementById('deconv-mw-algorithm');
+  if (!select) return;
+
+  const defaultAlgorithm = getDefaultDeconvMwAlgorithmForPath(samplePath);
+  const defaultKey = `${String(samplePath || '')}:${defaultAlgorithm}`;
+  const shouldSync = options.force === true || select.dataset.defaultKey !== defaultKey || select.dataset.userEdited !== 'true';
+  if (shouldSync) {
+    select.value = defaultAlgorithm;
+    select.dataset.userEdited = '';
+  }
+  select.dataset.defaultKey = defaultKey;
+}
+
+function getCurrentDeconvolutionParameters(samplePath = '') {
+  const globalMassRange = getGlobalDeconvMassRangeParams();
+  const expertMode = document.getElementById('expert-mode-toggle')?.checked === true;
+  const defaultMwAlgorithm = getDefaultDeconvMwAlgorithmForPath(samplePath);
+
+  const params = {
+    min_charge: DECONV_EXPERT_DEFAULTS.minCharge,
+    max_charge: DECONV_EXPERT_DEFAULTS.maxCharge,
+    min_peaks: DECONV_EXPERT_DEFAULTS.minIons,
+    mw_agreement: DECONV_EXPERT_DEFAULTS.mwAgreePct / 100.0,
+    contig_min: DECONV_EXPERT_DEFAULTS.contigMin,
+    abundance_cutoff: DECONV_EXPERT_DEFAULTS.abundancePct / 100.0,
+    r2_cutoff: DECONV_EXPERT_DEFAULTS.envelopePct / 100.0,
+    fwhm: DECONV_EXPERT_DEFAULTS.fwhm,
+    min_input_mz: DECONV_EXPERT_DEFAULTS.minInputMz,
+    mass_range_low: Number.isFinite(globalMassRange.mass_range_low) ? globalMassRange.mass_range_low : DEFAULT_DECONV_LOW_MASS_DA,
+    mass_range_high: Number.isFinite(globalMassRange.mass_range_high) ? globalMassRange.mass_range_high : DEFAULT_DECONV_HIGH_MASS_DA,
+    noise_cutoff: DEFAULT_DECONV_NOISE_CUTOFF,
+    monoisotopic: DECONV_EXPERT_DEFAULTS.monoisotopic,
+    include_singly_charged: true,
+    mw_algorithm: defaultMwAlgorithm,
+  };
+
+  if (!expertMode) {
+    return params;
+  }
+
+  const minCharge = parseInt(document.getElementById('dp-min-charge')?.value, 10);
+  const maxCharge = parseInt(document.getElementById('dp-max-charge')?.value, 10);
+  const minIons = parseInt(document.getElementById('dp-min-ions')?.value, 10);
+  const mwAgreePct = parseFloat(document.getElementById('dp-mw-agree')?.value);
+  const contigMin = parseInt(document.getElementById('dp-contig-min')?.value, 10);
+  const abundancePct = parseFloat(document.getElementById('dp-abundance')?.value);
+  const envelopePct = parseFloat(document.getElementById('dp-r2')?.value);
+  const fwhm = parseFloat(document.getElementById('dp-fwhm')?.value);
+  const minInputMz = parseFloat(document.getElementById('dp-min-input-mz')?.value);
+  const massLow = parseFloat(document.getElementById('dp-mass-low')?.value);
+  const massHigh = parseFloat(document.getElementById('dp-mass-high')?.value);
+  const noiseCutoff = parseFloat(document.getElementById('dp-noise')?.value);
+  const mwAlgorithm = document.getElementById('deconv-mw-algorithm')?.value;
+
+  if (Number.isFinite(minCharge)) params.min_charge = minCharge;
+  if (Number.isFinite(maxCharge)) params.max_charge = maxCharge;
+  if (Number.isFinite(minIons)) params.min_peaks = minIons;
+  if (Number.isFinite(mwAgreePct)) params.mw_agreement = mwAgreePct / 100.0;
+  if (Number.isFinite(contigMin)) params.contig_min = contigMin;
+  if (Number.isFinite(abundancePct)) params.abundance_cutoff = abundancePct / 100.0;
+  if (Number.isFinite(envelopePct)) params.r2_cutoff = envelopePct / 100.0;
+  if (Number.isFinite(fwhm)) params.fwhm = fwhm;
+  if (Number.isFinite(minInputMz)) params.min_input_mz = minInputMz;
+  if (Number.isFinite(massLow)) params.mass_range_low = massLow;
+  if (Number.isFinite(massHigh)) params.mass_range_high = massHigh;
+  if (Number.isFinite(noiseCutoff)) params.noise_cutoff = noiseCutoff;
+  if (mwAlgorithm) params.mw_algorithm = mwAlgorithm;
+  params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
+
+  return params;
+}
+
+function getCurrentDeconvolutionTimeRange() {
+  const start = parseFloat(document.getElementById('deconv-start')?.value);
+  const end = parseFloat(document.getElementById('deconv-end')?.value);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return [start, end];
+  }
+  if (Array.isArray(state.deconvTimeRange) && state.deconvTimeRange.length === 2) {
+    const fallbackStart = Number(state.deconvTimeRange[0]);
+    const fallbackEnd = Number(state.deconvTimeRange[1]);
+    if (Number.isFinite(fallbackStart) && Number.isFinite(fallbackEnd) && fallbackEnd > fallbackStart) {
+      return [fallbackStart, fallbackEnd];
+    }
+  }
+  return null;
+}
+
+function restoreDefaultDeconvExpertSettings() {
+  const idToValue = {
+    'dp-min-charge': DECONV_EXPERT_DEFAULTS.minCharge,
+    'dp-max-charge': DECONV_EXPERT_DEFAULTS.maxCharge,
+    'dp-min-ions': DECONV_EXPERT_DEFAULTS.minIons,
+    'dp-mw-agree': DECONV_EXPERT_DEFAULTS.mwAgreePct,
+    'dp-contig-min': DECONV_EXPERT_DEFAULTS.contigMin,
+    'dp-abundance': DECONV_EXPERT_DEFAULTS.abundancePct,
+    'dp-r2': DECONV_EXPERT_DEFAULTS.envelopePct,
+    'dp-fwhm': DECONV_EXPERT_DEFAULTS.fwhm,
+    'dp-min-input-mz': DECONV_EXPERT_DEFAULTS.minInputMz,
+    'dp-mass-low': DECONV_EXPERT_DEFAULTS.massLow,
+    'dp-mass-high': DECONV_EXPERT_DEFAULTS.massHigh,
+    'dp-noise': DECONV_EXPERT_DEFAULTS.noiseCutoff,
+  };
+
+  Object.entries(idToValue).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+
+  const monoisotopic = document.getElementById('dp-monoisotopic');
+  if (monoisotopic) monoisotopic.checked = DECONV_EXPERT_DEFAULTS.monoisotopic;
+
+  syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '', { force: true });
+
+  const axisMin = document.getElementById('mass-axis-min');
+  const axisMax = document.getElementById('mass-axis-max');
+  if (axisMin) axisMin.value = DECONV_EXPERT_DEFAULTS.massLow;
+  if (axisMax) axisMax.value = DECONV_EXPERT_DEFAULTS.massHigh;
+}
+
+function buildDeconvolutionRequest(path, startTime, endTime) {
+  const params = {
+    path,
+    start_time: startTime,
+    end_time: endTime,
+    ion_mode: document.querySelector('input[name="ion-mode"]:checked')?.value || 'positive',
+    ...getCurrentDeconvolutionParameters(path),
+  };
+
+  return params;
+}
+
+function getSelectedDeconvBackgroundPath(samplePath) {
+  const selectedSamplePath = String(samplePath || '').trim();
+  const rawBackgroundPath = document.getElementById('deconv-background-select')?.value || '';
+  const backgroundPath = String(rawBackgroundPath).trim();
+  if (!backgroundPath || backgroundPath === selectedSamplePath) return '';
+  return backgroundPath;
+}
+
+function buildActiveDeconvolutionRequest(path, startTime, endTime) {
+  const params = buildDeconvolutionRequest(path, startTime, endTime);
+  const backgroundPath = getSelectedDeconvBackgroundPath(path);
+  if (backgroundPath) {
+    params.background_path = backgroundPath;
+  }
+  return params;
+}
+
+function formatDeconvTimeValue(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return num.toFixed(4);
+}
+
+function getDeconvContextPolarity(meta) {
+  if (meta?.has_ms_pos) return 'positive';
+  if (meta?.has_ms_neg) return 'negative';
+  return 'positive';
+}
+
+function getBgsubDeconvTicChannel(bgsubData, meta) {
+  const tic = bgsubData?.tic;
+  if (!tic) return null;
+  if (tic.has_dual_polarity) {
+    const preferred = getDeconvContextPolarity(meta);
+    if (preferred === 'negative' && Array.isArray(tic.times_neg) && Array.isArray(tic.intensities_neg)) {
+      return { times: tic.times_neg, intensities: tic.intensities_neg, polarity: 'negative' };
+    }
+    if (Array.isArray(tic.times_pos) && Array.isArray(tic.intensities_pos)) {
+      return { times: tic.times_pos, intensities: tic.intensities_pos, polarity: 'positive' };
+    }
+    if (Array.isArray(tic.times_neg) && Array.isArray(tic.intensities_neg)) {
+      return { times: tic.times_neg, intensities: tic.intensities_neg, polarity: 'negative' };
+    }
+    return null;
+  }
+  if (Array.isArray(tic.times) && Array.isArray(tic.intensities)) {
+    return { times: tic.times, intensities: tic.intensities, polarity: null };
+  }
+  return null;
+}
+
+function getBgsubDeconvUvChannel(bgsubData) {
+  const wavelengths = Array.isArray(bgsubData?.uv?.wavelengths) ? bgsubData.uv.wavelengths : [];
+  if (wavelengths.length === 0) return null;
+  const first = wavelengths[0];
+  if (!Array.isArray(first?.times) || !Array.isArray(first?.intensities)) return null;
+  return first;
+}
+
+function getDeconvolutionRunSignature() {
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  const start = parseFloat(document.getElementById('deconv-start')?.value);
+  const end = parseFloat(document.getElementById('deconv-end')?.value);
+  if (!samplePath || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '';
+  return JSON.stringify(buildActiveDeconvolutionRequest(samplePath, start, end));
+}
+
+async function autoRunDeconvolutionOnTabOpen() {
+  if (state.deconvAutoRunInFlight) return;
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) return;
+
+  state.deconvAutoRunInFlight = true;
+  try {
+    if (!state.deconvResults || state.deconvSamplePath !== samplePath) {
+      try {
+        const data = await api.autoDetectWindow(samplePath);
+        if (Number.isFinite(data.start) && Number.isFinite(data.end) && data.end > data.start) {
+          document.getElementById('deconv-start').value = formatDeconvTimeValue(data.start);
+          document.getElementById('deconv-end').value = formatDeconvTimeValue(data.end);
+        }
+      } catch (_) {
+        // Keep current range if auto-detect fails.
+      }
+      await refreshDeconvWindowContext(samplePath);
+    }
+
+    const signature = getDeconvolutionRunSignature();
+    if (!signature) return;
+    if (signature === state.deconvAutoRunSignature && state.deconvResults && state.deconvSamplePath === samplePath) {
+      return;
+    }
+
+    await runDeconvolution();
+  } finally {
+    state.deconvAutoRunInFlight = false;
+  }
+}
+
+function scheduleManualDeconvWindowUpdate({ immediate = false } = {}) {
+  if (state.deconvWindowEditTimer) {
+    clearTimeout(state.deconvWindowEditTimer);
+    state.deconvWindowEditTimer = null;
+  }
+
+  const delay = immediate ? 0 : 450;
+  state.deconvWindowEditTimer = setTimeout(() => {
+    state.deconvWindowEditTimer = null;
+    void applyManualDeconvWindowUpdate();
+  }, delay);
+}
+
+async function applyManualDeconvWindowUpdate() {
+  if (state.deconvDragSelectionInFlight) return;
+
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) return;
+
+  const start = parseFloat(document.getElementById('deconv-start')?.value);
+  const end = parseFloat(document.getElementById('deconv-end')?.value);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+
+  const runId = state.deconvWindowEditRunId + 1;
+  state.deconvWindowEditRunId = runId;
+
+  await refreshDeconvWindowContext(samplePath);
+  if (runId !== state.deconvWindowEditRunId) return;
+
+  const hasCurrentResults = state.deconvResults && state.deconvSamplePath === samplePath;
+  if (!hasCurrentResults) return;
+
+  const signature = getDeconvolutionRunSignature();
+  if (!signature || signature === state.deconvAutoRunSignature) return;
+
+  await runDeconvolution({ useOverlay: false, silentSuccess: true });
+}
+
+function initDeconvolution() {
+  document.getElementById('btn-auto-detect-window').addEventListener('click', autoDetectDeconvWindow);
+  document.getElementById('btn-run-deconv').addEventListener('click', runDeconvolution);
+  document.getElementById('btn-refresh-deconv')?.addEventListener('click', refreshCurrentDeconvolutionSample);
+  document.getElementById('deconv-start').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
+  document.getElementById('deconv-end').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
+  document.getElementById('deconv-start').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
+  document.getElementById('deconv-end').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
+  document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
+  document.getElementById('btn-deconv-mode-zoom')?.addEventListener('click', () => setDeconvInteractionMode('zoom'));
+  document.getElementById('deconv-mw-algorithm')?.addEventListener('change', () => {
+    const mwAlgorithm = document.getElementById('deconv-mw-algorithm');
+    if (mwAlgorithm) mwAlgorithm.dataset.userEdited = 'true';
+    state.deconvAutoRunSignature = '';
+  });
+  document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
+    btn.addEventListener('click', () => exportDeconvMasses(btn.dataset.format));
+  });
+  document.getElementById('btn-export-deconv-spectrum-pdf')?.addEventListener('click', exportDeconvSpectrumPdf);
+  document.querySelectorAll('.btn-export-ion-selection').forEach((btn) => {
+    btn.addEventListener('click', () => exportDeconvIonSelection(btn.dataset.format));
+  });
+  renderDeconvInteractionModeButtons();
+
+  // Auto-detect window when sample is selected
+  const select = document.getElementById('deconv-sample-select');
+  const backgroundSelect = document.getElementById('deconv-background-select');
+  if (select) {
+    select.addEventListener('change', async () => {
+      syncDeconvBackgroundSelection();
+      syncDeconvMwAlgorithmDefault(select.value || '', { force: true });
+      if (select.value) {
+        await autoRunDeconvolutionOnTabOpen();
+      } else {
+        setDeconvEmptyState(true);
+      }
+    });
+  }
+  if (backgroundSelect) {
+    backgroundSelect.addEventListener('change', async () => {
+      state.deconvAutoRunSignature = '';
+      const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+      if (!samplePath) return;
+      await refreshDeconvWindowContext(samplePath);
+      if (state.deconvResults && state.deconvSamplePath === samplePath) {
+        await runDeconvolution({ useOverlay: false, silentSuccess: true });
+      }
+    });
+  }
+}
+
+function renderDeconvInteractionModeButtons() {
+  const deconvoluteBtn = document.getElementById('btn-deconv-mode-deconvolute');
+  const zoomBtn = document.getElementById('btn-deconv-mode-zoom');
+  if (!deconvoluteBtn || !zoomBtn) return;
+
+  const isDeconvolute = state.deconvInteractionMode !== 'zoom';
+  deconvoluteBtn.classList.toggle('btn-primary', isDeconvolute);
+  zoomBtn.classList.toggle('btn-primary', !isDeconvolute);
+}
+
+function setDeconvInteractionMode(mode) {
+  state.deconvInteractionMode = mode === 'zoom' ? 'zoom' : 'deconvolute';
+  localStorage.setItem('lcms-deconv-interaction-mode', state.deconvInteractionMode);
+  renderDeconvInteractionModeButtons();
+
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (samplePath) {
+    refreshDeconvWindowContext(samplePath);
+  }
+}
+
+function bindDeconvWindowDragSelection(divId) {
+  const plot = document.getElementById(divId);
+  if (!plot || typeof plot.on !== 'function') return;
+
+  if (typeof plot.removeAllListeners === 'function') {
+    plot.removeAllListeners('plotly_relayout');
+    plot.removeAllListeners('plotly_selected');
+  }
+
+  if (state.deconvInteractionMode === 'zoom') return;
+
+  plot.on('plotly_selected', async (eventData) => {
+    if (!eventData || state.deconvDragSelectionInFlight) return;
+
+    const points = Array.isArray(eventData.points) ? eventData.points : [];
+    const startRaw = eventData.range?.x?.[0]
+      ?? points[0]?.x;
+    const endRaw = eventData.range?.x?.[1]
+      ?? points[points.length - 1]?.x;
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    if ((end - start) < 0.02) return;
+
+    await applyDraggedDeconvWindow(start, end);
+  });
+}
+
+async function applyDraggedDeconvWindow(start, end) {
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) return;
+
+  const normalizedStart = Math.max(0, Math.min(start, end));
+  const normalizedEnd = Math.max(normalizedStart, end);
+  if ((normalizedEnd - normalizedStart) < 0.02) return;
+
+  state.deconvDragSelectionInFlight = true;
+  try {
+    document.getElementById('deconv-start').value = formatDeconvTimeValue(normalizedStart);
+    document.getElementById('deconv-end').value = formatDeconvTimeValue(normalizedEnd);
+    state.deconvAutoRunSignature = '';
+    await refreshDeconvWindowContext(samplePath);
+    await runDeconvolution({ useOverlay: false, silentSuccess: true });
+  } finally {
+    state.deconvDragSelectionInFlight = false;
+  }
+}
+
+async function refreshDeconvWindowContext(samplePath = null) {
+  const path = samplePath || document.getElementById('deconv-sample-select').value;
+  const uvDiv = document.getElementById('deconv-uv-plot');
+  const ticDiv = document.getElementById('deconv-tic-plot');
+
+  if (!path) {
+    setDeconvEmptyState(true);
+    return;
+  }
+  setDeconvEmptyState(false);
+
+  const start = parseFloat(document.getElementById('deconv-start').value);
+  const end = parseFloat(document.getElementById('deconv-end').value);
+  const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value) || 0;
+  const backgroundPath = getSelectedDeconvBackgroundPath(path);
+  const loadedMeta = state.loadedSamples[path];
+
+  let preferredWavelength = getSelectedWavelengths()[0];
+  if (!Number.isFinite(preferredWavelength)) {
+    if (loadedMeta && Array.isArray(loadedMeta.uv_wavelengths) && loadedMeta.uv_wavelengths.length > 0) {
+      preferredWavelength = Number(loadedMeta.uv_wavelengths[0]);
+    }
+  }
+  if (!Number.isFinite(preferredWavelength)) preferredWavelength = 280;
+
+  if (backgroundPath) {
+    try {
+      const bgsub = await api.runBackgroundSubtraction({
+        samplePath: path,
+        backgroundPath,
+        wavelengths: [preferredWavelength],
+        mzTargets: [],
+        uvSmoothing,
+      });
+      const uv = getBgsubDeconvUvChannel(bgsub);
+      if (uv) {
+        const uvWave = Number.isFinite(Number(uv.nm)) ? Number(uv.nm) : preferredWavelength;
+        charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
+          title: `Background-Subtracted UV (${uvWave.toFixed(0)} nm)`,
+          yLabel: `UV ${uvWave.toFixed(0)} nm (mAU)`,
+          color: '#1f77b4',
+          start,
+          end,
+          startAtZero: true,
+          windowColor: 'rgba(255, 215, 0, 0.25)',
+          dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+          selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+        });
+        bindDeconvWindowDragSelection('deconv-uv-plot');
+      } else {
+        uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for background-subtracted view</p>';
+      }
+
+      const tic = getBgsubDeconvTicChannel(bgsub, loadedMeta);
+      if (tic) {
+        const ticPolarityLabel = tic.polarity === 'negative' ? ' (-)' : tic.polarity === 'positive' ? ' (+)' : '';
+        charts.plotChromatogramWithWindow('deconv-tic-plot', tic.times, tic.intensities, {
+          title: `Background-Subtracted TIC${ticPolarityLabel}`,
+          yLabel: 'TIC Intensity',
+          color: '#ff7f0e',
+          start,
+          end,
+          startAtZero: true,
+          windowColor: 'rgba(255, 215, 0, 0.25)',
+          dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+          selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+        });
+        bindDeconvWindowDragSelection('deconv-tic-plot');
+      } else {
+        ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for background-subtracted view</p>';
+      }
+    } catch (_) {
+      uvDiv.innerHTML = '<p class="placeholder-msg">Background-subtracted context failed to load</p>';
+      ticDiv.innerHTML = '<p class="placeholder-msg">Background-subtracted context failed to load</p>';
+    }
+  } else {
+    try {
+      const uv = await api.getUVChromatogram(path, preferredWavelength, uvSmoothing);
+      charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
+        title: `UV Chromatogram (${preferredWavelength.toFixed(0)} nm)`,
+        yLabel: `UV ${preferredWavelength.toFixed(0)} nm (mAU)`,
+        color: '#1f77b4',
+        start,
+        end,
+        startAtZero: true,
+        windowColor: 'rgba(255, 215, 0, 0.25)',
+        dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+        selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+      });
+      bindDeconvWindowDragSelection('deconv-uv-plot');
+    } catch (_) {
+      uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for this sample</p>';
+    }
+
+    try {
+      const tic = await api.getTIC(path);
+      charts.plotChromatogramWithWindow('deconv-tic-plot', tic.times, tic.intensities, {
+        title: 'Total Ion Chromatogram (TIC)',
+        yLabel: 'TIC Intensity',
+        color: '#ff7f0e',
+        start,
+        end,
+        startAtZero: true,
+        windowColor: 'rgba(255, 215, 0, 0.25)',
+        dragmode: state.deconvInteractionMode === 'zoom' ? 'zoom' : 'select',
+        selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
+      });
+      bindDeconvWindowDragSelection('deconv-tic-plot');
+    } catch (_) {
+      ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for this sample</p>';
+    }
+  }
+  schedulePlotlyResize(['deconv-uv-plot', 'deconv-tic-plot']);
+}
+
+async function autoDetectDeconvWindow() {
+  const samplePath = document.getElementById('deconv-sample-select').value;
+  if (!samplePath) {
+    toast('Select a sample first', 'warning');
+    return;
+  }
+
+  showLoading('Auto-detecting time window...');
+  try {
+    if (state.deconvWindowEditTimer) {
+      clearTimeout(state.deconvWindowEditTimer);
+      state.deconvWindowEditTimer = null;
+    }
+    state.deconvWindowEditRunId += 1;
+    const data = await api.autoDetectWindow(samplePath);
+    document.getElementById('deconv-start').value = formatDeconvTimeValue(data.start);
+    document.getElementById('deconv-end').value = formatDeconvTimeValue(data.end);
+    await refreshDeconvWindowContext(samplePath);
+    const signature = getDeconvolutionRunSignature();
+    if (signature && signature !== state.deconvAutoRunSignature) {
+      await runDeconvolution({ useOverlay: false, silentSuccess: true });
+    }
+    toast(`Window detected: ${formatDeconvTimeValue(data.start)} - ${formatDeconvTimeValue(data.end)} min`, 'success');
+  } catch (err) {
+    toast(`Auto-detect failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function refreshCurrentDeconvolutionSample() {
+  const samplePath = document.getElementById('deconv-sample-select')?.value || '';
+  if (!samplePath) {
+    toast('Select a sample first', 'warning');
+    return;
+  }
+
+  showLoading('Refreshing sample...');
+  try {
+    await loadSampleMeta(samplePath, { silent: true });
+    await refreshDeconvWindowContext(samplePath);
+    state.deconvAutoRunSignature = '';
+
+    if (state.deconvResults && state.deconvSamplePath === samplePath) {
+      await runDeconvolution({ useOverlay: false, silentSuccess: true });
+      toast('Sample refreshed and deconvolution rerun', 'success');
+    } else {
+      toast('Sample refreshed', 'success');
+    }
+  } catch (err) {
+    toast(`Refresh failed: ${err.message || err}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function runDeconvolution(options = {}) {
+  const samplePath = document.getElementById('deconv-sample-select').value;
+  if (!samplePath) {
+    toast('Select a sample first', 'warning');
+    return;
+  }
+
+  const params = buildActiveDeconvolutionRequest(
+    samplePath,
+    parseFloat(document.getElementById('deconv-start').value),
+    parseFloat(document.getElementById('deconv-end').value),
+  );
+  const requestSignature = JSON.stringify(params);
+
+  const useOverlay = options.useOverlay !== false;
+  const silentSuccess = options.silentSuccess === true;
+  setDeconvolutionBusy(true);
+  if (useOverlay) {
+    showLoading('Running deconvolution...');
+  }
+  try {
+    const data = await api.runDeconvolution(params);
+    state.deconvResults = data;
+    state.deconvDisplayComponents = filterDeconvDisplayResults(data.components || [], {
+      expertMode: document.getElementById('expert-mode-toggle').checked,
+      topN: DECONV_DISPLAY_TOP_N,
+    });
+    state.deconvSamplePath = samplePath;
+    const resultRange = Array.isArray(data.time_range) ? data.time_range : null;
+    state.deconvTimeRange = [
+      Number.isFinite(params.start_time) ? params.start_time : (resultRange ? resultRange[0] : null),
+      Number.isFinite(params.end_time) ? params.end_time : (resultRange ? resultRange[1] : null),
+    ];
+    state.deconvAutoRunSignature = requestSignature;
+    renderDeconvResults(data);
+    renderReportSummary();
+    if (!silentSuccess) {
+      toast('Deconvolution complete', 'success');
+    }
+  } catch (err) {
+    const msg = typeof err === 'object' ? (err.message || JSON.stringify(err)) : String(err);
+    toast(`Deconvolution failed: ${msg}`, 'error');
+  } finally {
+    setDeconvolutionBusy(false);
+    if (useOverlay) {
+      hideLoading();
+    }
+  }
+}
+
+function isLikelyHalfMassAlias(component, allResults, ratioTol = 0.01) {
+  const chargeStates = Array.isArray(component.charge_states) ? component.charge_states : [];
+  if (chargeStates.length === 0) return false;
+  if (Number(component.num_charges || 0) > 3) return false;
+  if (Math.max(...chargeStates.map((z) => Number(z) || 0)) > 6) return false;
+
+  const mass = Number(component.mass || 0);
+  if (!(mass > 0)) return false;
+
+  return allResults.some((other) => {
+    if (other === component) return false;
+    const otherMass = Number(other.mass || 0);
+    if (!(otherMass > mass)) return false;
+    return Math.abs((otherMass / mass) - 2.0) <= ratioTol;
+  });
+}
+
+function filterDeconvDisplayResults(results, options = {}) {
+  const expertMode = options.expertMode === true;
+  const minRelIntensity = Number.isFinite(options.minRelIntensity) ? options.minRelIntensity : 0.05;
+  const topN = Math.max(1, Math.min(20, parseInt(options.topN, 10) || DECONV_DISPLAY_TOP_N));
+
+  if (!Array.isArray(results) || results.length === 0) return [];
+
+  const ordered = [...results].sort((a, b) => (Number(b.intensity || 0) - Number(a.intensity || 0)));
+  const topIntensity = Number(ordered[0]?.intensity || 0);
+  if (!(topIntensity > 0)) return ordered.slice(0, topN);
+
+  const filtered = ordered.filter((r) => Number(r.intensity || 0) >= minRelIntensity * topIntensity);
+  const nonExpert = expertMode ? filtered : filtered.filter((r) => !isLikelyHalfMassAlias(r, ordered));
+  if (nonExpert.length > 0) return nonExpert.slice(0, topN);
+  return ordered.slice(0, topN);
+}
+
+function computeMassSpectrumGuideMzs(mzValues, components) {
+  if (!Array.isArray(mzValues) || mzValues.length === 0 || !Array.isArray(components) || components.length === 0) {
+    return [];
+  }
+
+  let mzMin = Number.POSITIVE_INFINITY;
+  let mzMax = Number.NEGATIVE_INFINITY;
+  mzValues.forEach((v) => {
+    const mz = Number(v);
+    if (!Number.isFinite(mz)) return;
+    if (mz < mzMin) mzMin = mz;
+    if (mz > mzMax) mzMax = mz;
+  });
+  if (!Number.isFinite(mzMin) || !Number.isFinite(mzMax) || mzMax <= mzMin) return [];
+
+  const guides = [];
+  const seen = new Set();
+  const addGuide = (targetMz) => {
+    const mz = Number(targetMz);
+    if (!Number.isFinite(mz) || mz <= 0 || mz < mzMin || mz > mzMax) return;
+    const key = mz.toFixed(6);
+    if (seen.has(key)) return;
+    seen.add(key);
+    guides.push(mz);
+  };
+
+  const proton = 1.00784;
+
+  // Include ion guides from all provided components (not only top component),
+  // so secondary component charge states (e.g. z=4) are also highlighted.
+  components.forEach((comp) => {
+    const observedIons = Array.isArray(comp.ion_mzs) ? comp.ion_mzs.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0) : [];
+    if (observedIons.length > 0) {
+      observedIons.forEach((mz) => { addGuide(mz); });
+      return;
+    }
+
+    const charges = Array.isArray(comp.charge_states) ? comp.charge_states : [];
+    const mass = Number(comp.mass || 0);
+    if (!(mass > 0) || charges.length === 0) return;
+
+    charges.forEach((zRaw) => {
+      const z = Number(zRaw);
+      if (!(z > 0)) return;
+      const theoMz = (mass + (z * proton)) / z;
+      addGuide(theoMz);
+    });
+  });
+
+  return guides;
+}
+
+function renderDeconvResults(data) {
+  setDeconvEmptyState(false);
+  const resultsDiv = document.getElementById('deconv-results');
+  resultsDiv.classList.remove('hidden');
+  syncDeconvBottomLayout();
+
+  const components = getDeconvDisplayComponents();
+  if (components.length > 0) {
+    const prevIdx = Number.isInteger(state.deconvSelectedComponentIndex) ? state.deconvSelectedComponentIndex : 0;
+    state.deconvSelectedComponentIndex = Math.max(0, Math.min(components.length - 1, prevIdx));
+  } else {
+    state.deconvSelectedComponentIndex = null;
+  }
+
+  // Mass spectrum plot with annotations from detected components
+  if (data.spectrum) {
+    // Keep mass-spectrum guide lines consistent with Ion Selection per Component.
+    const guideMzs = computeMassSpectrumGuideMzs(data.spectrum.mz, components);
+    const spectrumPlotEl = document.getElementById('deconv-spectrum-plot');
+    const spectrumHeight = Number(spectrumPlotEl?.dataset?.plotHeight || 0);
+    const hasBackground = Boolean(data.background_path);
+    const overlaySpectra = [];
+    if (hasBackground && data.raw_spectrum && Array.isArray(data.raw_spectrum.mz) && data.raw_spectrum.mz.length > 0) {
+      overlaySpectra.push({
+        mz: data.raw_spectrum.mz,
+        intensities: data.raw_spectrum.intensities || [],
+        label: 'Raw',
+        color: '#9aa0a6',
+        opacity: 0.42,
+      });
+    }
+    if (hasBackground && data.background_spectrum && Array.isArray(data.background_spectrum.mz) && data.background_spectrum.mz.length > 0) {
+      overlaySpectra.push({
+        mz: data.background_spectrum.mz,
+        intensities: data.background_spectrum.intensities || [],
+        label: 'Background',
+        color: '#f0ad4e',
+        opacity: 0.32,
+      });
+    }
+    charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {
+      title: hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum',
+      primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
+      primaryColor: '#1f77b4',
+      overlaySpectra,
+      guideMzs,
+      heightPx: Number.isFinite(spectrumHeight) && spectrumHeight > 0 ? spectrumHeight : undefined,
+    });
+  }
+
+  // Deconvoluted masses stem plot (vertical lines like Streamlit)
+  if (components.length > 0) {
+    charts.plotDeconvMasses('deconv-mass-plot', components);
+  } else {
+    document.getElementById('deconv-mass-plot').innerHTML = '<p class="placeholder-msg">No masses deconvoluted</p>';
+  }
+
+  void renderDeconvDenseMassPreview();
+
+  // Ensure both side-by-side Plotly canvases reflow to container width.
+  schedulePlotlyResize(['deconv-spectrum-plot', 'deconv-mass-plot', 'deconv-dense-mass-preview']);
+
+  // Results table
+  const tableContainer = document.getElementById('deconv-results-table-container');
+  tableContainer.innerHTML = '';
+
+  if (components.length > 0) {
+    const maxIntensity = Math.max(...components.map(c => Number(c.intensity || 0)));
+    let html = `<div class="data-table-wrapper"><table class="data-table">
+      <thead><tr>
+        <th>#</th><th>Mass (Da)</th><th>Charges</th><th>Num Ions</th><th>R&sup2;</th><th>Rel. Intensity (%)</th>
+      </tr></thead><tbody>`;
+
+    components.forEach((m, i) => {
+      const chargeStr = m.charge_states ? m.charge_states.join(', ') : (m.ion_charges ? m.ion_charges.join(', ') : '-');
+      const relInt = maxIntensity > 0 && m.intensity != null ? ((m.intensity / maxIntensity) * 100).toFixed(1) : '-';
+      html += `<tr class="deconv-row" data-idx="${i}" style="cursor:pointer;">
+        <td>${i + 1}</td>
+        <td>${m.mass.toFixed(1)}</td>
+        <td style="font-family:var(--font);max-width:150px;overflow:hidden;text-overflow:ellipsis;">${chargeStr}</td>
+        <td>${m.peaks_found || m.num_charges || '-'}</td>
+        <td>${m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
+        <td>${relInt}</td>
+      </tr>`;
+    });
+
+    html += '</tbody></table></div>';
+    tableContainer.innerHTML = html;
+
+    // Row click -> show ion detail
+    tableContainer.querySelectorAll('.deconv-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const idx = parseInt(row.dataset.idx);
+        state.deconvSelectedComponentIndex = Number.isInteger(idx) ? idx : 0;
+        showIonDetail(components[idx]);
+      });
+    });
+  }
+
+  // Ion detail area
+  const ionDetail = document.getElementById('deconv-ion-detail');
+  ionDetail.innerHTML = '<p class="muted" style="padding:12px;">Click a row above to see ion detail</p>';
+
+  renderDeconvIonSelectionGraph();
+}
+
+function buildCurrentDeconvStyle() {
+  const showTitle = document.getElementById('deconv-show-title')?.checked ?? true;
+  const showSubtitle = document.getElementById('deconv-show-subtitle')?.checked ?? true;
+  const figWidth = parseFloat(document.getElementById('fig-width').value) || 6;
+  const lineWidth = parseFloat(document.getElementById('line-width').value) || 0.8;
+  const showGrid = document.getElementById('show-grid').checked;
+  const axisMinInput = document.getElementById('mass-axis-min').value;
+  const axisMaxInput = document.getElementById('mass-axis-max').value;
+  return {
+    fig_width: figWidth,
+    line_width: lineWidth,
+    show_grid: showGrid,
+    deconv_x_min_da: axisMinInput ? parseFloat(axisMinInput) : 1000.0,
+    deconv_x_max_da: axisMaxInput ? parseFloat(axisMaxInput) : 50000.0,
+    deconv_show_title: showTitle,
+    deconv_show_subtitle: showSubtitle,
+  };
+}
+
+function applyDenseDeconvProfileStyle(style = {}) {
+  const params = getCurrentDeconvolutionParameters();
+  style.deconv_export_variant = 'dense-profile';
+  style.deconv_profile_bin_da = 0.10;
+  style.deconv_profile_smooth_sigma_da = 2.0;
+  style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
+  style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
+  style.deconv_profile_use_monoisotopic = params.monoisotopic === true;
+  style.show_grid = false;
+  return style;
+}
+
+function getSelectedDeconvComponent() {
+  const components = getDeconvDisplayComponents();
+  if (!Array.isArray(components) || components.length === 0) return null;
+  const idx = Number.isInteger(state.deconvSelectedComponentIndex) ? state.deconvSelectedComponentIndex : 0;
+  return components[Math.max(0, Math.min(components.length - 1, idx))] || components[0] || null;
+}
+
+function getDeconvDisplayComponents() {
+  if (Array.isArray(state.deconvDisplayComponents) && state.deconvDisplayComponents.length > 0) {
+    return state.deconvDisplayComponents;
+  }
+  const comps = state.deconvResults && Array.isArray(state.deconvResults.components) ? state.deconvResults.components : [];
+  return filterDeconvDisplayResults(comps, {
+    expertMode: document.getElementById('expert-mode-toggle')?.checked === true,
+    topN: DECONV_DISPLAY_TOP_N,
+  });
+}
+
+function resetDeconvDenseMassProfile(message = 'Run deconvolution to render the full dense mass profile.') {
+  const container = document.getElementById('deconv-dense-mass-preview');
+  if (!container) return;
+  state.deconvDenseProfileRenderId += 1;
+  try { charts.clearPlot('deconv-dense-mass-preview'); } catch (_) {}
+  container.innerHTML = `<p class="placeholder-msg">${escapeHtml(message)}</p>`;
+}
+
+function renderDeconvDenseMassPreview() {
+  const container = document.getElementById('deconv-dense-mass-preview');
+  if (!container) return;
+
+  const samplePath = state.deconvSamplePath;
+  const spectrum = state.deconvResults?.spectrum || null;
+  const hasSpectrum = (
+    spectrum &&
+    Array.isArray(spectrum.mz) &&
+    spectrum.mz.length > 0 &&
+    Array.isArray(spectrum.intensities) &&
+    spectrum.intensities.length > 0
+  );
+
+  if (!samplePath || !hasSpectrum) {
+    resetDeconvDenseMassProfile();
+    return;
+  }
+
+  const renderId = state.deconvDenseProfileRenderId + 1;
+  state.deconvDenseProfileRenderId = renderId;
+  try { charts.clearPlot('deconv-dense-mass-preview'); } catch (_) {}
+  container.innerHTML = '<p class="muted" style="padding:10px 0;">Rendering dense mass profile...</p>';
+
+  setTimeout(() => {
+    if (
+      renderId !== state.deconvDenseProfileRenderId ||
+      state.deconvSamplePath !== samplePath ||
+      state.deconvResults?.spectrum !== spectrum
+    ) {
+      return;
+    }
+    try {
+      container.innerHTML = '';
+      charts.plotDenseDeconvolutedMassProfile('deconv-dense-mass-preview', spectrum, {
+        style: applyDenseDeconvProfileStyle(buildCurrentDeconvStyle()),
+        height: 340,
+      });
+      schedulePlotlyResize(['deconv-dense-mass-preview']);
+    } catch (err) {
+      if (renderId !== state.deconvDenseProfileRenderId) return;
+      resetDeconvDenseMassProfile(`Dense plot failed: ${err.message || String(err)}`);
+    }
+  }, 0);
+}
+
+async function renderDeconvIonSelectionGraph() {
+  const container = document.getElementById('deconv-ion-selection-plot');
+  if (!container) return;
+
+  const samplePath = state.deconvSamplePath;
+  const tr = state.deconvTimeRange || (state.deconvResults && state.deconvResults.time_range);
+  const components = getDeconvDisplayComponents();
+
+  if (!samplePath || !Array.isArray(tr) || tr.length < 2 || !Number.isFinite(tr[0]) || !Number.isFinite(tr[1]) || tr[1] <= tr[0] || components.length === 0) {
+    container.classList.remove('interactive-ion-selection');
+    container.classList.remove('has-image');
+    container.style.height = '';
+    container.innerHTML = '<p class="placeholder-msg">Run deconvolution to render ion selection graph.</p>';
+    return;
+  }
+
+  try {
+    if (state.deconvIonSelectionObjectUrl) {
+      URL.revokeObjectURL(state.deconvIonSelectionObjectUrl);
+      state.deconvIonSelectionObjectUrl = null;
+    }
+
+    const spectrum = state.deconvResults && state.deconvResults.spectrum;
+    const mz = spectrum && Array.isArray(spectrum.mz) ? spectrum.mz : [];
+    const intensities = spectrum && Array.isArray(spectrum.intensities) ? spectrum.intensities : [];
+    if (mz.length === 0 || intensities.length === 0) {
+      throw new Error('No mass spectrum found for ion selection rendering');
+    }
+
+    container.classList.remove('has-image');
+    container.classList.add('interactive-ion-selection');
+    container.innerHTML = '';
+    // Set container height based on number of subplot rows so Plotly autosize works
+    const nComps = Math.max(1, Math.min(10, components.length));
+    const cols = nComps > 1 ? 2 : 1;
+    const ionRows = Math.ceil(nComps / cols);
+    container.style.height = Math.max(400, 350 * ionRows + 70) + 'px';
+    charts.plotIonSelectionInteractive('deconv-ion-selection-plot', mz, intensities, components, {
+      title: 'Ion Selection per Component',
+    });
+  } catch (err) {
+    container.classList.remove('interactive-ion-selection');
+    container.classList.remove('has-image');
+    container.style.height = '';
+    const msg = err && err.message ? String(err.message) : String(err);
+    const hint = msg.includes('Not Found')
+      ? ' Backend is likely running old code. Restart ./start-dev.sh and hard refresh.'
+      : '';
+    container.innerHTML = `<p class="placeholder-msg">Ion selection graph failed: ${escapeHtml(msg + hint)}</p>`;
+  }
+}
+
+async function exportDeconvIonSelection(format) {
+  const samplePath = state.deconvSamplePath;
+  const tr = state.deconvTimeRange || (state.deconvResults && state.deconvResults.time_range);
+  const components = getDeconvDisplayComponents();
+
+  if (!samplePath || !Array.isArray(tr) || tr.length < 2 || components.length === 0) {
+    toast('Run deconvolution first', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
+  const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
+
+  showLoading(`Exporting ${format.toUpperCase()}...`);
+  try {
+    const response = await api.exportIonSelection({
+      path: samplePath,
+      start: tr[0],
+      end: tr[1],
+      components,
+      format,
+      dpi,
+      style: buildCurrentDeconvStyle(),
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${sanitizeFilename(sampleName)}_ion_selection.${format}`);
+    toast(`Exported ${format.toUpperCase()} (ion selection)`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportDeconvSpectrumPdf() {
+  const samplePath = state.deconvSamplePath;
+  const spectrum = state.deconvResults?.spectrum || null;
+  const hasSpectrum = spectrum
+    && Array.isArray(spectrum.mz)
+    && spectrum.mz.length > 0
+    && Array.isArray(spectrum.intensities)
+    && spectrum.intensities.length > 0;
+  if (!samplePath || !hasSpectrum) {
+    toast('Run deconvolution first', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
+  const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
+  const title = state.deconvResults?.background_path
+    ? 'Background-Subtracted Mass Spectrum'
+    : 'Mass Spectrum';
+
+  showLoading('Exporting mass spectrum PDF...');
+  try {
+    const response = await api.exportDeconvolutionSpectrum({
+      sample_name: sampleName,
+      spectrum,
+      title,
+      format: 'pdf',
+      dpi,
+      style: buildCurrentDeconvStyle(),
+    });
+    const blob = await backendResponseToBlob(response);
+    downloadBlob(blob, `${sanitizeFilename(sampleName)}_mass_spectrum.pdf`);
+    toast('Exported PDF (mass spectrum)', 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportDeconvMasses(format) {
+  const samplePath = state.deconvSamplePath;
+  const components = getDeconvDisplayComponents();
+  const spectrum = state.deconvResults?.spectrum || null;
+  const requestedFormat = String(format || '').toLowerCase();
+  const isDensePdf = requestedFormat === 'pdf-dense';
+  if (!samplePath || (components.length === 0 && !isDensePdf)) {
+    toast('Run deconvolution first', 'warning');
+    return;
+  }
+  if (
+    isDensePdf &&
+    (
+      !spectrum ||
+      !Array.isArray(spectrum.mz) ||
+      spectrum.mz.length === 0 ||
+      !Array.isArray(spectrum.intensities) ||
+      spectrum.intensities.length === 0
+    )
+  ) {
+    toast('Run deconvolution first', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
+  const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
+  const isWidePdf = requestedFormat === 'pdf-wide';
+  const isSideBySidePdf = requestedFormat === 'pdf-side-by-side';
+  const exportFormat = (isWidePdf || isSideBySidePdf || isDensePdf) ? 'pdf' : requestedFormat;
+  const style = buildCurrentDeconvStyle();
+  if (isWidePdf || isSideBySidePdf) {
+    style.deconv_export_variant = isSideBySidePdf ? 'side-by-side' : 'wide-inset';
+    style.deconv_selected_component = getSelectedDeconvComponent();
+  }
+  if (isDensePdf) {
+    applyDenseDeconvProfileStyle(style);
+  }
+
+  const exportLabel = isDensePdf
+    ? 'DENSE PDF'
+    : isSideBySidePdf
+    ? 'SIDE-BY-SIDE PDF'
+    : (isWidePdf ? 'WIDE PDF' : String(exportFormat || '').toUpperCase());
+  showLoading(`Exporting ${exportLabel}...`);
+  try {
+    const response = await api.exportDeconvolutedMasses({
+      sample_name: sampleName,
+      components,
+      spectrum,
+      format: exportFormat,
+      dpi,
+      variant: isDensePdf ? 'dense-profile' : (isSideBySidePdf ? 'side-by-side' : (isWidePdf ? 'wide-inset' : 'standard')),
+      style,
+    });
+    const blob = await backendResponseToBlob(response);
+    const filename = isDensePdf
+      ? `${sanitizeFilename(sampleName)}_deconvoluted_masses_dense.pdf`
+      : isSideBySidePdf
+      ? `${sanitizeFilename(sampleName)}_deconvoluted_masses_side_by_side.pdf`
+      : isWidePdf
+      ? `${sanitizeFilename(sampleName)}_deconvoluted_masses_wide.pdf`
+      : `${sanitizeFilename(sampleName)}_deconvoluted_masses.${exportFormat}`;
+    downloadBlob(blob, filename);
+    toast(`Exported ${exportLabel} (deconvoluted masses)`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function showIonDetail(component) {
+  const container = document.getElementById('deconv-ion-detail');
+  container.innerHTML = '';
+
+  const card = document.createElement('div');
+  card.className = 'ion-detail-card';
+  card.innerHTML = `<h4>Ion Detail: ${component.mass.toFixed(1)} Da</h4>`;
+  container.appendChild(card);
+
+  const charges = component.ion_charges || [];
+  const mzs = component.ion_mzs || [];
+  const intensities = component.ion_intensities || [];
+  const maxIntensity = intensities.reduce((maxVal, value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > maxVal ? n : maxVal;
+  }, 0);
+
+  // Also show a small table of ions
+  if (charges.length > 0) {
+    const PROTON = 1.00784;
+    let html = `<div class="data-table-wrapper ion-detail-table-wrapper"><table class="data-table ion-detail-table">
+      <thead><tr><th>z</th><th>m/z Theoretical</th><th>m/z Observed</th><th>Intensity</th><th>Rel. %</th><th>&Delta; ppm</th></tr></thead><tbody>`;
+
+    charges.forEach((z, i) => {
+      const mzObs = mzs[i] || 0;
+      const mzTheo = (component.mass + z * PROTON) / z;
+      const int_ = intensities[i] || 0;
+      const relPct = maxIntensity > 0 ? (Number(int_) / maxIntensity) * 100 : 0;
+      const ppm = mzTheo > 0 ? (Math.abs(mzObs - mzTheo) / mzTheo * 1e6).toFixed(1) : '-';
+      html += `<tr>
+        <td>${z}</td>
+        <td>${mzTheo.toFixed(4)}</td>
+        <td>${mzObs.toFixed(4)}</td>
+        <td>${int_.toExponential(2)}</td>
+        <td>${relPct.toFixed(1)}</td>
+        <td>${ppm}</td>
+      </tr>`;
+    });
+
+    html += '</tbody></table></div>';
+    card.insertAdjacentHTML('beforeend', html);
+  } else {
+    card.insertAdjacentHTML('beforeend', '<p class="muted" style="margin-top:8px;">No ion assignments available for this component.</p>');
+  }
+}
+
+// ===== Batch Deconvolution Tab =====
+function getBatchDeconvRunSignature() {
+  if (!Array.isArray(state.selectedFiles) || state.selectedFiles.length < 2) return '';
+  const fallbackStart = parseFloat(document.getElementById('deconv-start')?.value);
+  const fallbackEnd = parseFloat(document.getElementById('deconv-end')?.value);
+  const sampleSig = state.selectedFiles.map((f) => f.path).join('||');
+  const requestSig = JSON.stringify(buildDeconvolutionRequest('__batch__', fallbackStart, fallbackEnd));
+  return `${sampleSig}|${requestSig}`;
+}
+
+async function autoRunBatchDeconvolutionOnTabOpen() {
+  if (state.batchDeconvAutoRunInFlight) return;
+  const signature = getBatchDeconvRunSignature();
+  if (!signature) return;
+  if (signature === state.batchDeconvAutoRunSignature && state.batchDeconvData) return;
+
+  state.batchDeconvAutoRunInFlight = true;
+  try {
+    state.batchDeconvAutoRunSignature = signature;
+    await runBatchDeconvolution();
+  } finally {
+    state.batchDeconvAutoRunInFlight = false;
+  }
+}
+
+function initBatchDeconvolution() {
+  document.getElementById('btn-run-batch-deconv').addEventListener('click', runBatchDeconvolution);
+  document.getElementById('btn-export-batch-deconv-csv').addEventListener('click', exportBatchDeconvCSV);
+  document.getElementById('batch-deconv-top-n').addEventListener('change', () => {
+    if (state.batchDeconvData) renderBatchDeconvolution(state.batchDeconvData);
+  });
+  document.querySelectorAll('.btn-export-batch-deconv').forEach(btn => {
+    btn.addEventListener('click', () => exportAllPlots('tab-batch-deconv', 'batch_deconvolution', btn.dataset.format));
+  });
+}
+
+function sanitizeFilename(name) {
+  return String(name || 'sample')
+    .replace(/\.[dD]$/, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 100) || 'sample';
+}
+
+function sanitizeDownloadFilename(name) {
+  return String(name || 'sample')
+    .replace(/\.[dD]$/, '')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180) || 'sample';
+}
+
+async function exportPlotById(plotId, filenameBase, format, options = {}) {
+  const div = document.getElementById(plotId);
+  if (!div || !div.classList.contains('js-plotly-plot')) {
+    toast('Plot not available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
+  const scale = dpi / 96;
+
+  showLoading(`Exporting ${format.toUpperCase()}...`);
+  try {
+    if (format === 'pdf') {
+      await exportPlotsAsPDF([div], filenameBase, scale, options);
+    } else {
+      const dims = getExportDimensions(div, scale, options);
+      const exportOptions = {
+        ...options,
+        exportPixelWidth: dims.width,
+        exportPixelHeight: dims.height,
+      };
+      const imageDataUrl = await buildExportImage(div, format, dims.width, dims.height, exportOptions);
+      downloadBlob(dataUrlToBlob(imageDataUrl), `${filenameBase}.${format}`);
+    }
+    toast(`Exported ${format.toUpperCase()}`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function buildBatchDeconvExportStyle() {
+  const base = buildCurrentDeconvStyle();
+  return {
+    ...base,
+    deconv_show_obs_calc: false,
+    deconv_calc_mass_da: null,
+    deconv_show_peak_labels: true,
+  };
+}
+
+async function fetchBatchDeconvPreviewBlob(sample, displayComponents, dpi = 180) {
+  const response = await api.exportDeconvolutedMasses({
+    sample_name: sample.name,
+    components: displayComponents,
+    format: 'png',
+    dpi,
+    style: buildBatchDeconvExportStyle(),
+  });
+  return backendResponseToBlob(response);
+}
+
+function clearBatchDeconvPreviewUrl(previewId) {
+  const existingUrl = state.batchDeconvPreviewUrls[previewId];
+  if (existingUrl) {
+    URL.revokeObjectURL(existingUrl);
+    delete state.batchDeconvPreviewUrls[previewId];
+  }
+}
+
+function setBatchDeconvPreviewImage(previewId, sampleName, blob) {
+  const previewEl = document.getElementById(previewId);
+  if (!previewEl) return;
+
+  clearBatchDeconvPreviewUrl(previewId);
+  const url = URL.createObjectURL(blob);
+  state.batchDeconvPreviewUrls[previewId] = url;
+
+  previewEl.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = `${sampleName} export preview`;
+  previewEl.appendChild(img);
+}
+
+async function buildBatchDeconvPreviewFallbackBlob(plotId, dpi = 180) {
+  const plotDiv = document.getElementById(plotId);
+  if (!plotDiv || !plotDiv.classList.contains('js-plotly-plot')) return null;
+  const scale = dpi / 96;
+  const dims = getExportDimensions(plotDiv, scale);
+  const imageDataUrl = await buildExportImage(plotDiv, 'png', dims.width, dims.height);
+  return dataUrlToBlob(imageDataUrl);
+}
+
+async function renderBatchDeconvExportPreview(sample, displayComponents, previewId, plotId) {
+  const previewEl = document.getElementById(previewId);
+  if (!previewEl) return;
+  previewEl.innerHTML = '<p class="muted" style="padding:10px 0;">Rendering export preview...</p>';
+
+  try {
+    const blob = await fetchBatchDeconvPreviewBlob(sample, displayComponents, 180);
+    setBatchDeconvPreviewImage(previewId, sample.name, blob);
+  } catch (err) {
+    console.error('Batch deconvolution preview backend render failed:', err);
+    try {
+      const fallbackBlob = await buildBatchDeconvPreviewFallbackBlob(plotId, 180);
+      if (fallbackBlob) {
+        setBatchDeconvPreviewImage(previewId, sample.name, fallbackBlob);
+        return;
+      }
+    } catch (fallbackErr) {
+      console.error('Batch deconvolution preview fallback render failed:', fallbackErr);
+    }
+    previewEl.innerHTML = `<p class="placeholder-msg" style="padding:14px 8px;">Preview failed: ${escapeHtml(err.message || String(err))}</p>`;
+  }
+}
+
+async function getBatchDeconvTic(path) {
+  if (!path) return null;
+  if (state.batchDeconvTicCache[path]) return state.batchDeconvTicCache[path];
+  const tic = await api.getTIC(path);
+  if (tic && Array.isArray(tic.times) && Array.isArray(tic.intensities) && tic.times.length > 0 && tic.intensities.length > 0) {
+    state.batchDeconvTicCache[path] = tic;
+    return tic;
+  }
+  return null;
+}
+
+async function renderBatchDeconvTicWindow(sample, ticPlotId) {
+  const ticPlotEl = document.getElementById(ticPlotId);
+  if (!ticPlotEl) return;
+
+  ticPlotEl.innerHTML = '<p class="muted" style="padding:8px 4px;">Loading TIC...</p>';
+  try {
+    const tic = await getBatchDeconvTic(sample.path);
+    if (!tic) throw new Error('No TIC data');
+    charts.plotChromatogramWithWindow(ticPlotId, tic.times, tic.intensities, {
+      title: 'TIC',
+      color: '#ff7f0e',
+      start: Number(sample.start),
+      end: Number(sample.end),
+      windowColor: 'rgba(255, 215, 0, 0.28)',
+      showWindowAnnotation: false,
+      compact: true,
+      margin: { l: 8, r: 8, t: 28, b: 8 },
+    });
+  } catch (_) {
+    ticPlotEl.innerHTML = '<p class="placeholder-msg" style="padding:8px 4px;">No TIC</p>';
+  }
+}
+
+async function exportBatchDeconvWebappStyle(sample, displayComponents, format, plotId) {
+  const dpi = parseInt(document.getElementById('export-dpi').value) || 300;
+  const style = buildBatchDeconvExportStyle();
+
+  showLoading(`Exporting ${format.toUpperCase()}...`);
+  try {
+    const response = await api.exportDeconvolutedMasses({
+      sample_name: sample.name,
+      components: displayComponents,
+      format,
+      dpi,
+      style,
+    });
+    const blob = await backendResponseToBlob(response);
+    const fileBase = `${sanitizeFilename(sample.name)}_batch_deconvoluted_masses`;
+    downloadBlob(blob, `${fileBase}.${format}`);
+    toast(`Exported ${format.toUpperCase()}`, 'success');
+  } catch (err) {
+    if (format === 'png') {
+      const fileBase = `${sanitizeFilename(sample.name)}_batch_deconvoluted_masses`;
+      const didFallback = await fallbackBatchDeconvExport(plotId, fileBase, format, dpi);
+      if (didFallback) {
+        toast(`Exported ${format.toUpperCase()} (frontend fallback)`, 'success');
+        return;
+      }
+    }
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function fallbackBatchDeconvExport(plotId, filenameBase, format, dpi) {
+  const plotDiv = document.getElementById(plotId);
+  if (!plotDiv || !plotDiv.classList.contains('js-plotly-plot')) {
+    return false;
+  }
+
+  const scale = dpi / 96;
+  if (format === 'pdf') {
+    await exportPlotsAsPDF([plotDiv], filenameBase, scale);
+    return true;
+  }
+
+  const dims = getExportDimensions(plotDiv, scale);
+  const imageDataUrl = await buildExportImage(plotDiv, format, dims.width, dims.height);
+  downloadBlob(dataUrlToBlob(imageDataUrl), `${filenameBase}.${format}`);
+  return true;
+}
+
+async function runBatchDeconvolution() {
+  if (state.selectedFiles.length < 2) {
+    toast('Select at least 2 samples for batch deconvolution', 'warning');
+    return;
+  }
+
+  const runSignature = getBatchDeconvRunSignature();
+  const fallbackStart = parseFloat(document.getElementById('deconv-start').value) || 0;
+  const fallbackEnd = parseFloat(document.getElementById('deconv-end').value) || (fallbackStart + 1);
+
+  showLoading('Running batch deconvolution...');
+  try {
+    const results = [];
+
+    for (const file of state.selectedFiles) {
+      let start = fallbackStart;
+      let end = fallbackEnd;
+
+      try {
+        const autoWindow = await api.autoDetectWindow(file.path);
+        if (Number.isFinite(autoWindow.start) && Number.isFinite(autoWindow.end) && autoWindow.end > autoWindow.start) {
+          start = autoWindow.start;
+          end = autoWindow.end;
+        }
+      } catch (_) {
+        // Keep fallback start/end for this sample
+      }
+
+      try {
+        const req = buildDeconvolutionRequest(file.path, start, end);
+        const data = await api.runDeconvolution(req);
+        results.push({
+          name: file.name,
+          path: file.path,
+          start,
+          end,
+          status: 'ok',
+          error: '',
+          components: Array.isArray(data.components) ? data.components : [],
+        });
+      } catch (err) {
+        results.push({
+          name: file.name,
+          path: file.path,
+          start,
+          end,
+          status: 'error',
+          error: err.message || String(err),
+          components: [],
+        });
+      }
+    }
+
+    state.batchDeconvData = {
+      generatedAt: new Date().toISOString(),
+      samples: results,
+    };
+    if (runSignature) state.batchDeconvAutoRunSignature = runSignature;
+    renderBatchDeconvolution(state.batchDeconvData);
+    renderReportSummary();
+
+    const okCount = results.filter(r => r.status === 'ok').length;
+    toast(`Batch deconvolution complete (${okCount}/${results.length} succeeded)`, okCount > 0 ? 'success' : 'warning');
+  } catch (err) {
+    toast(`Batch deconvolution failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function renderBatchDeconvolution(data) {
+  const summary = document.getElementById('batch-deconv-summary');
+  const tableContainer = document.getElementById('batch-deconv-table-container');
+  const samplesContainer = document.getElementById('batch-deconv-samples');
+  const topNInput = document.getElementById('batch-deconv-top-n');
+  const topN = Math.max(1, Math.min(20, parseInt(topNInput.value) || 5));
+  const expertMode = document.getElementById('expert-mode-toggle')?.checked === true;
+  topNInput.value = String(topN);
+
+  Object.values(state.batchDeconvPreviewUrls || {}).forEach((url) => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (_) {
+      // Ignore stale object URLs.
+    }
+  });
+  state.batchDeconvPreviewUrls = {};
+
+  summary.innerHTML = '';
+  samplesContainer.innerHTML = '';
+  tableContainer.innerHTML = '';
+
+  const samples = (data.samples || []).map((sample) => ({
+    ...sample,
+    displayComponents: filterDeconvDisplayResults(sample.components || [], {
+      expertMode,
+      topN,
+    }),
+  }));
+  if (samples.length === 0) {
+    setBatchDeconvEmptyState(true);
+    return;
+  }
+  setBatchDeconvEmptyState(false);
+
+  const okCount = samples.filter(s => s.status === 'ok').length;
+  const displayedComponents = samples.reduce((acc, s) => acc + ((s.displayComponents || []).length), 0);
+  summary.innerHTML = `
+    <div class="metric"><span class="dot blue"></span> Samples: ${samples.length}</div>
+    <div class="metric"><span class="dot green"></span> Successful: ${okCount}</div>
+    <div class="metric"><span class="dot ${okCount === samples.length ? 'green' : 'red'}"></span> Failed: ${samples.length - okCount}</div>
+    <div class="metric"><span class="dot blue"></span> Mode: ${expertMode ? 'Expert' : 'Basic'}</div>
+    <div class="metric"><span class="dot blue"></span> Displayed Components: ${displayedComponents}</div>
+    <div class="metric"><span class="dot blue"></span> Showing Top N: ${topN}</div>
+  `;
+
+  samples.forEach((sample, idx) => {
+    const section = document.createElement('div');
+    section.className = 'ion-detail-card';
+    const sampleTitle = sample.name.toLowerCase().endsWith('.d') ? sample.name.slice(0, -2) : sample.name;
+    section.innerHTML = `
+      <h4>${idx + 1}. ${escapeHtml(sampleTitle)}</h4>
+      <p class="muted" style="margin-bottom:10px;">Auto window: ${Number.isFinite(sample.start) ? sample.start.toFixed(2) : '-'} - ${Number.isFinite(sample.end) ? sample.end.toFixed(2) : '-'} min</p>
+    `;
+
+    if (sample.status !== 'ok') {
+      section.insertAdjacentHTML('beforeend', `<p class="placeholder-msg" style="padding:16px 10px;">${escapeHtml(sample.error || 'No masses detected for this sample.')}</p>`);
+      samplesContainer.appendChild(section);
+      return;
+    }
+
+    const components = sample.displayComponents || [];
+    if (components.length === 0) {
+      section.insertAdjacentHTML('beforeend', '<p class="placeholder-msg" style="padding:16px 10px;">No masses detected for this sample.</p>');
+      samplesContainer.appendChild(section);
+      return;
+    }
+
+    const plotId = `batch-deconv-sample-plot-${idx}`;
+    const ticPlotId = `batch-deconv-tic-plot-${idx}`;
+    const previewId = `batch-deconv-export-preview-${idx}`;
+    section.insertAdjacentHTML('beforeend', `
+      <div class="batch-deconv-sample-layout">
+        <div class="batch-deconv-interactive">
+          <div id="${plotId}" class="batch-deconv-interactive-plot"></div>
+        </div>
+        <div class="batch-deconv-tic-wrap">
+          <div class="batch-deconv-tic">
+            <div id="${ticPlotId}" class="batch-deconv-tic-plot">
+              <p class="muted" style="padding:8px 4px;">Loading TIC...</p>
+            </div>
+          </div>
+        </div>
+        <div class="batch-deconv-preview-wrap">
+          <div id="${previewId}" class="batch-deconv-preview">
+            <p class="muted" style="padding:10px 0;">Rendering export preview...</p>
+          </div>
+        </div>
+      </div>
+    `);
+    section.insertAdjacentHTML('beforeend', `
+      <div class="batch-deconv-download-row">
+        <button class="btn btn-sm" data-format="png">Download PNG</button>
+        <button class="btn btn-sm" data-format="svg">Download SVG</button>
+        <button class="btn btn-sm" data-format="pdf">Download PDF</button>
+      </div>
+    `);
+
+    samplesContainer.appendChild(section);
+    charts.plotDeconvMasses(plotId, components, { height: 320 });
+    renderBatchDeconvTicWindow(sample, ticPlotId);
+    renderBatchDeconvExportPreview(sample, components, previewId, plotId);
+
+    section.querySelectorAll('button[data-format]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await exportBatchDeconvWebappStyle(sample, components, btn.dataset.format, plotId);
+      });
+    });
+  });
+
+  let html = `<div class="data-table-wrapper"><table class="data-table">
+    <thead><tr>
+      <th>Sample</th><th>Status</th><th>Window (min)</th><th>Components</th><th>Top Masses (Da)</th><th>Rel. Intensity (%)</th>
+    </tr></thead><tbody>`;
+
+  samples.forEach((sample) => {
+    const windowStr = `${Number.isFinite(sample.start) ? sample.start.toFixed(2) : '-'} - ${Number.isFinite(sample.end) ? sample.end.toFixed(2) : '-'}`;
+    const comps = sample.displayComponents || [];
+    const topMasses = comps.map(c => c.mass.toFixed(1)).join(', ') || '-';
+    const maxIntensity = Math.max(0, ...comps.map((c) => Number(c.intensity || 0)));
+    const relInts = comps
+      .map((c) => (maxIntensity > 0 ? ((Number(c.intensity || 0) / maxIntensity) * 100).toFixed(1) : '-'))
+      .join(', ') || '-';
+    html += `<tr>
+      <td>${escapeHtml(sample.name)}</td>
+      <td title="${escapeHtml(sample.error || '')}">${sample.status}</td>
+      <td>${windowStr}</td>
+      <td>${comps.length}</td>
+      <td>${topMasses}</td>
+      <td>${relInts}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  tableContainer.innerHTML = html;
+}
+
+function exportBatchDeconvCSV() {
+  if (!state.batchDeconvData || !state.batchDeconvData.samples || state.batchDeconvData.samples.length === 0) {
+    toast('Run batch deconvolution first', 'warning');
+    return;
+  }
+
+  const rows = [[
+    'Sample',
+    'Status',
+    'Window Start (min)',
+    'Window End (min)',
+    'Component Index',
+    'Mass (Da)',
+    'Intensity',
+    'R2',
+    'Num Charges',
+    'Error',
+  ]];
+
+  state.batchDeconvData.samples.forEach((sample) => {
+    const comps = sample.components || [];
+    if (comps.length === 0) {
+      rows.push([
+        sample.name,
+        sample.status,
+        Number.isFinite(sample.start) ? sample.start.toFixed(3) : '',
+        Number.isFinite(sample.end) ? sample.end.toFixed(3) : '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        sample.error || '',
+      ]);
+      return;
+    }
+    comps.forEach((c, idx) => {
+      rows.push([
+        sample.name,
+        sample.status,
+        Number.isFinite(sample.start) ? sample.start.toFixed(3) : '',
+        Number.isFinite(sample.end) ? sample.end.toFixed(3) : '',
+        idx + 1,
+        Number.isFinite(c.mass) ? c.mass.toFixed(4) : '',
+        Number.isFinite(c.intensity) ? c.intensity : '',
+        Number.isFinite(c.r2) ? c.r2.toFixed(6) : '',
+        Number.isFinite(c.num_charges) ? c.num_charges : '',
+        sample.error || '',
+      ]);
+    });
+  });
+
+  const csv = rows.map(r => r.join(',')).join('\n');
+  downloadBlob(new Blob([csv], { type: 'text/csv' }), 'batch_deconvolution_results.csv');
+  toast('Batch deconvolution CSV exported', 'success');
+}
+
+// ===== Time Change Tab =====
+function initTimeChangeMS() {
+  document.getElementById('btn-run-time-change-ms').addEventListener('click', () => runTimeChangeMS('ms'));
+  document.getElementById('btn-run-time-change-tic')?.addEventListener('click', () => runTimeChangeMS('tic'));
+  document.getElementById('btn-run-time-change-eic')?.addEventListener('click', () => runTimeChangeMS('eic'));
+  document.getElementById('btn-run-time-change-uv')?.addEventListener('click', () => runTimeChangeMS('uv'));
+  document.getElementById('timechange-normalize').addEventListener('change', async () => {
+    if (!state.timeChangeMSData) return;
+    const panel = document.getElementById('tab-time-change-ms');
+    showLoading('Updating normalization...');
+    if (panel) panel.classList.add('is-busy');
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    try {
+      renderTimeChangeMS(state.timeChangeMSData);
+    } catch (err) {
+      toast(`Time Change render failed: ${err.message}`, 'error');
+    } finally {
+      if (panel) panel.classList.remove('is-busy');
+      hideLoading();
+    }
+  });
+  document.querySelectorAll('.btn-export-timechange').forEach(btn => {
+    btn.addEventListener('click', () => exportTimeChangeOffset(btn.dataset.format));
+  });
+  document.getElementById('btn-export-timechange-ms-pdf')?.addEventListener('click', exportTimeChangeSummedMassPdf);
+  document.getElementById('btn-export-timechange-tic-pdf')?.addEventListener('click', exportTimeChangeTICPdf);
+  document.getElementById('btn-export-timechange-eic-pdf')?.addEventListener('click', exportTimeChangeEICPdf);
+  document.getElementById('btn-export-timechange-uv-pdf')?.addEventListener('click', exportTimeChangeUVPdf);
+}
+
+function getTimeChangeSignalKind() {
+  const kind = state.timeChangeMSData?.kind;
+  return kind === 'uv' || kind === 'tic' || kind === 'eic' ? kind : 'ms';
+}
+
+function getTimeChangeSignalLabel(kind = getTimeChangeSignalKind()) {
+  if (kind === 'uv') return 'UV';
+  if (kind === 'tic') return 'TIC';
+  if (kind === 'eic') return 'EIC';
+  return 'Mass';
+}
+
+function getTimeChangeMSWindow() {
+  const startInput = document.getElementById('timechange-ms-start');
+  const endInput = document.getElementById('timechange-ms-end');
+  let start = parseFloat(startInput?.value);
+  let end = parseFloat(endInput?.value);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    const fallback = getCurrentDeconvolutionTimeRange();
+    if (fallback) {
+      [start, end] = fallback;
+      if (startInput) startInput.value = formatDeconvTimeValue(start);
+      if (endInput) endInput.value = formatDeconvTimeValue(end);
+    }
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+  return { start, end };
+}
+
+function getTimeChangeEICSettings() {
+  const mz = parseFloat(document.getElementById('timechange-eic-mz')?.value);
+  if (!Number.isFinite(mz) || mz <= 0) return null;
+  const ionMode = document.getElementById('timechange-eic-polarity')?.value === 'negative'
+    ? 'negative'
+    : 'positive';
+  return {
+    mz,
+    ionMode,
+    mzWindow: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+    smoothing: parseInt(document.getElementById('eic-smoothing')?.value, 10) || 0,
+  };
+}
+
+async function resolveTimeChangeUvWavelength() {
+  const checked = getSelectedWavelengths().find((wl) => Number.isFinite(Number(wl)));
+  if (Number.isFinite(Number(checked))) return Number(checked);
+
+  for (const file of state.selectedFiles) {
+    let meta = state.loadedSamples[file.path];
+    if (!meta) {
+      try {
+        meta = await loadSampleMeta(file.path, { silent: true });
+      } catch (_) {
+        meta = null;
+      }
+    }
+    const wavelengths = Array.isArray(meta?.uv_wavelengths)
+      ? meta.uv_wavelengths
+      : (Array.isArray(meta?.wavelengths) ? meta.wavelengths : []);
+    const first = wavelengths.map((wl) => Number(wl)).find((wl) => Number.isFinite(wl));
+    if (Number.isFinite(first)) return first;
+  }
+
+  return NaN;
+}
+
+async function runTimeChangeMS(kind = 'ms') {
+  if (state.selectedFiles.length < 2) {
+    toast('Select at least 2 samples for Time Change', 'warning');
+    return false;
+  }
+
+  kind = kind === 'uv' || kind === 'tic' || kind === 'eic' ? kind : 'ms';
+  const signalLabel = getTimeChangeSignalLabel(kind);
+  const wavelength = kind === 'uv' ? await resolveTimeChangeUvWavelength() : null;
+  if (kind === 'uv' && !Number.isFinite(wavelength)) {
+    toast('Select a UV wavelength in Settings first', 'warning');
+    return false;
+  }
+  const msWindow = kind === 'ms' ? getTimeChangeMSWindow() : null;
+  if (kind === 'ms' && !msWindow) {
+    toast('Enter a valid Time Change MS window where end is greater than start', 'warning');
+    return false;
+  }
+  const eicSettings = kind === 'eic' ? getTimeChangeEICSettings() : null;
+  if (kind === 'eic' && !eicSettings) {
+    toast('Enter a valid positive m/z value for Time Change EIC', 'warning');
+    return false;
+  }
+
+  const loadingMessage = kind === 'uv'
+    ? 'Generating UV traces...'
+    : (kind === 'tic'
+      ? 'Generating TIC traces...'
+      : (kind === 'eic' ? 'Generating EIC traces...' : 'Generating mass spectra...'));
+  showLoading(loadingMessage);
+  try {
+    const spectra = [];
+    for (const file of state.selectedFiles) {
+      if (kind === 'uv') {
+        try {
+          const uv = await api.getUVChromatogram(
+            file.path,
+            wavelength,
+            parseInt(document.getElementById('uv-smoothing')?.value, 10) || 0,
+          );
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            wavelength,
+            status: 'ok',
+            error: '',
+            times: uv.times || [],
+            intensities: uv.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            wavelength,
+            status: 'error',
+            error: err.message || String(err),
+            times: [],
+            intensities: [],
+          });
+        }
+      } else if (kind === 'tic') {
+        try {
+          const tic = await api.getTIC(file.path);
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            status: 'ok',
+            error: '',
+            times: tic.times || [],
+            intensities: tic.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            status: 'error',
+            error: err.message || String(err),
+            times: [],
+            intensities: [],
+          });
+        }
+      } else if (kind === 'eic') {
+        try {
+          const eic = await api.getEIC(
+            file.path,
+            eicSettings.mz,
+            eicSettings.mzWindow,
+            eicSettings.smoothing,
+            eicSettings.ionMode,
+          );
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            targetMz: eicSettings.mz,
+            ionMode: eicSettings.ionMode,
+            mzWindow: eicSettings.mzWindow,
+            status: 'ok',
+            error: '',
+            times: eic.times || [],
+            intensities: eic.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            targetMz: eicSettings.mz,
+            ionMode: eicSettings.ionMode,
+            mzWindow: eicSettings.mzWindow,
+            status: 'error',
+            error: err.message || String(err),
+            times: [],
+            intensities: [],
+          });
+        }
+      } else {
+        const { start, end } = msWindow;
+
+        try {
+          const summed = await api.getSummedSpectrum(file.path, start, end);
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            start,
+            end,
+            status: 'ok',
+            error: '',
+            mz: summed.mz || [],
+            intensities: summed.intensities || [],
+          });
+        } catch (err) {
+          spectra.push({
+            name: file.name,
+            path: file.path,
+            kind,
+            start,
+            end,
+            status: 'error',
+            error: err.message || String(err),
+            mz: [],
+            intensities: [],
+          });
+        }
+      }
+    }
+
+    state.timeChangeMSData = {
+      generatedAt: new Date().toISOString(),
+      kind,
+      wavelength,
+      targetMz: eicSettings?.mz ?? null,
+      ionMode: eicSettings?.ionMode ?? null,
+      mzWindow: eicSettings?.mzWindow ?? null,
+      spectra,
+    };
+    renderTimeChangeMS(state.timeChangeMSData);
+    renderReportSummary();
+
+    const okCount = spectra.filter(s => s.status === 'ok').length;
+    toast(`Time Change ${signalLabel} complete (${okCount}/${spectra.length} succeeded)`, okCount > 0 ? 'success' : 'warning');
+    return okCount > 0;
+  } catch (err) {
+    toast(`Time Change failed: ${err.message}`, 'error');
+    return false;
+  } finally {
+    hideLoading();
+  }
+}
+
+function getTimeChangePlotSpectra(data) {
+  const kind = data?.kind === 'uv' || data?.kind === 'tic' || data?.kind === 'eic' ? data.kind : 'ms';
+  const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
+  return (data?.spectra || [])
+    .filter((s) => {
+      const xValues = isTimeSeries ? s.times : s.mz;
+      return Array.isArray(xValues) && Array.isArray(s.intensities) && xValues.length > 0 && s.intensities.length > 0;
+    })
+    .map((s) => ({
+      label: s.name,
+      x: isTimeSeries ? s.times : s.mz,
+      mz: isTimeSeries ? s.times : s.mz,
+      intensities: s.intensities,
+      maxIntensity: maxFiniteValue(s.intensities),
+    }));
+}
+
+function getTimeChangeOffsetConfig(plotSpectra, normalize, kind, wavelength, targetMz = null, ionMode = null) {
+  const spacingMultiplier = 3.375;
+  const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
+  const xOffsetStep = (isTimeSeries ? 0.10 : 20.0) * spacingMultiplier;
+  let yOffsetStep = 10.0 * spacingMultiplier;
+  if (!normalize) {
+    const globalYMax = plotSpectra.reduce((acc, s) => Math.max(acc, s.maxIntensity || 0), 0);
+    yOffsetStep = (globalYMax > 0 ? globalYMax * 0.10 : 1.0) * spacingMultiplier;
+  }
+  const wavelengthLabel = Number.isFinite(Number(wavelength)) ? Number(wavelength).toFixed(0) : '';
+  const targetMzLabel = Number.isFinite(Number(targetMz)) ? Number(targetMz).toFixed(2) : '?';
+  const polarityLabel = ionMode === 'negative' ? '−' : '+';
+  const xTitle = isTimeSeries ? 'Time (min)' : 'm/z';
+  const yTitle = kind === 'uv'
+    ? `Absorbance${wavelengthLabel ? ` (${wavelengthLabel} nm)` : ''}`
+    : (kind === 'tic'
+      ? (normalize ? 'Relative TIC Intensity + offset' : 'TIC Intensity + offset')
+      : (kind === 'eic'
+        ? (normalize ? 'Relative EIC Intensity + offset' : 'EIC Intensity + offset')
+        : (normalize ? 'Relative Intensity + offset' : 'Intensity + offset')));
+  const baseTitle = kind === 'uv'
+    ? `UV ${wavelengthLabel} nm`
+    : (kind === 'tic'
+      ? 'Total Ion Chromatogram (TIC)'
+      : (kind === 'eic' ? `EIC m/z ${targetMzLabel} (${polarityLabel})` : 'Summed Mass Spectrum'));
+  return {
+    xOffsetStep,
+    yOffsetStep,
+    xTitle,
+    yTitle,
+    overlapTitle: `${baseTitle} Overlap`,
+    exportTitle: kind === 'uv' ? 'Absorbance' : `${baseTitle} Offset`,
+    offsetTitle: `${baseTitle} (Diagonal Offset: +${xOffsetStep.toFixed(isTimeSeries ? 2 : 0)} ${xTitle}, +${normalize ? yOffsetStep.toFixed(0) : yOffsetStep.toPrecision(2)} intensity units per trace)`,
+  };
+}
+
+function interpolateTimeChangeY(xValues, yValues, targetX) {
+  const n = Math.min(
+    Array.isArray(xValues) ? xValues.length : 0,
+    Array.isArray(yValues) ? yValues.length : 0,
+  );
+  if (n <= 0) return 0;
+  if (n === 1) return Number(yValues[0]) || 0;
+  const x = Number(targetX);
+  if (!Number.isFinite(x)) return Number(yValues[0]) || 0;
+  const firstX = Number(xValues[0]);
+  const lastX = Number(xValues[n - 1]);
+  if (!Number.isFinite(firstX) || x <= firstX) return Number(yValues[0]) || 0;
+  if (!Number.isFinite(lastX) || x >= lastX) return Number(yValues[n - 1]) || 0;
+  for (let i = 1; i < n; i++) {
+    const x0 = Number(xValues[i - 1]);
+    const x1 = Number(xValues[i]);
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) continue;
+    if (x <= x1) {
+      const y0 = Number(yValues[i - 1]) || 0;
+      const y1 = Number(yValues[i]) || 0;
+      const t = (x - x0) / (x1 - x0);
+      return y0 + ((y1 - y0) * t);
+    }
+  }
+  return Number(yValues[n - 1]) || 0;
+}
+
+function buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, kind) {
+  if (!Array.isArray(plotSpectra) || plotSpectra.length < 2) return null;
+  const finiteStarts = plotSpectra
+    .map((s) => Number(Array.isArray(s.x) && s.x.length > 0 ? s.x[0] : NaN))
+    .filter((v) => Number.isFinite(v));
+  if (finiteStarts.length === 0) return null;
+  const anchorX = kind === 'uv' || kind === 'tic' || kind === 'eic' ? 0 : Math.min(...finiteStarts);
+  const baseTrace = plotSpectra[0];
+  const baseRawY = interpolateTimeChangeY(baseTrace.x || [], baseTrace.intensities || [], anchorX);
+  const baseY = normalize
+    ? (baseTrace.maxIntensity > 0 ? (baseRawY * (100 / baseTrace.maxIntensity)) : baseRawY)
+    : baseRawY;
+  const guideX = [];
+  const guideY = [];
+  plotSpectra.forEach((_s, i) => {
+    guideX.push(anchorX + (i * offsetConfig.xOffsetStep));
+    guideY.push(baseY + (i * offsetConfig.yOffsetStep));
+  });
+  return {
+    label: 'Offset guide',
+    color: '#8c8c8c',
+    dash: 'dash',
+    width: 1,
+    showLegend: false,
+    hoverInfo: 'skip',
+    mz: guideX,
+    intensities: guideY,
+  };
+}
+
+function renderTimeChangeMS(data) {
+  const spectra = data.spectra || [];
+  const kind = data.kind === 'uv' || data.kind === 'tic' || data.kind === 'eic' ? data.kind : 'ms';
+  const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
+  const normalize = document.getElementById('timechange-normalize').checked;
+  const plotContainer = document.getElementById('timechange-ms-plot');
+  const offsetPlotContainer = document.getElementById('timechange-ms-offset-plot');
+  const tableContainer = document.getElementById('timechange-ms-table-container');
+
+  if (spectra.length === 0) {
+    setTimeChangeEmptyState(true);
+    return;
+  }
+  setTimeChangeEmptyState(false);
+
+  const plotSpectra = getTimeChangePlotSpectra(data);
+
+  if (plotSpectra.length === 0) {
+    plotContainer.innerHTML = '<p class="placeholder-msg">No time-change data available</p>';
+    offsetPlotContainer.innerHTML = '<p class="placeholder-msg">No offset data available</p>';
+  } else {
+    const offsetConfig = getTimeChangeOffsetConfig(
+      plotSpectra,
+      normalize,
+      kind,
+      data.wavelength,
+      data.targetMz,
+      data.ionMode,
+    );
+    charts.plotMassSpectraOverlay('timechange-ms-plot', plotSpectra, {
+      normalize,
+      title: offsetConfig.overlapTitle,
+      xTitle: offsetConfig.xTitle,
+      yTitle: kind === 'uv'
+        ? offsetConfig.yTitle
+        : (kind === 'tic'
+          ? (normalize ? 'Relative TIC Intensity' : 'TIC Intensity')
+          : (kind === 'eic'
+            ? (normalize ? 'Relative EIC Intensity' : 'EIC Intensity')
+            : (normalize ? 'Relative Intensity' : 'Intensity'))),
+    });
+
+    const shifted = plotSpectra.map((s, i) => ({
+      label: s.label,
+      color: charts.getColor(i),
+      mz: (s.x || []).map(v => v + i * offsetConfig.xOffsetStep),
+      intensities: (s.intensities || []).map((v) => {
+        const raw = Number(v);
+        const base = Number.isFinite(raw) ? raw : 0;
+        if (!normalize) return base + i * offsetConfig.yOffsetStep;
+        const scale = s.maxIntensity > 0 ? (100 / s.maxIntensity) : 1;
+        return base * scale + i * offsetConfig.yOffsetStep;
+      }),
+    }));
+    const guideTrace = buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, kind);
+    const shiftedBackToFront = guideTrace ? [guideTrace, ...[...shifted].reverse()] : [...shifted].reverse();
+
+    charts.plotMassSpectraOverlay('timechange-ms-offset-plot', shiftedBackToFront, {
+      normalize: false,
+      title: offsetConfig.offsetTitle,
+      xTitle: offsetConfig.xTitle,
+      yTitle: offsetConfig.yTitle,
+    });
+  }
+
+  const contextHeading = isTimeSeries ? 'Signal' : 'Window (min)';
+  let html = `<div class="data-table-wrapper"><table class="data-table">
+    <thead><tr>
+      <th>Sample</th><th>Status</th><th>${contextHeading}</th><th>Points</th><th>Error</th>
+    </tr></thead><tbody>`;
+
+  spectra.forEach((s) => {
+    const xValues = isTimeSeries ? s.times : s.mz;
+    const pointCount = Array.isArray(xValues) ? xValues.length : 0;
+    const contextValue = kind === 'uv'
+      ? `UV ${Number.isFinite(Number(s.wavelength)) ? Number(s.wavelength).toFixed(0) : ''} nm`
+      : (kind === 'tic'
+        ? 'TIC'
+        : (kind === 'eic'
+          ? `EIC m/z ${Number.isFinite(Number(s.targetMz)) ? Number(s.targetMz).toFixed(2) : '?'}${formatProgressionPolarityLabel(s.ionMode)}`
+          : `${Number.isFinite(s.start) ? s.start.toFixed(2) : '-'} - ${Number.isFinite(s.end) ? s.end.toFixed(2) : '-'}`));
+    html += `<tr>
+      <td>${escapeHtml(s.name)}</td>
+      <td>${s.status}</td>
+      <td>${contextValue}</td>
+      <td>${pointCount}</td>
+      <td>${escapeHtml(s.error || '')}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  tableContainer.innerHTML = html;
+}
+
+async function exportTimeChangeOffset(format) {
+  if (!state.timeChangeMSData) {
+    toast('Generate Time Change first', 'warning');
+    return;
+  }
+
+  const kind = state.timeChangeMSData.kind === 'uv' || state.timeChangeMSData.kind === 'tic' || state.timeChangeMSData.kind === 'eic'
+    ? state.timeChangeMSData.kind
+    : 'ms';
+  const normalize = document.getElementById('timechange-normalize')?.checked === true;
+  const plotSpectra = getTimeChangePlotSpectra(state.timeChangeMSData);
+  if (plotSpectra.length === 0) {
+    toast('No offset plot available for export', 'warning');
+    return;
+  }
+
+  const dpi = parseInt(document.getElementById('export-dpi')?.value, 10) || 300;
+  const offsetConfig = getTimeChangeOffsetConfig(
+    plotSpectra,
+    normalize,
+    kind,
+    state.timeChangeMSData.wavelength,
+    state.timeChangeMSData.targetMz,
+    state.timeChangeMSData.ionMode,
+  );
+  const baseStyle = buildCurrentDeconvStyle();
+  const filenameBase = kind === 'uv'
+    ? `time_change_uv_${Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength).toFixed(0) + 'nm' : 'offset'}`
+    : (kind === 'tic'
+      ? 'time_change_tic_offset'
+      : (kind === 'eic'
+        ? `time_change_eic_${Number(state.timeChangeMSData.targetMz).toFixed(2).replace('.', '_')}_${state.timeChangeMSData.ionMode === 'negative' ? 'neg' : 'pos'}_offset`
+        : 'time_change_mass_offset'));
+
+  showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
+  try {
+    const response = await api.exportTimeChange({
+      format,
+      dpi,
+      filename_base: filenameBase,
+      traces: plotSpectra.map((trace) => ({
+        label: trace.label,
+        x: trace.x,
+        intensities: trace.intensities,
+      })),
+      style: {
+        fig_width: baseStyle.fig_width,
+        line_width: baseStyle.line_width,
+        show_grid: false,
+        show_title: baseStyle.deconv_show_title !== false,
+        signal_kind: kind,
+        normalize,
+        x_axis_width_multiplier: 2.0,
+        offset_angle_degrees: 45.0,
+        offset_guide: true,
+        offset_guide_anchor_x: kind === 'uv' || kind === 'tic' || kind === 'eic' ? 0.0 : null,
+        uv_wavelength_nm: Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength) : null,
+        x_offset_step: offsetConfig.xOffsetStep,
+        y_offset_step: offsetConfig.yOffsetStep,
+        title: offsetConfig.exportTitle,
+        x_label: offsetConfig.xTitle,
+        y_label: offsetConfig.yTitle,
+      },
+    });
+    const blob = await backendResponseToBlob(response);
+    const filename = getFilenameFromContentDisposition(
+      response.headers.get('content-disposition'),
+      `${sanitizeFilename(filenameBase)}.${format}`
+    );
+    downloadBlob(blob, filename);
+    toast(`Exported ${String(format || '').toUpperCase()}`, 'success');
+  } catch (err) {
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportTimeChangeTICPdf() {
+  if (getTimeChangeSignalKind() !== 'tic') {
+    const generated = await runTimeChangeMS('tic');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeEICPdf() {
+  const requested = getTimeChangeEICSettings();
+  if (!requested) {
+    toast('Enter a valid positive m/z value for Time Change EIC', 'warning');
+    return;
+  }
+  const current = state.timeChangeMSData;
+  const matchesCurrent = current?.kind === 'eic'
+    && Math.abs(Number(current.targetMz) - requested.mz) < 1e-9
+    && current.ionMode === requested.ionMode
+    && Math.abs(Number(current.mzWindow) - requested.mzWindow) < 1e-9;
+  if (!matchesCurrent) {
+    const generated = await runTimeChangeMS('eic');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeUVPdf() {
+  const wavelength = await resolveTimeChangeUvWavelength();
+  if (!Number.isFinite(wavelength)) {
+    toast('Select a UV wavelength in Settings first', 'warning');
+    return;
+  }
+  const current = state.timeChangeMSData;
+  const matchesCurrent = current?.kind === 'uv'
+    && Math.abs(Number(current.wavelength) - wavelength) < 1e-9;
+  if (!matchesCurrent) {
+    const generated = await runTimeChangeMS('uv');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeSummedMassPdf() {
+  if (getTimeChangeSignalKind() !== 'ms' || !state.timeChangeMSData) {
+    const generated = await runTimeChangeMS('ms');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf');
+}
+
+// ===== Report Export Tab =====
+function initReportExport() {
+  document.getElementById('btn-export-session-json').addEventListener('click', exportSessionJSON);
+  document.getElementById('btn-export-report-summary-csv').addEventListener('click', exportReportSummaryCSV);
+  document.getElementById('btn-export-report-pdf').addEventListener('click', exportReportPDF);
+  const sampleSelect = document.getElementById('report-sample-select');
+  if (sampleSelect) sampleSelect.addEventListener('change', renderReportSummary);
+  const includeUv = document.getElementById('report-include-uv');
+  if (includeUv) includeUv.addEventListener('change', renderReportSummary);
+  const includeDeconv = document.getElementById('report-include-deconv');
+  if (includeDeconv) includeDeconv.addEventListener('change', renderReportSummary);
+}
+
+function renderReportSummary() {
+  const container = document.getElementById('report-summary');
+  if (!container) return;
+
+  const hasAnyAnalysis = Boolean(
+    state.singleSampleData ||
+    state.eicBatchData ||
+    state.deconvResults ||
+    state.batchDeconvData ||
+    state.progressionData ||
+    state.timeChangeMSData ||
+    state.masscalcData
+  );
+
+  if (!hasAnyAnalysis) {
+    container.innerHTML = '';
+    setReportEmptyState(true);
+    return;
+  }
+  setReportEmptyState(false);
+
+  const reportSamplePath = getCurrentReportSamplePath();
+  const reportSample = state.selectedFiles.find((f) => f.path === reportSamplePath);
+  const includeUv = document.getElementById('report-include-uv')?.checked ?? true;
+  const includeDeconv = document.getElementById('report-include-deconv')?.checked ?? true;
+
+  const lines = [];
+  lines.push(`<p><strong>Report sample:</strong> ${reportSample ? escapeHtml(reportSample.name) : 'not selected'}</p>`);
+  lines.push(`<p><strong>Report options:</strong> UV ${includeUv ? 'included' : 'excluded'}, Deconvolution ${includeDeconv ? 'included' : 'excluded'}</p>`);
+  lines.push(`<p><strong>Selected samples:</strong> ${state.selectedFiles.length}</p>`);
+  lines.push(`<p><strong>Single sample analysis:</strong> ${state.singleSampleData ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Area calculation:</strong> ${state.eicBatchData ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Deconvolution:</strong> ${state.deconvResults ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Batch deconvolution:</strong> ${state.batchDeconvData ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Time progression:</strong> ${state.progressionData ? 'ready' : 'not run'}</p>`);
+  lines.push(`<p><strong>Time Change:</strong> ${state.timeChangeMSData ? 'ready' : 'not run'}</p>`);
+  container.innerHTML = lines.join('');
+}
+
+function exportSessionJSON() {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    selected_files: state.selectedFiles,
+    mz_targets: state.mzTargets,
+    analyses: {
+      single_sample: state.singleSampleData,
+      progression: state.progressionData,
+      area_calculation: state.eicBatchData,
+      eic_batch: state.eicBatchData,
+      deconvolution: state.deconvResults,
+      batch_deconvolution: state.batchDeconvData,
+      time_change: state.timeChangeMSData,
+    },
+  };
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), 'lcms_session_report.json');
+  toast('Session JSON exported', 'success');
+}
+
+function exportReportSummaryCSV() {
+  const rows = [['Section', 'Status', 'Detail']];
+  rows.push(['Selected Samples', state.selectedFiles.length > 0 ? 'ok' : 'empty', String(state.selectedFiles.length)]);
+  rows.push(['Single Sample', state.singleSampleData ? 'ok' : 'not_run', '']);
+  rows.push(['Area Calculation', state.eicBatchData ? 'ok' : 'not_run', state.eicBatchData ? `${(state.eicBatchData.targets || []).length} signals` : '']);
+  rows.push(['Deconvolution', state.deconvResults ? 'ok' : 'not_run', state.deconvResults ? `${(state.deconvResults.components || []).length} components` : '']);
+  rows.push(['Batch Deconvolution', state.batchDeconvData ? 'ok' : 'not_run', state.batchDeconvData ? `${(state.batchDeconvData.samples || []).length} samples` : '']);
+  rows.push(['Time Progression', state.progressionData ? 'ok' : 'not_run', '']);
+  rows.push(['Time Change', state.timeChangeMSData ? 'ok' : 'not_run', state.timeChangeMSData ? `${(state.timeChangeMSData.spectra || []).length} traces` : '']);
+
+  const csv = rows.map(r => r.join(',')).join('\n');
+  downloadBlob(new Blob([csv], { type: 'text/csv' }), 'lcms_report_summary.csv');
+  toast('Report summary CSV exported', 'success');
+}
+
+function getCurrentReportSamplePath() {
+  const explicit = document.getElementById('report-sample-select')?.value;
+  if (explicit) return explicit;
+
+  const single = document.getElementById('single-sample-select')?.value;
+  if (single) return single;
+
+  const deconv = document.getElementById('deconv-sample-select')?.value;
+  if (deconv) return deconv;
+
+  return state.selectedFiles.length > 0 ? state.selectedFiles[0].path : '';
+}
+
+function getReportSettingsPayload() {
+  const uvWavelengths = getSelectedWavelengths();
+  const colors = {
+    initial: document.getElementById('color-initial')?.value || '#808080',
+    mid: document.getElementById('color-mid')?.value || '#1f77b4',
+    final: document.getElementById('color-final')?.value || '#d62728',
+  };
+  const labels = {
+    title_single: document.getElementById('label-single-title')?.value || 'Sample: {name}',
+    title_progression: document.getElementById('label-prog-title')?.value || 'Time Progression Analysis',
+    x_label: document.getElementById('label-x-axis')?.value || 'Time (min)',
+    y_label_uv: document.getElementById('label-uv-y')?.value || 'UV {wavelength}nm (mAU)',
+    y_label_tic: document.getElementById('label-tic-y')?.value || 'TIC Intensity',
+    y_label_eic: document.getElementById('label-eic-y')?.value || 'EIC Intensity',
+    panel_title_uv: document.getElementById('label-uv-panel')?.value || 'UV Chromatogram ({wavelength} nm)',
+    panel_title_tic: document.getElementById('label-tic-panel')?.value || 'Total Ion Chromatogram (TIC)',
+    panel_title_eic: document.getElementById('label-eic-panel')?.value || 'EIC m/z {mz} (±{window})',
+  };
+
+  return {
+    uv_wavelengths: uvWavelengths,
+    uv_smoothing: parseInt(document.getElementById('uv-smoothing')?.value) || 0,
+    eic_smoothing: parseInt(document.getElementById('eic-smoothing')?.value) || 0,
+    line_width: parseFloat(document.getElementById('line-width')?.value) || 0.8,
+    show_grid: !!document.getElementById('show-grid')?.checked,
+    deconv_x_min_da: parseFloat(document.getElementById('mass-axis-min')?.value) || 1000.0,
+    deconv_x_max_da: parseFloat(document.getElementById('mass-axis-max')?.value) || 50000.0,
+    colors,
+    labels,
+  };
+}
+
+function getFilenameFromContentDisposition(disposition, fallback) {
+  if (!disposition) return fallback;
+  const starMatch = disposition.match(/filename\\*=UTF-8''([^;]+)/i);
+  if (starMatch && starMatch[1]) {
+    try {
+      return decodeURIComponent(starMatch[1].replace(/["']/g, ''));
+    } catch (_) {
+      return starMatch[1].replace(/["']/g, '');
+    }
+  }
+  const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  return match && match[1] ? match[1] : fallback;
+}
+
+async function exportReportPDF() {
+  const samplePath = getCurrentReportSamplePath();
+  if (!samplePath) {
+    toast('Select a sample for report export', 'warning');
+    return;
+  }
+
+  const includeUv = document.getElementById('report-include-uv')?.checked ?? true;
+  const includeDeconv = document.getElementById('report-include-deconv')?.checked ?? true;
+  const payload = {
+    path: samplePath,
+    include_uv: includeUv,
+    include_deconv: includeDeconv,
+    app_version: getAppVersionLabel(),
+    settings: getReportSettingsPayload(),
+  };
+
+  if (includeDeconv) {
+    payload.deconv_parameters = getCurrentDeconvolutionParameters(samplePath);
+
+    const deconvSamplePath = document.getElementById('deconv-sample-select')?.value || '';
+    const currentTimeRange = getCurrentDeconvolutionTimeRange();
+    const sameSampleAsDeconv = deconvSamplePath === samplePath;
+    const currentSignature = (sameSampleAsDeconv && currentTimeRange)
+      ? JSON.stringify(buildDeconvolutionRequest(samplePath, currentTimeRange[0], currentTimeRange[1]))
+      : '';
+
+    if (sameSampleAsDeconv && currentTimeRange) {
+      payload.deconv_time_range = currentTimeRange;
+    }
+
+    if (
+      sameSampleAsDeconv
+      && currentSignature
+      && currentSignature === state.deconvAutoRunSignature
+      && state.deconvResults
+      && Array.isArray(state.deconvResults.components)
+    ) {
+      payload.deconv_results = state.deconvResults.components;
+      if (!payload.deconv_time_range) {
+        const tr = state.deconvTimeRange || state.deconvResults.time_range;
+        if (Array.isArray(tr) && tr.length === 2) {
+          payload.deconv_time_range = tr;
+        }
+      }
+    }
+  }
+
+  const sampleName = (state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample');
+  const dateStamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const fallbackFilename = `${sanitizeFilename(sampleName)}_report_${dateStamp}.pdf`;
+
+  showLoading('Generating report PDF...');
+  try {
+    const response = await api.exportReportPdf(payload);
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition');
+    const filename = getFilenameFromContentDisposition(disposition, fallbackFilename);
+    downloadBlob(blob, filename);
+    toast('Report PDF exported', 'success');
+  } catch (err) {
+    toast(`Report PDF failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ===== Mass Calculator Tab =====
+const AA_MASSES = {
+  G: 57.0519, A: 71.0788, V: 99.1326, L: 113.1594, I: 113.1594,
+  P: 97.1167, F: 147.1766, W: 186.2132, M: 131.1926, S: 87.0782,
+  T: 101.1051, C: 103.1388, Y: 163.1760, H: 137.1411, D: 115.0886,
+  E: 129.1155, N: 114.1038, Q: 128.1307, K: 128.1741, R: 156.1875,
+};
+
+const WATER_MASS = 18.01524;
+const AA_MONO_MASSES = {
+  A: 71.037113805,
+  R: 156.10111105,
+  N: 114.04292747,
+  D: 115.026943065,
+  C: 103.009184505,
+  E: 129.042593135,
+  Q: 128.05857754,
+  G: 57.021463735,
+  H: 137.058911875,
+  I: 113.084064015,
+  L: 113.084064015,
+  K: 128.09496305,
+  M: 131.040484645,
+  F: 147.068413945,
+  P: 97.052763875,
+  S: 87.032028435,
+  T: 101.047678505,
+  W: 186.07931298,
+  Y: 163.063328575,
+  V: 99.068413945,
+};
+const WATER_MONO_MASS = 18.010564684;
+const DEFAULT_SEQUENCE_MOD_SEQUENCE =
+  'MPSKGEELFTGVVPILVELDGDVNGHKFSVRGEGEGDATNGKLTLKFICTTGKLPVPWPTLVTTLTYGVQCFSRYPDHMKRHDFFKSAMPEGYVQERTISFKDDGTYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNFNSH*VYITADKQKNGIKANFKIRHNVEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSVLSKDPNEKRDHMVLLEFVTAAGITHGMDELYKGSHHHHHH*';
+const DEFAULT_SEQUENCE_MOD_SELECTED_INDEX = 149;
+const DEFAULT_SEQUENCE_MOD_SELECTED_INDICES = [DEFAULT_SEQUENCE_MOD_SELECTED_INDEX];
+const SEQUENCE_MOD_LINE_LENGTH = 50;
+const SEQUENCE_MOD_GROUP_SIZE = 5;
+const RESIDUE_LABELS = {
+  A: 'Ala',
+  R: 'Arg',
+  N: 'Asn',
+  D: 'Asp',
+  C: 'Cys',
+  E: 'Glu',
+  Q: 'Gln',
+  G: 'Gly',
+  H: 'His',
+  I: 'Ile',
+  L: 'Leu',
+  K: 'Lys',
+  M: 'Met',
+  F: 'Phe',
+  P: 'Pro',
+  S: 'Ser',
+  T: 'Thr',
+  W: 'Trp',
+  Y: 'Tyr',
+  V: 'Val',
+  '*': 'Stop',
+};
+const HYDROGEN_ATOM_AVG_MASS = 1.00794;
+const HYDROGEN_ATOM_MONO_MASS = 1.00782503223;
+const FP_MATURATION_MODELS = {
+  'gfp-like': {
+    label: 'GFP-like chromophore maturation',
+    shortLabel: 'GFP-like maturation',
+    averageDelta: -(WATER_MASS + (2 * HYDROGEN_ATOM_AVG_MASS)),
+    monoDelta: -(WATER_MONO_MASS + (2 * HYDROGEN_ATOM_MONO_MASS)),
+    description: 'Cyclization, dehydration, and oxidation of the canonical fluorescent-protein chromophore.',
+  },
+  'red-fp': {
+    label: 'Red fluorescent protein maturation',
+    shortLabel: 'Red FP maturation',
+    averageDelta: -(WATER_MASS + (4 * HYDROGEN_ATOM_AVG_MASS)),
+    monoDelta: -(WATER_MONO_MASS + (4 * HYDROGEN_ATOM_MONO_MASS)),
+    description: 'Acylimine-forming red-FP maturation with one additional oxidation relative to the GFP-like chromophore.',
+  },
+};
+const SEQUENCE_MOD_AUTO_CHEMISTRY = {
+  label: 'Automatic residue insertion correction',
+  shortLabel: 'Auto -H2O',
+  averageDelta: -WATER_MASS,
+  monoDelta: -WATER_MONO_MASS,
+  description: 'Automatically subtract water so a free amino-acid-like precursor is converted into the inserted residue mass used inside the protein chain.',
+};
+
+const KNOWN_MODS = {
+  'Oxidation (+O)': 15.999,
+  Acetylation: 42.011,
+  Phosphorylation: 79.966,
+  Methylation: 14.016,
+  'Met loss (-M)': -131.040,
+  'Met loss + Acetyl': -89.030,
+  Atto488: 572.0,
+  'Ubiquitin GG': 114.043,
+  'Disulfide (-2H)': -2.016,
+  Deamidation: 0.984,
+  'Na adduct': 21.982,
+  'K adduct': 37.956,
+  Glucuronidation: 176.032,
+  'Formic acid adduct': 46.005,
+  'TFA adduct': 113.993,
+  'Unknown mod (x1)': 251.30,
+  'Unknown mod (x2)': 502.60,
+  'Unknown mod (x3)': 753.90,
+};
+
+const DECONV_RANK_COLORS = [
+  '#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
+  '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+];
+const DEFAULT_SEQUENCE_MOD_REFERENCE = DEFAULT_SEQUENCE_MOD_SEQUENCE.replace(/\*/g, '');
+const DEFAULT_GFP_CHROMOPHORE_START = (() => {
+  for (let i = 0; i < DEFAULT_SEQUENCE_MOD_REFERENCE.length - 2; i += 1) {
+    const triad = DEFAULT_SEQUENCE_MOD_REFERENCE.slice(i, i + 3);
+    if (/^[A-Z]YG$/.test(triad)) return i;
+  }
+  return 65;
+})();
+const GFP_REFERENCE_SIMILARITY_THRESHOLD = 0.8;
+const GFP_CHROMOPHORE_LOCAL_SIMILARITY_THRESHOLD = 0.55;
+const SEQUENCE_MOD_SMILES_HELP_TEXT = 'Use the drawn or pasted structure as the replacement residue for the active selected site. A peptide-style residue insertion correction of -H2O is applied automatically for custom replacement residues.';
+
+// ===== Protein Modification Mass Tab =====
+function getSequenceModReplacementMode() {
+  const selected = document.querySelector('input[name="seqmod-replacement-mode"]:checked');
+  if (selected) {
+    return selected.value === 'custom' ? 'custom' : 'standard';
+  }
+  return state.sequenceModReplacementMode === 'custom' ? 'custom' : 'standard';
+}
+
+function createSequenceModCustomEntry() {
+  return {
+    label: 'Custom residue',
+    mass: '0',
+    smiles: '',
+    smilesResult: null,
+  };
+}
+
+function getSequenceModCustomEntry(index) {
+  const existing = state.sequenceModCustomMods?.[String(index)];
+  return existing
+    ? { ...createSequenceModCustomEntry(), ...existing }
+    : createSequenceModCustomEntry();
+}
+
+function setSequenceModCustomEntry(index, entry) {
+  const key = String(index);
+  const normalized = {
+    ...createSequenceModCustomEntry(),
+    ...(entry || {}),
+  };
+  state.sequenceModCustomMods = {
+    ...(state.sequenceModCustomMods || {}),
+    [key]: normalized,
+  };
+  return normalized;
+}
+
+function patchSequenceModCustomEntry(index, patch) {
+  return setSequenceModCustomEntry(index, {
+    ...getSequenceModCustomEntry(index),
+    ...(patch || {}),
+  });
+}
+
+function ensureSequenceModCustomEntry(index) {
+  return setSequenceModCustomEntry(index, getSequenceModCustomEntry(index));
+}
+
+function normalizeSequenceModSelectedIndices(sequenceLength) {
+  const maxLength = Math.max(0, Number(sequenceLength) || 0);
+  const raw = Array.isArray(state.sequenceModSelectedIndices) ? state.sequenceModSelectedIndices : [];
+  const seen = new Set();
+  const normalized = raw
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isInteger(value) && value >= 0 && value < maxLength && !seen.has(value) && seen.add(value))
+    .sort((a, b) => a - b);
+  state.sequenceModSelectedIndices = normalized;
 
   let active = Number.isInteger(state.sequenceModActiveIndex) ? state.sequenceModActiveIndex : -1;
   if (!normalized.includes(active)) {
