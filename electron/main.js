@@ -7,26 +7,102 @@
  * 4. Kills the backend on quit
  */
 
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
+const { fetchLatestRelease, isNewerVersion } = require("./update-checker");
 
 const BACKEND_PORT = 8741;
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const RELEASES_URL = "https://github.com/spelveris/lcms-desktop/releases";
 
 let mainWindow = null;
 let splashWindow = null;
 let backendProcess = null;
 let isQuitting = false;
 let backendReady = false;
+let updateCheckTimer = null;
+let updateStatus = {
+  state: "idle",
+  available: false,
+  currentVersion: "",
+  latestVersion: "",
+  releaseUrl: RELEASES_URL,
+};
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
   app.quit();
 }
+
+function sendUpdateStatus(status) {
+  updateStatus = { ...updateStatus, ...status };
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send("updates:status", updateStatus);
+    }
+  });
+  return updateStatus;
+}
+
+async function checkForUpdates() {
+  const currentVersion = String(app.getVersion() || "");
+  try {
+    const release = await fetchLatestRelease();
+    const available = isNewerVersion(release.version, currentVersion);
+    return sendUpdateStatus({
+      state: available ? "available" : "current",
+      available,
+      currentVersion,
+      latestVersion: release.version,
+      releaseUrl: release.url || RELEASES_URL,
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn(`[updates] Could not check GitHub releases: ${error.message}`);
+    return sendUpdateStatus({
+      state: "offline",
+      available: false,
+      currentVersion,
+      checkedAt: new Date().toISOString(),
+    });
+  }
+}
+
+function startUpdateChecks() {
+  if (updateCheckTimer) return;
+  void checkForUpdates();
+  updateCheckTimer = setInterval(() => {
+    void checkForUpdates();
+  }, UPDATE_CHECK_INTERVAL_MS);
+  updateCheckTimer.unref?.();
+}
+
+ipcMain.handle("updates:get-status", async () => {
+  if (updateStatus.state === "idle") {
+    return checkForUpdates();
+  }
+  return updateStatus;
+});
+
+ipcMain.handle("updates:open-release", async () => {
+  const candidate = String(updateStatus.releaseUrl || RELEASES_URL);
+  let releaseUrl = RELEASES_URL;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === "https:" && parsed.hostname === "github.com" && parsed.pathname.startsWith("/spelveris/lcms-desktop/releases")) {
+      releaseUrl = parsed.toString();
+    }
+  } catch (_) {
+    // Fall back to the fixed repository releases page.
+  }
+  await shell.openExternal(releaseUrl);
+  return true;
+});
 
 // ---------------------------------------------------------------------------
 // Backend lifecycle
@@ -245,6 +321,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
@@ -323,6 +400,7 @@ if (gotSingleInstanceLock) {
     }
 
     createWindow();
+    startUpdateChecks();
   });
 
   app.on("window-all-closed", () => {
@@ -334,6 +412,10 @@ if (gotSingleInstanceLock) {
 
   app.on("before-quit", () => {
     isQuitting = true;
+    if (updateCheckTimer) {
+      clearInterval(updateCheckTimer);
+      updateCheckTimer = null;
+    }
     closeSplashWindow();
     stopBackend();
   });

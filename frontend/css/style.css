@@ -196,6 +196,66 @@ input[type="radio"] {
   color: var(--text-primary);
   opacity: 0.85;
 }
+.update-available-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  padding: 3px 7px;
+  border: 1px solid rgba(224, 82, 82, 0.65);
+  border-radius: 999px;
+  background: rgba(214, 39, 40, 0.14);
+  color: #ff9a9a;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+.update-available-badge[hidden] { display: none; }
+.update-available-badge:hover {
+  background: rgba(214, 39, 40, 0.25);
+  border-color: #ef7373;
+  color: #ffd0d0;
+}
+.update-available-badge.is-current {
+  border-color: rgba(82, 190, 125, 0.55);
+  background: rgba(44, 160, 44, 0.13);
+  color: #8bd8a9;
+  cursor: default;
+}
+.update-available-badge.is-current:hover {
+  border-color: rgba(82, 190, 125, 0.55);
+  background: rgba(44, 160, 44, 0.13);
+  color: #8bd8a9;
+}
+.update-available-badge.is-current .update-available-dot {
+  background: #52be7d;
+  box-shadow: 0 0 0 3px rgba(82, 190, 125, 0.14);
+}
+.update-available-badge.is-offline {
+  border-color: rgba(160, 160, 184, 0.38);
+  background: rgba(160, 160, 184, 0.08);
+  color: var(--text-secondary);
+  cursor: default;
+}
+.update-available-badge.is-offline:hover {
+  border-color: rgba(160, 160, 184, 0.38);
+  background: rgba(160, 160, 184, 0.08);
+  color: var(--text-secondary);
+}
+.update-available-badge.is-offline .update-available-dot {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+.update-available-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: #e05252;
+  box-shadow: 0 0 0 2px rgba(224, 82, 82, 0.14);
+}
 
 .sidebar-expand-btn {
   position: fixed;
