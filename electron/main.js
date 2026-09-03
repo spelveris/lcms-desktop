@@ -27,6 +27,8 @@ let isQuitting = false;
 let backendReady = false;
 let updateCheckTimer = null;
 let packagedUpdaterConfigured = false;
+let downloadedUpdateFile = "";
+let macUpdateHelperStarted = false;
 let updateStatus = {
   state: "idle",
   available: false,
@@ -61,7 +63,9 @@ function configurePackagedUpdater() {
   packagedUpdaterConfigured = true;
 
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Squirrel.Mac rejects successive ad-hoc-signed builds because their code
+  // identities change. CATrupole uses its checksum-verified helper on macOS.
+  autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
   autoUpdater.allowPrerelease = false;
   autoUpdater.logger = console;
 
@@ -99,6 +103,7 @@ function configurePackagedUpdater() {
 
   autoUpdater.on("update-downloaded", (info) => {
     const latestVersion = String(info?.version || updateStatus.latestVersion || "");
+    downloadedUpdateFile = String(info?.downloadedFile || "");
     sendUpdateStatus({
       state: "ready",
       available: true,
@@ -106,6 +111,7 @@ function configurePackagedUpdater() {
       latestVersion,
       releaseUrl: releaseUrlForVersion(latestVersion),
       progressPercent: 100,
+      errorMessage: "",
     });
   });
 
@@ -118,20 +124,53 @@ function configurePackagedUpdater() {
       latestVersion: String(info?.version || app.getVersion() || ""),
       progressPercent: 0,
       checkedAt: new Date().toISOString(),
+      errorMessage: "",
     });
   });
 
   autoUpdater.on("error", (error) => {
     console.warn(`[updates] Automatic update failed: ${error.message}`);
     sendUpdateStatus({
-      state: "offline",
+      state: "error",
       available: false,
       installable: true,
       currentVersion: String(app.getVersion() || ""),
       progressPercent: 0,
       checkedAt: new Date().toISOString(),
+      errorMessage: String(error?.message || "Automatic update failed."),
     });
   });
+}
+
+function installedMacAppPath() {
+  return path.dirname(path.dirname(path.dirname(process.execPath)));
+}
+
+function launchMacUpdateHelper() {
+  if (process.platform !== "darwin" || !app.isPackaged || macUpdateHelperStarted) return false;
+  if (!downloadedUpdateFile || !fs.existsSync(downloadedUpdateFile)) {
+    throw new Error("The downloaded CATrupole update could not be found. Please try the update again.");
+  }
+
+  const helperPath = path.join(__dirname, "mac-update-helper.js");
+  const targetAppPath = installedMacAppPath();
+  const nextVersion = String(updateStatus.latestVersion || "").trim().replace(/^v/i, "");
+  const helper = spawn(process.execPath, [
+    helperPath,
+    String(process.pid),
+    downloadedUpdateFile,
+    targetAppPath,
+    nextVersion,
+  ], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  });
+
+  if (!helper.pid) throw new Error("Could not start the CATrupole update helper.");
+  helper.unref();
+  macUpdateHelperStarted = true;
+  return true;
 }
 
 async function checkForUpdates() {
@@ -213,10 +252,26 @@ ipcMain.handle("updates:open-release", async () => {
 
 ipcMain.handle("updates:perform-action", async () => {
   if (app.isPackaged && updateStatus.state === "ready") {
+    if (process.platform === "darwin") {
+      try {
+        launchMacUpdateHelper();
+      } catch (error) {
+        sendUpdateStatus({
+          state: "error",
+          available: false,
+          errorMessage: String(error?.message || "Could not start the macOS update helper."),
+        });
+        throw error;
+      }
+    }
+
     sendUpdateStatus({ state: "installing", available: true, installable: true });
     isQuitting = true;
     stopBackend();
-    setImmediate(() => autoUpdater.quitAndInstall(true, true));
+    setImmediate(() => {
+      if (process.platform === "darwin") app.quit();
+      else autoUpdater.quitAndInstall(true, true);
+    });
     return "installing";
   }
 
@@ -543,6 +598,13 @@ if (gotSingleInstanceLock) {
   });
 
   app.on("before-quit", () => {
+    if (process.platform === "darwin" && updateStatus.state === "ready" && !macUpdateHelperStarted) {
+      try {
+        launchMacUpdateHelper();
+      } catch (error) {
+        console.warn(`[updates] Could not start macOS update helper: ${error.message}`);
+      }
+    }
     isQuitting = true;
     if (updateCheckTimer) {
       clearInterval(updateCheckTimer);

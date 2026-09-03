@@ -80,12 +80,25 @@
     .spinner {
       width: 72px;
       height: 72px;
+      flex: 0 0 72px;
+      position: relative;
+      aspect-ratio: 1 / 1;
       border-radius: 50%;
-      border: 5px solid rgba(148, 163, 184, 0.18);
-      border-top-color: var(--accent);
-      border-right-color: rgba(125, 211, 252, 0.55);
       box-shadow: 0 0 0 8px var(--accent-soft);
-      animation: spin 0.9s linear infinite;
+    }
+
+    .spinner-bubble {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 9px;
+      height: 9px;
+      margin: -4.5px 0 0 -4.5px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
+      animation: orbit 1.35s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+      animation-delay: var(--delay);
     }
 
     .status {
@@ -100,9 +113,25 @@
       color: rgba(148, 163, 184, 0.78);
     }
 
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
+    @keyframes orbit {
+      0% {
+        opacity: 0.22;
+        transform: rotate(0deg) translateY(-27px) scale(0.72);
+      }
+      42% {
+        opacity: 1;
+        transform: rotate(185deg) translateY(-27px) scale(1);
+      }
+      100% {
+        opacity: 0.22;
+        transform: rotate(360deg) translateY(-27px) scale(0.72);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .spinner-bubble {
+        animation-duration: 2.4s;
+      }
     }
   </style>
 </head>
@@ -111,7 +140,15 @@
     <main class="card">
       <div class="eyebrow">Preparing Workspace</div>
       <div class="title">CATrupole</div>
-      <div class="spinner" aria-hidden="true"></div>
+      <div class="spinner" role="status" aria-label="Loading CATrupole">
+        <span class="spinner-bubble" style="--delay: -1.157s"></span>
+        <span class="spinner-bubble" style="--delay: -0.964s"></span>
+        <span class="spinner-bubble" style="--delay: -0.771s"></span>
+        <span class="spinner-bubble" style="--delay: -0.579s"></span>
+        <span class="spinner-bubble" style="--delay: -0.386s"></span>
+        <span class="spinner-bubble" style="--delay: -0.193s"></span>
+        <span class="spinner-bubble" style="--delay: 0s"></span>
+      </div>
       <div class="status">Starting the backend and loading your analysis window...</div>
       <div id="version" class="version"></div>
     </main>
