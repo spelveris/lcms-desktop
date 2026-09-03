@@ -454,11 +454,11 @@ function createSplashWindow() {
 
   const splash = new BrowserWindow({
     width: 420,
-    height: 280,
+    height: 308,
     minWidth: 420,
-    minHeight: 280,
+    minHeight: 308,
     maxWidth: 420,
-    maxHeight: 280,
+    maxHeight: 308,
     show: false,
     frame: false,
     resizable: false,
