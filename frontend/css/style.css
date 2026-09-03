@@ -155,6 +155,7 @@ input[type="radio"] {
 
 /* ===== Sidebar ===== */
 .sidebar {
+  position: relative;
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
   height: 100vh;
@@ -165,6 +166,49 @@ input[type="radio"] {
   overflow-y: auto;
   transition: margin-left var(--transition), opacity var(--transition);
   z-index: 10;
+}
+
+.sidebar-resize-handle {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-width) - 4px);
+  width: 8px;
+  z-index: 30;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+body.sidebar-resizing .sidebar-resize-handle::after {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(33, 92, 175, 0.65);
+}
+
+.sidebar.collapsed .sidebar-resize-handle {
+  display: none;
+}
+
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.sidebar-resizing .sidebar {
+  transition: none;
 }
 
 .sidebar.collapsed {

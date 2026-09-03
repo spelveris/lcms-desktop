@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.41">
+  <link rel="stylesheet" href="css/style.css?v=0.2.42">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -182,6 +182,10 @@
 
       </div>
     </div>
+    <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" tabindex="0"
+         aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="240"
+         aria-valuemax="640" aria-valuenow="320"
+         title="Drag to resize sidebar; double-click to restore the default width"></div>
   </aside>
 
   <!-- Sidebar expand button (shown when collapsed) -->
@@ -369,6 +373,8 @@
         <label class="checkbox-label" id="eic-overlay-wrap"><input type="checkbox" id="eic-overlay"> Overlay</label>
         <label class="checkbox-label" id="eic-normalize-wrap"><input type="checkbox" id="eic-normalize"> Normalize</label>
         <button id="btn-export-eic-csv" class="btn btn-sm">Export CSV</button>
+        <button id="btn-export-uv-area-pdf" class="btn btn-sm hidden"
+                title="Export the UV area graph with Time Change axis and font sizing">PDF UV area</button>
       </div>
       <div id="eic-batch-mode-note" class="toolbar-note" style="margin-bottom:8px;">EIC mode uses the current m/z targets. UV mode uses the first checked UV wavelength from Settings and lets you drag windows to calculate area.</div>
       <div id="eic-mz-toolbar" class="mz-toolbar">
@@ -800,9 +806,9 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.41"></script>
-  <script src="js/charts.js?v=0.2.41"></script>
-  <script src="js/quotes.js?v=0.2.41"></script>
-  <script src="js/app.js?v=0.2.41"></script>
+  <script src="js/api.js?v=0.2.42"></script>
+  <script src="js/charts.js?v=0.2.42"></script>
+  <script src="js/quotes.js?v=0.2.42"></script>
+  <script src="js/app.js?v=0.2.42"></script>
 </body>
 </html>

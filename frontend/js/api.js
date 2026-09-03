@@ -175,6 +175,14 @@ const api = {
     });
   },
 
+  exportUVArea(payload) {
+    return apiFetch('/api/export-uv-area', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   exportTimeChange(payload) {
     return apiFetch('/api/export-time-change', {
       method: 'POST',

@@ -2094,6 +2094,92 @@ def _normalize_time_change_trace_payload(traces: list) -> list[dict]:
     return normalized
 
 
+def create_uv_area_export_figure(
+    times: list,
+    intensities: list,
+    areas: Optional[list] = None,
+    sample_name: str = "Sample",
+    wavelength: Optional[float] = None,
+    style: Optional[dict] = None,
+) -> matplotlib.figure.Figure:
+    """Create a UV-area PDF with the same fixed axis box and fonts as Time Change."""
+    style = style or {}
+    normalized = _normalize_time_change_trace_payload([{
+        'label': sample_name,
+        'x': times,
+        'intensities': intensities,
+    }])
+
+    base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
+    panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
+    x_axis_width_multiplier = max(1.0, _coerce_finite_float(style.get('x_axis_width_multiplier', 2.0), 2.0))
+    plot_area_width_in = panel_width_in * x_axis_width_multiplier
+    fig, ax = plt.subplots(1, 1, figsize=(plot_area_width_in, panel_height_in))
+    _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
+
+    if normalized:
+        x_values = normalized[0]['x']
+        y_values = normalized[0]['y']
+        line_width = max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8))
+        ax.plot(x_values, y_values, color='#1f77b4', linewidth=line_width)
+
+        colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b',
+                  '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        for index, area in enumerate(areas or []):
+            if not isinstance(area, dict) or area.get('selected', True) is False:
+                continue
+            start = _coerce_finite_float(area.get('start'), np.nan)
+            end = _coerce_finite_float(area.get('end'), np.nan)
+            if not np.isfinite(start) or not np.isfinite(end) or end <= start:
+                continue
+            start = max(float(x_values[0]), start)
+            end = min(float(x_values[-1]), end)
+            if end <= start:
+                continue
+
+            inner_mask = (x_values > start) & (x_values < end)
+            window_x = np.concatenate(([start], x_values[inner_mask], [end]))
+            window_y = np.interp(window_x, x_values, y_values)
+            baseline_start = float(np.interp(start, x_values, y_values))
+            baseline_end = float(np.interp(end, x_values, y_values))
+            baseline_y = baseline_start + (
+                (baseline_end - baseline_start) * ((window_x - start) / (end - start))
+            )
+            upper_y = np.maximum(window_y, baseline_y)
+            color = colors[index % len(colors)]
+            area_value = _coerce_finite_float(area.get('area'), np.nan)
+            label = f"Area {index + 1}"
+            if np.isfinite(area_value):
+                label += f" ({area_value:.2e})"
+            ax.plot(window_x, baseline_y, color=color, linewidth=0.8, linestyle=':')
+            ax.fill_between(window_x, baseline_y, upper_y, color=color, alpha=0.28, label=label)
+
+        _set_chrom_xlim(ax, x_values)
+    else:
+        ax.text(0.5, 0.5, "No UV data", ha='center', va='center', transform=ax.transAxes)
+
+    wavelength_value = _coerce_finite_float(wavelength, np.nan)
+    wavelength_label = f" {wavelength_value:.0f} nm" if np.isfinite(wavelength_value) else ""
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel("Absorbance (mAU)")
+    if _coerce_bool(style.get('show_title', True), True):
+        clean_sample_name = str(sample_name or 'Sample')
+        if clean_sample_name.lower().endswith('.d'):
+            clean_sample_name = clean_sample_name[:-2]
+        ax.set_title(f"UV{wavelength_label} Area — {clean_sample_name}", fontweight='bold', y=1.03)
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(handles, labels, loc='upper right', fontsize=7, frameon=False)
+    if _coerce_bool(style.get('show_grid', False), False):
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.grid(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
+    return fig
+
+
 def create_time_change_offset_figure(
     traces: list,
     style: Optional[dict] = None,
