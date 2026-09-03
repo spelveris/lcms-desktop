@@ -357,12 +357,12 @@ jobs:
           body: |
             CATrupole release `${{ steps.meta.outputs.tag }}`.
 
-            Download the file that matches your operating system from the assets list below:
+            ## Downloads
 
-            | Platform | File | Description |
-            | --- | --- | --- |
-            | Windows | `CATrupole Setup ${{ steps.meta.outputs.version }}.exe` | Installer |
-            | macOS (Apple Silicon) | `CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg` | Disk image |
+            - **macOS (Apple Silicon):** [CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg](https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/CATrupole-${{ steps.meta.outputs.version }}-arm64.dmg)
+            - **Windows:** [CATrupole Setup ${{ steps.meta.outputs.version }}.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/CATrupole.Setup.${{ steps.meta.outputs.version }}.exe)
+
+            The remaining files under **Assets** are used automatically by CATrupole's built-in updater. Users do not need to download them manually.
 
             **Full Changelog**: ${{ steps.meta.outputs.changelog }}
           generate_release_notes: false

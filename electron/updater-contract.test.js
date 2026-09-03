@@ -24,6 +24,7 @@ test("release workflow publishes every update feed asset", () => {
   assert.match(workflow, /release-assets\/\*-mac\.zip/);
   assert.match(workflow, /release-assets\/\*\.blockmap/);
   assert.match(workflow, /release-assets\/latest\*\.yml/);
+  assert.match(workflow, /used automatically by CATrupole's built-in updater/);
 });
 
 test("packaged app downloads updates and installs them on quit", () => {
