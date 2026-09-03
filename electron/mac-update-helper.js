@@ -1,12 +1,35 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const PRODUCT_APP_NAME = "CATrupole.app";
 const PRODUCT_BUNDLE_ID = "com.catrupole.desktop";
 const LOG_DIR = path.join(os.homedir(), "Library", "Logs", "CATrupole");
 const LOG_FILE = path.join(LOG_DIR, "updater.log");
+const RELAUNCH_SCRIPT = `
+helper_pid="$1"
+app_path="$2"
+
+while kill -0 "$helper_pid" 2>/dev/null; do
+  /bin/sleep 0.25
+done
+
+# LaunchServices can briefly retain the updater's CATrupole process identity.
+# Give it time to clear, then retry if an open request does not stay running.
+/bin/sleep 2
+attempt=1
+while [ "$attempt" -le 3 ]; do
+  /usr/bin/open -n "$app_path"
+  /bin/sleep 3
+  if /usr/bin/pgrep -x CATrupole >/dev/null 2>&1; then
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+  /bin/sleep 2
+done
+exit 1
+`;
 
 function log(message) {
   try {
@@ -50,6 +73,22 @@ function runChecked(command, args) {
     throw new Error(`${path.basename(command)} failed${detail ? `: ${detail}` : ""}`);
   }
   return String(result.stdout || "").trim();
+}
+
+function scheduleRelaunchAfterHelperExit(appPath) {
+  const relauncher = spawn("/bin/sh", [
+    "-c",
+    RELAUNCH_SCRIPT,
+    "catrupole-relauncher",
+    String(process.pid),
+    appPath,
+  ], {
+    detached: true,
+    stdio: "ignore",
+  });
+
+  if (!relauncher.pid) throw new Error("Could not schedule CATrupole to reopen.");
+  relauncher.unref();
 }
 
 function readBundleValue(appPath, key) {
@@ -136,19 +175,16 @@ async function installUpdate(parentPid, zipPath, appPath, expectedVersion) {
     previousAppMoved = true;
     fs.renameSync(stagedAppPath, request.appPath);
 
-    const openResult = spawnSync("/usr/bin/open", ["-n", request.appPath], { encoding: "utf8" });
-    if (openResult.error || openResult.status !== 0) {
-      throw openResult.error || new Error(String(openResult.stderr || "Could not reopen CATrupole.").trim());
-    }
+    scheduleRelaunchAfterHelperExit(request.appPath);
 
     fs.rmSync(backupPath, { recursive: true, force: true });
     previousAppMoved = false;
-    log(`Installed CATrupole ${request.expectedVersion} successfully.`);
+    log(`Installed CATrupole ${request.expectedVersion} successfully; relaunch scheduled.`);
   } catch (error) {
     log(`Update failed: ${error.message}`);
     if (previousAppMoved) restorePreviousApp(request.appPath, backupPath, stagingRoot);
     try {
-      spawnSync("/usr/bin/open", ["-n", request.appPath], { encoding: "utf8" });
+      scheduleRelaunchAfterHelperExit(request.appPath);
     } catch (_) {
       // The updater log preserves the original failure for support.
     }
