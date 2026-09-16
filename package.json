@@ -1,6 +1,6 @@
 {
   "name": "catrupole",
-  "version": "0.2.48",
+  "version": "0.2.49",
   "description": "CATrupole Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {

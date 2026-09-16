@@ -1132,6 +1132,12 @@ def _is_ignored_router_sample_path(path: Union[str, Path]) -> bool:
     return "shutdown" in words
 
 
+def _is_wash_named_router_sample(path: Union[str, Path]) -> bool:
+    """Match an initial wash label, optionally followed by a run number."""
+    name = Path(str(path)).name.lstrip()
+    return bool(re.match(r"wash(?:$|[\W_\d])", name, flags=re.IGNORECASE))
+
+
 def _resolve_run_router_scan_roots(
     source_path: Union[str, Path],
     monitor_recent_days: int = 0,
@@ -1355,6 +1361,10 @@ def _scan_run_router(
             if normalized_folder in seen_paths:
                 continue
             seen_paths.add(normalized_folder)
+
+            if _is_wash_named_router_sample(folder):
+                wash_count += 1
+                continue
 
             run_state = _inspect_sample_run_state(folder)
             if run_state.get("is_wash_position"):
@@ -3339,6 +3349,19 @@ def run_router_copy(payload: dict = Body(...)):
             continue
         if _is_ignored_router_sample_path(source_folder):
             result["detail"] = "Shutdown runs are ignored"
+            skipped_count += 1
+            log_path = _append_router_log(
+                event="copy",
+                status=result["status"],
+                run_name=result["name"],
+                source_path=result["path"],
+                detail=result["detail"],
+            )
+            results.append(result)
+            continue
+
+        if _is_wash_named_router_sample(source_folder):
+            result["detail"] = "Run name starts with wash; skipped"
             skipped_count += 1
             log_path = _append_router_log(
                 event="copy",
