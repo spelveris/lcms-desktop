@@ -61,7 +61,8 @@ test("startup screen uses a fixed circular chasing-dot loader", () => {
   assert.match(main, /maxHeight:\s*308/);
   assert.match(splash, /aspect-ratio:\s*1 \/ 1/);
   assert.match(splash, /flex:\s*0 0 72px/);
-  assert.match(splash, /@keyframes orbit/);
+  assert.match(splash, /src="spinner-motion.js"/);
+  assert.match(splash, /prefers-reduced-motion/);
   assert.doesNotMatch(splash, /border-top-color/);
 });
 

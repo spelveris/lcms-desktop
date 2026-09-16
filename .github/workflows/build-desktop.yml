@@ -63,13 +63,16 @@ jobs:
       - name: Test deconvolution display and export controls
         run: npm run test:deconvolution
 
+      - name: Test circular loading animation
+        run: npm run test:spinner
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install pyinstaller
 
-      - name: Test transfer routing and shared index
+      - name: Test transfer routing, shared index, and startup
         run: python -m unittest discover -s backend/tests -v
 
       - name: Build desktop artifacts

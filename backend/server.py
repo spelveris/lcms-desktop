@@ -12,6 +12,7 @@ import datetime
 import json
 import shutil
 import subprocess
+from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
 from typing import Optional, Union
@@ -26,9 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 import numpy as np
-import matplotlib
-matplotlib.use("Agg", force=True)
-import matplotlib.pyplot as plt
+from plot_runtime import plotting, pyplot as plt, runtime as plot_runtime
 
 # Prefer local desktop copies of core LC-MS modules.
 BACKEND_DIR = os.path.dirname(__file__)
@@ -62,12 +61,17 @@ from data_reader import (
 from search_index import record_transferred_sample, search_shared_index, write_complete_index
 import analysis
 import config as lcms_config
-import plotting
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="LC-MS Desktop API", version=lcms_config.APP_VERSION)
+@asynccontextmanager
+async def lifespan(_app):
+    plot_runtime.warm_in_background()
+    yield
+
+
+app = FastAPI(title="LC-MS Desktop API", version=lcms_config.APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -4120,6 +4124,7 @@ def export_report_pdf(payload: dict = Body(...)):
         deconv_time_range = None
 
     A4_W, A4_H = 8.27, 11.69
+    plot_runtime.get("plotting")  # Finish font/rcParams setup before opening a PDF.
     from matplotlib.backends.backend_pdf import PdfPages
 
     ion_components_per_page = 4
