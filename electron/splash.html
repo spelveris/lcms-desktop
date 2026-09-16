@@ -91,14 +91,13 @@
       position: absolute;
       top: 50%;
       left: 50%;
-      width: 9px;
-      height: 9px;
-      margin: -4.5px 0 0 -4.5px;
+      width: 6px;
+      height: 6px;
+      margin: -3px 0 0 -3px;
       border-radius: 50%;
       background: var(--accent);
       box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
-      animation: orbit 1.35s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-      animation-delay: var(--delay);
+      transform: rotate(var(--angle)) translateY(-27px);
     }
 
     .status {
@@ -113,26 +112,6 @@
       color: rgba(148, 163, 184, 0.78);
     }
 
-    @keyframes orbit {
-      0% {
-        opacity: 0.22;
-        transform: rotate(0deg) translateY(-27px) scale(0.72);
-      }
-      42% {
-        opacity: 1;
-        transform: rotate(185deg) translateY(-27px) scale(1);
-      }
-      100% {
-        opacity: 0.22;
-        transform: rotate(360deg) translateY(-27px) scale(0.72);
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .spinner-bubble {
-        animation-duration: 2.4s;
-      }
-    }
   </style>
 </head>
 <body>
@@ -141,20 +120,36 @@
       <div class="eyebrow">Preparing Workspace</div>
       <div class="title">CATrupole</div>
       <div class="spinner" role="status" aria-label="Loading CATrupole">
-        <span class="spinner-bubble" style="--delay: -1.157s"></span>
-        <span class="spinner-bubble" style="--delay: -0.964s"></span>
-        <span class="spinner-bubble" style="--delay: -0.771s"></span>
-        <span class="spinner-bubble" style="--delay: -0.579s"></span>
-        <span class="spinner-bubble" style="--delay: -0.386s"></span>
-        <span class="spinner-bubble" style="--delay: -0.193s"></span>
-        <span class="spinner-bubble" style="--delay: 0s"></span>
+        <span class="spinner-bubble" style="--angle: 0deg"></span>
+        <span class="spinner-bubble" style="--angle: 51.43deg"></span>
+        <span class="spinner-bubble" style="--angle: 102.86deg"></span>
+        <span class="spinner-bubble" style="--angle: 154.29deg"></span>
+        <span class="spinner-bubble" style="--angle: 205.71deg"></span>
+        <span class="spinner-bubble" style="--angle: 257.14deg"></span>
+        <span class="spinner-bubble" style="--angle: 308.57deg"></span>
       </div>
       <div class="status">Starting the backend and loading your analysis window...</div>
       <div id="version" class="version"></div>
     </main>
   </div>
 
+  <script src="spinner-motion.js"></script>
   <script>
+    const bubbles = Array.from(document.querySelectorAll(".spinner-bubble"));
+    const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let frame;
+    function drawSpinner(time) {
+      CATrupoleSpinner.positions(time, motionPreference.matches).forEach((point, i) => {
+        bubbles[i].style.transform = `translate(${point.x}px, ${point.y}px)`;
+      });
+      if (!motionPreference.matches) frame = requestAnimationFrame(drawSpinner);
+    }
+    motionPreference.addEventListener("change", () => {
+      cancelAnimationFrame(frame);
+      drawSpinner(performance.now());
+    });
+    drawSpinner(performance.now());
+
     const params = new URLSearchParams(window.location.search);
     const rawVersion = String(params.get("appVersion") || "").trim();
     if (rawVersion) {
