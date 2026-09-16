@@ -66,6 +66,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pyinstaller
 
+      - name: Test transfer routing and shared index
+        run: python -m unittest discover -s backend/tests -v
+
       - name: Build desktop artifacts
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
