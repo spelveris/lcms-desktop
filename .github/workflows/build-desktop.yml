@@ -351,6 +351,11 @@ jobs:
       - name: Show release files
         run: find release-assets -type f | sort
 
+      - name: Match Windows update feed to GitHub asset names
+        # GitHub changes spaces in uploaded installer names to dots.
+        # electron-builder's unpublished feed instead uses hyphens.
+        run: sed -i 's/CATrupole-Setup-/CATrupole.Setup./g' release-assets/latest.yml
+
       - name: Resolve release version
         id: meta
         run: |
@@ -370,6 +375,7 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          name: CATrupole ${{ steps.meta.outputs.tag }}
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
