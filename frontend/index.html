@@ -448,36 +448,27 @@
       </div>
       <div id="deconv-empty-state" class="quote-empty-stack"></div>
       <div id="deconv-window-context" class="two-col hidden">
-        <div class="col">
-          <div id="deconv-uv-plot" class="plot-container"></div>
+        <div class="col deconv-plot-card">
+          <div id="deconv-uv-plot" class="deconv-plot-inner" data-fixed-plot-height="360"></div>
         </div>
-        <div class="col">
-          <div id="deconv-tic-plot" class="plot-container"></div>
+        <div class="col deconv-plot-card">
+          <div id="deconv-tic-plot" class="deconv-plot-inner" data-fixed-plot-height="360"></div>
         </div>
       </div>
       <div id="deconv-results" class="hidden">
         <div class="two-col deconv-results-grid">
           <div class="col deconv-spectrum-stack">
-            <div id="deconv-spectrum-plot" class="plot-container" style="border-color:transparent;"></div>
-            <div class="deconv-mass-download-row">
-              <button id="btn-export-deconv-spectrum-pdf" class="btn btn-sm">Download PDF</button>
-            </div>
-            <div class="deconv-dense-preview-card">
-              <div class="tab-toolbar" style="margin:0 0 8px 0;">
-                <span class="toolbar-note">Full Deconvoluted Spectrum</span>
-              </div>
-              <div id="deconv-dense-mass-preview" class="deconv-dense-preview">
-                <p class="placeholder-msg">Run deconvolution to render the full dense mass profile.</p>
-              </div>
-              <div class="deconv-mass-download-row">
-                <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-dense">Download PDF</button>
+            <div class="deconv-plot-card">
+              <div id="deconv-spectrum-plot" class="deconv-plot-inner"></div>
+              <div class="deconv-mass-download-row" aria-label="Mass spectrum downloads">
+                <button id="btn-export-deconv-spectrum-pdf" class="btn btn-sm">Download PDF</button>
               </div>
             </div>
           </div>
           <div class="col deconv-mass-stack">
-            <div class="deconv-mass-card">
-              <div id="deconv-mass-plot" class="deconv-mass-plot-inner"></div>
-              <div class="deconv-mass-download-row">
+            <div class="deconv-plot-card deconv-mass-card">
+              <div id="deconv-mass-plot" class="deconv-plot-inner"></div>
+              <div class="deconv-mass-download-row" aria-label="Deconvoluted mass downloads">
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="png">Download PNG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="svg">Download SVG</button>
                 <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf">Download PDF</button>
@@ -487,16 +478,25 @@
             </div>
           </div>
         </div>
-        <div class="tab-toolbar" style="margin:8px 0 4px 0;">
-          <span class="toolbar-note">Ion Selection per Component</span>
-          <div class="export-group">
+        <div class="two-col deconv-dense-row">
+          <div class="deconv-plot-card deconv-dense-preview-card">
+            <div id="deconv-dense-mass-preview" class="deconv-dense-preview deconv-plot-inner">
+              <p class="placeholder-msg">Run deconvolution to render the full dense mass profile.</p>
+            </div>
+            <div class="deconv-mass-download-row">
+              <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-dense">Download PDF</button>
+            </div>
+          </div>
+        </div>
+        <div class="deconv-plot-card deconv-ion-card">
+          <div id="deconv-ion-selection-plot" class="deconv-plot-inner">
+            <p class="placeholder-msg">Run deconvolution to render ion selection graph.</p>
+          </div>
+          <div class="deconv-mass-download-row">
             <button class="btn btn-sm btn-export-ion-selection" data-format="png">Download PNG (ion selection)</button>
             <button class="btn btn-sm btn-export-ion-selection" data-format="svg">Download SVG (ion selection)</button>
             <button class="btn btn-sm btn-export-ion-selection" data-format="pdf">Download PDF (ion selection)</button>
           </div>
-        </div>
-        <div id="deconv-ion-selection-plot" class="plot-container">
-          <p class="placeholder-msg">Run deconvolution to render ion selection graph.</p>
         </div>
         <div id="deconv-results-table-container"></div>
         <div id="deconv-ion-detail"></div>

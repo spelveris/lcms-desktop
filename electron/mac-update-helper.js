@@ -2,32 +2,51 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const { randomBytes } = require("crypto");
+const { LOG_DIR, RELAUNCH_ARG, cleanRelaunchEnvironment, receiptPath } = require("./mac-relaunch");
 
 const PRODUCT_APP_NAME = "CATrupole.app";
 const PRODUCT_BUNDLE_ID = "com.catrupole.desktop";
-const LOG_DIR = path.join(os.homedir(), "Library", "Logs", "CATrupole");
 const LOG_FILE = path.join(LOG_DIR, "updater.log");
 const RELAUNCH_SCRIPT = `
 helper_pid="$1"
 app_path="$2"
+receipt="$3"
+relaunch_arg="$4"
+log_file="$5"
+
+log_relaunch() {
+  printf '%s %s\\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$log_file"
+}
 
 while kill -0 "$helper_pid" 2>/dev/null; do
   /bin/sleep 0.25
 done
 
 # LaunchServices can briefly retain the updater's CATrupole process identity.
-# Give it time to clear, then retry if an open request does not stay running.
+# Give it time to clear. A process name is not proof that a window opened:
+# wait for a receipt written after the main window is rendered and revealed.
 /bin/sleep 2
 attempt=1
 while [ "$attempt" -le 3 ]; do
-  /usr/bin/open -n "$app_path"
-  /bin/sleep 3
-  if /usr/bin/pgrep -x CATrupole >/dev/null 2>&1; then
-    exit 0
-  fi
+  log_relaunch "Reopening CATrupole (attempt $attempt)."
+  /usr/bin/open -n "$app_path" --args "$relaunch_arg" >> "$log_file" 2>&1
+  elapsed=0
+  while [ "$elapsed" -lt 90 ]; do
+    if [ -s "$receipt" ]; then
+      details=$(/bin/cat "$receipt")
+      log_relaunch "CATrupole main window reopened successfully: $details"
+      /bin/rm -f "$receipt"
+      exit 0
+    fi
+    /bin/sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  log_relaunch "No main-window confirmation yet."
   attempt=$((attempt + 1))
   /bin/sleep 2
 done
+log_relaunch "Automatic reopen was not confirmed. Open CATrupole manually; the update is installed."
 exit 1
 `;
 
@@ -75,16 +94,24 @@ function runChecked(command, args) {
   return String(result.stdout || "").trim();
 }
 
-function scheduleRelaunchAfterHelperExit(appPath) {
-  const relauncher = spawn("/bin/sh", [
+function scheduleRelaunchAfterHelperExit(appPath, spawnProcess = spawn) {
+  const token = randomBytes(16).toString("hex");
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const relauncher = spawnProcess("/bin/sh", [
     "-c",
     RELAUNCH_SCRIPT,
     "catrupole-relauncher",
     String(process.pid),
     appPath,
+    receiptPath(token),
+    `${RELAUNCH_ARG}${token}`,
+    LOG_FILE,
   ], {
     detached: true,
     stdio: "ignore",
+    env: cleanRelaunchEnvironment(),
+    // The old application bundle (and potentially the helper's cwd) is removed.
+    cwd: os.homedir(),
   });
 
   if (!relauncher.pid) throw new Error("Could not schedule CATrupole to reopen.");
@@ -213,4 +240,6 @@ module.exports = {
   assertInstallRequest,
   normalizeVersion,
   validateStagedApp,
+  scheduleRelaunchAfterHelperExit,
+  RELAUNCH_SCRIPT,
 };

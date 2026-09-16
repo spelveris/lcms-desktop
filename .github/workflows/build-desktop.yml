@@ -60,6 +60,9 @@ jobs:
       - name: Test automatic updater contract
         run: npm run test:updater
 
+      - name: Test deconvolution display and export controls
+        run: npm run test:deconvolution
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -207,6 +210,10 @@ jobs:
             echo "Smoke test failed: UV area export did not return a PDF"
             exit 1
           fi
+
+      - name: Verify packaged macOS app reopens after updater helper exits
+        if: runner.os == 'macOS'
+        run: node scripts/smoke-test-mac-relaunch.js
 
       - name: Smoke test Windows package
         if: runner.os == 'Windows'

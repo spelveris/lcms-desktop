@@ -42,9 +42,11 @@ test("packaged app downloads updates and installs them internally", () => {
   assert.match(macHelper, /"\/usr\/bin\/codesign"/);
   assert.match(macHelper, /"\/usr\/bin\/ditto"/);
   assert.match(macHelper, /\/usr\/bin\/open -n/);
-  assert.match(macHelper, /spawn\("\/bin\/sh"/);
+  assert.match(macHelper, /spawnProcess\("\/bin\/sh"/);
   assert.match(macHelper, /kill -0 "\$helper_pid"/);
-  assert.match(macHelper, /pgrep -x CATrupole/);
+  assert.doesNotMatch(macHelper, /pgrep -x CATrupole/);
+  assert.match(macHelper, /env: cleanRelaunchEnvironment\(\)/);
+  assert.match(main, /mainWindowReady = true;\s+confirmRelaunchIfReady\(\)/);
   assert.match(macHelper, /relaunch scheduled/);
   assert.match(preload, /performAction/);
 });
