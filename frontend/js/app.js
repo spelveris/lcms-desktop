@@ -1101,29 +1101,16 @@ function resizePlotlyById(plotId) {
 }
 
 function syncDeconvBottomLayout() {
-  const spectrumPlot = document.getElementById('deconv-spectrum-plot');
-  const massCard = document.querySelector('#deconv-results .deconv-mass-card');
-  const massPlot = document.getElementById('deconv-mass-plot');
-  if (!spectrumPlot || !massCard || !massPlot) return;
-
-  const targetCardHeight = 440;
-  spectrumPlot.style.height = `${targetCardHeight}px`;
-  spectrumPlot.style.minHeight = `${targetCardHeight}px`;
-  massCard.style.height = `${targetCardHeight}px`;
-  massCard.style.minHeight = `${targetCardHeight}px`;
-
-  const downloadRow = massCard.querySelector('.deconv-mass-download-row');
-  const rowHeight = downloadRow ? downloadRow.offsetHeight : 0;
-  const styles = window.getComputedStyle(massCard);
-  const padTop = parseFloat(styles.paddingTop) || 0;
-  const padBottom = parseFloat(styles.paddingBottom) || 0;
-  const gap = 8;
-  const plotHeight = Math.max(300, targetCardHeight - padTop - padBottom - rowHeight - gap);
-  massPlot.style.height = `${plotHeight}px`;
-  massPlot.style.minHeight = `${plotHeight}px`;
-
-  const spectrumPlotHeight = Math.max(320, Math.floor(spectrumPlot.clientHeight || targetCardHeight));
-  spectrumPlot.dataset.plotHeight = String(spectrumPlotHeight);
+  // Size the plots, not their outer cards. Download rows can wrap naturally
+  // without shrinking a Plotly canvas or covering its buttons.
+  ['deconv-spectrum-plot', 'deconv-mass-plot'].forEach((id) => {
+    const plot = document.getElementById(id);
+    if (!plot) return;
+    plot.style.height = '400px';
+    plot.style.minHeight = '400px';
+    plot.dataset.fixedPlotHeight = '400';
+    plot.dataset.plotHeight = '400';
+  });
 }
 
 function schedulePlotlyResize(plotIds = []) {
@@ -6802,6 +6789,21 @@ async function applyManualDeconvWindowUpdate() {
 }
 
 function initDeconvolution() {
+  if (typeof ResizeObserver !== 'undefined') {
+    const widths = new WeakMap();
+    const observer = new ResizeObserver((entries) => {
+      const plots = [];
+      entries.forEach(({ target, contentRect }) => {
+        const width = Math.floor(contentRect.width);
+        if (width < 80 || widths.get(target) === width) return;
+        widths.set(target, width);
+        const plot = target.querySelector('.deconv-plot-inner');
+        if (plot?.id) plots.push(plot.id);
+      });
+      if (plots.length) requestAnimationFrame(() => plots.forEach(resizePlotlyById));
+    });
+    document.querySelectorAll('#tab-deconv .deconv-plot-card').forEach((card) => observer.observe(card));
+  }
   document.getElementById('btn-auto-detect-window').addEventListener('click', autoDetectDeconvWindow);
   document.getElementById('btn-run-deconv').addEventListener('click', runDeconvolution);
   document.getElementById('btn-refresh-deconv')?.addEventListener('click', refreshCurrentDeconvolutionSample);
@@ -7194,23 +7196,23 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
 
   const guides = [];
   const seen = new Set();
-  const addGuide = (targetMz) => {
+  const addGuide = (targetMz, componentIndex) => {
     const mz = Number(targetMz);
     if (!Number.isFinite(mz) || mz <= 0 || mz < mzMin || mz > mzMax) return;
-    const key = mz.toFixed(6);
+    const key = `${componentIndex}:${mz.toFixed(6)}`;
     if (seen.has(key)) return;
     seen.add(key);
-    guides.push(mz);
+    guides.push({ mz, componentIndex, mass: Number(components[componentIndex].mass) });
   };
 
   const proton = 1.00784;
 
   // Include ion guides from all provided components (not only top component),
   // so secondary component charge states (e.g. z=4) are also highlighted.
-  components.forEach((comp) => {
+  components.forEach((comp, componentIndex) => {
     const observedIons = Array.isArray(comp.ion_mzs) ? comp.ion_mzs.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0) : [];
     if (observedIons.length > 0) {
-      observedIons.forEach((mz) => { addGuide(mz); });
+      observedIons.forEach((mz) => { addGuide(mz, componentIndex); });
       return;
     }
 
@@ -7222,7 +7224,7 @@ function computeMassSpectrumGuideMzs(mzValues, components) {
       const z = Number(zRaw);
       if (!(z > 0)) return;
       const theoMz = (mass + (z * proton)) / z;
-      addGuide(theoMz);
+      addGuide(theoMz, componentIndex);
     });
   });
 

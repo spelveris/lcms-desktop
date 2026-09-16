@@ -14,6 +14,8 @@ const fs = require("fs");
 const http = require("http");
 const { autoUpdater } = require("electron-updater");
 const { fetchLatestRelease, isNewerVersion } = require("./update-checker");
+const { relaunchTokens, acknowledgeRelaunch } = require("./mac-relaunch");
+const pendingRelaunchTokens = new Set(relaunchTokens(process.argv));
 
 const BACKEND_PORT = 8741;
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
@@ -25,6 +27,7 @@ let splashWindow = null;
 let backendProcess = null;
 let isQuitting = false;
 let backendReady = false;
+let mainWindowReady = false;
 let updateCheckTimer = null;
 let packagedUpdaterConfigured = false;
 let downloadedUpdateFile = "";
@@ -492,6 +495,13 @@ function createSplashWindow() {
   return splash;
 }
 
+function confirmRelaunchIfReady() {
+  const window = getMainWindow();
+  if (!mainWindowReady || !window || !window.isVisible()) return;
+  acknowledgeRelaunch(pendingRelaunchTokens, app.getVersion());
+  pendingRelaunchTokens.clear();
+}
+
 function createWindow() {
   const existingWindow = getMainWindow();
   if (existingWindow) {
@@ -523,6 +533,8 @@ function createWindow() {
   window.once("ready-to-show", () => {
     closeSplashWindow();
     revealWindow(window);
+    mainWindowReady = true;
+    confirmRelaunchIfReady();
   });
 
   window.on("close", (event) => {
@@ -537,6 +549,7 @@ function createWindow() {
   window.on("closed", () => {
     if (mainWindow === window) {
       mainWindow = null;
+      mainWindowReady = false;
     }
   });
 
@@ -564,8 +577,10 @@ function restoreOrCreateMainWindow() {
 // ---------------------------------------------------------------------------
 
 if (gotSingleInstanceLock) {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
+    relaunchTokens(argv).forEach((token) => pendingRelaunchTokens.add(token));
     restoreOrCreateMainWindow();
+    confirmRelaunchIfReady();
   });
 
   app.whenReady().then(async () => {

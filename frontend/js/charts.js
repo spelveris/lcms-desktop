@@ -10,6 +10,13 @@ const COLOR_CYCLE = [
   '#bcbd22', '#17becf',
 ];
 
+// Keep a component's identity consistent across all on-screen deconvolution plots.
+const DECONV_COLORS = [
+  '#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
+  '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+];
+function getDeconvColor(index) { return DECONV_COLORS[index % DECONV_COLORS.length]; }
+
 const WEBAPP_LAYOUT = {
   autosize: true,
   paper_bgcolor: '#ffffff',
@@ -1167,16 +1174,16 @@ const charts = {
       arrowcolor: '#000000', font: { size: 9, color: '#000000' }, ax: 0, ay: -30,
     }));
     const guideMzs = Array.isArray(options.guideMzs) ? options.guideMzs : [];
-    const shapes = guideMzs.map((mz) => ({
+    const shapes = guideMzs.map((guide) => ({
       type: 'line',
-      x0: mz,
-      x1: mz,
+      x0: typeof guide === 'number' ? guide : guide.mz,
+      x1: typeof guide === 'number' ? guide : guide.mz,
       xref: 'x',
       y0: 0,
       y1: 1,
       yref: 'paper',
       line: {
-        color: '#d62728',
+        color: typeof guide === 'number' ? '#d62728' : getDeconvColor(guide.componentIndex),
         width: 1.1,
         dash: 'dash',
       },
@@ -1202,7 +1209,7 @@ const charts = {
       yaxis: { title: 'Intensity', automargin: true },
       showlegend: traces.length > 1,
       height: plotHeight,
-      margin: { l: 64, r: 44, t: 40, b: 96 },
+      margin: { l: 64, r: 44, t: 40, b: divId === 'deconv-spectrum-plot' ? 66 : 96 },
       annotations: plotAnnotations,
       shapes,
     });
@@ -1255,15 +1262,11 @@ const charts = {
     // One trace per component for vertical lines with individual colors + labels
     const traces = [];
     const annotations = [];
-    const stemColors = [
-      '#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
-      '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
-    ];
 
     components.forEach((c, i) => {
       const mKDa = c.mass / 1000;
       const relInt = normInt[i];
-      const color = stemColors[i % stemColors.length];
+      const color = getDeconvColor(i);
 
       // Vertical line from 0 to intensity
       traces.push({
@@ -1281,7 +1284,7 @@ const charts = {
         text: labelText,
         showarrow: true, arrowhead: 0, arrowsize: 1, arrowwidth: 1,
         arrowcolor: color, ax: 0, ay: -25,
-        font: { size: 10, color: '#000000' },
+        font: { size: 10, color },
       });
     });
 
@@ -1466,8 +1469,6 @@ const charts = {
     }
 
     const { x: mzPlot, y: intPlot } = downsamplePair(mz, ints, 8000);
-    const colors = ['#2ca02c', '#1f77b4', '#ff7f0e', '#d62728', '#9467bd',
-      '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'];
 
     const n = Math.max(1, Math.min(10, comps.length));
     const columns = n > 1 ? 2 : 1;
@@ -1498,7 +1499,7 @@ const charts = {
       const domainRight = domainLeft + colWidth;
       const domainTop = 1 - row * (rowHeight + vGap);
       const domainBottom = domainTop - rowHeight;
-      const color = colors[i % colors.length];
+      const color = getDeconvColor(i);
       const ionMzs = (comp.ion_mzs || []).map(v => Number(v)).filter(v => Number.isFinite(v));
       const ionCharges = (comp.ion_charges || []).map(v => Number(v)).filter(v => Number.isFinite(v));
 
