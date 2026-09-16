@@ -1,0 +1,56 @@
+name: Repair v0.2.49 Windows update feed
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/repair-v0.2.49-update-feed.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-v0.2.49-update-feed
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const repo = context.repo;
+            const tag = 'v0.2.49';
+            const { data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag });
+            const installerName = 'CATrupole.Setup.0.2.49.exe';
+            const installer = release.assets.find(asset => asset.name === installerName);
+            const blockmap = release.assets.find(asset => asset.name === `${installerName}.blockmap`);
+            const feed = release.assets.find(asset => asset.name === 'latest.yml');
+            if (!installer || !blockmap || !feed) throw new Error('Required release assets are missing');
+            const response = await fetch(feed.browser_download_url);
+            if (!response.ok) throw new Error(`Could not read update feed: ${response.status}`);
+            const original = await response.text();
+            if (!/^version: 0\.2\.49\s*$/m.test(original)) throw new Error('Unexpected feed version');
+            if (!original.includes(`size: ${installer.size}`)) throw new Error('Installer size does not match feed');
+            const corrected = original.replaceAll('CATrupole-Setup-0.2.49.exe', installerName);
+            if (!corrected.includes(`url: ${installerName}`) || !corrected.includes(`path: ${installerName}`)) {
+              throw new Error('Corrected feed does not reference the published installer');
+            }
+            if (corrected !== original) {
+              // Stage the replacement first so a failed upload leaves the live feed intact.
+              const stagedName = 'latest-windows-corrected.yml';
+              const previousStaged = release.assets.find(asset => asset.name === stagedName);
+              if (previousStaged) {
+                await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: previousStaged.id });
+              }
+              const { data: staged } = await github.rest.repos.uploadReleaseAsset({
+                ...repo, release_id: release.id, name: stagedName,
+                data: Buffer.from(corrected),
+                headers: { 'content-type': 'application/yaml' },
+              });
+              await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: feed.id });
+              await github.rest.repos.updateReleaseAsset({ ...repo, asset_id: staged.id, name: 'latest.yml' });
+            }
+            await github.rest.repos.updateRelease({ ...repo, release_id: release.id, name: 'CATrupole v0.2.49' });
+            core.info('Windows update feed now references the published installer.');
