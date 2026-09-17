@@ -1,6 +1,6 @@
 {
   "name": "catrupole",
-  "version": "0.2.52",
+  "version": "0.2.53",
   "description": "CATrupole Desktop App (Electron + FastAPI)",
   "main": "electron/main.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "setup": "./setup-dev.sh",
     "frontend-only": "open frontend/index.html",
     "test:update-checker": "node --test electron/update-checker.test.js",
-    "test:updater": "node --test electron/update-checker.test.js electron/updater-contract.test.js electron/mac-relaunch.test.js",
+    "test:updater": "node --test electron/update-checker.test.js electron/updater-contract.test.js electron/mac-relaunch.test.js electron/update-cache.test.js",
     "test:deconvolution": "node --test frontend/tests/deconvolution.test.js",
     "test:spinner": "node --test electron/spinner-motion.test.js",
     "build:backend": "node scripts/build-backend.js",

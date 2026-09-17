@@ -15,7 +15,14 @@ const http = require("http");
 const { autoUpdater } = require("electron-updater");
 const { fetchLatestRelease, isNewerVersion } = require("./update-checker");
 const { relaunchTokens, acknowledgeRelaunch } = require("./mac-relaunch");
+const { createStartupUpdateCleanup } = require("./update-cache");
 const pendingRelaunchTokens = new Set(relaunchTokens(process.argv));
+let confirmSuccessfulStartup;
+const cleanupStartupUpdates = createStartupUpdateCleanup({
+  ready: new Promise(resolve => { confirmSuccessfulStartup = resolve; }),
+  updater: autoUpdater,
+  getVersion: () => app.getVersion(),
+});
 
 const BACKEND_PORT = 8741;
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
@@ -66,6 +73,8 @@ function configurePackagedUpdater() {
   packagedUpdaterConfigured = true;
 
   autoUpdater.autoDownload = true;
+  // Do not retain a second installer/ZIP for future differential downloads.
+  autoUpdater.disableDifferentialDownload = true;
   // Squirrel.Mac rejects successive ad-hoc-signed builds because their code
   // identities change. CATrupole uses its checksum-verified helper on macOS.
   autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
@@ -180,6 +189,9 @@ async function checkForUpdates() {
   const currentVersion = String(app.getVersion() || "");
   if (app.isPackaged) {
     configurePackagedUpdater();
+    // All automatic and renderer-triggered checks share this barrier, so a new
+    // download cannot race startup cleanup. Opening the window never waits.
+    await cleanupStartupUpdates();
     if (updateStatus.state === "downloading" || updateStatus.state === "ready" || updateStatus.state === "installing") {
       return updateStatus;
     }
@@ -497,9 +509,10 @@ function createSplashWindow() {
 
 function confirmRelaunchIfReady() {
   const window = getMainWindow();
-  if (!mainWindowReady || !window || !window.isVisible()) return;
+  if (!backendReady || !mainWindowReady || !window || !window.isVisible()) return;
   acknowledgeRelaunch(pendingRelaunchTokens, app.getVersion());
   pendingRelaunchTokens.clear();
+  confirmSuccessfulStartup();
 }
 
 function createWindow() {
