@@ -20,6 +20,48 @@ function fixture() {
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
 
+test('metadata-selected intact preset leaves legacy expert values and default calculations unchanged',()=>{
+ const {run,elements}=fixture();
+ elements.set('deconv-isotope-workflow',{});elements.set('expert-params',{});
+ const before=JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')"));
+ run("state.loadedSamples['qtof.sirslt']={isotope_aware_intact:true};syncDeconvMwAlgorithmDefault('qtof.sirslt')");
+ assert.equal(elements.get('deconv-isotope-workflow').hidden,false);assert.equal(elements.get('expert-params').hidden,true);
+ const q=run("getCurrentDeconvolutionParameters('qtof.sirslt')");assert.equal(q.min_charge,2);assert.equal(q.fwhm,0);assert.equal(q.monoisotopic,true);
+ run("syncDeconvMwAlgorithmDefault('old.sirslt')");assert.equal(elements.get('expert-params').hidden,false);
+ assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')")),before);
+});
+
+test('isotope profile bypasses projection and preserves measured and derived decimals',()=>{
+ const {run,context,plots}=fixture();context.spectrum={mz:[500.123456789],intensities:[100],isotope_profile:[{mass:3992.929442579032,mz:500.123456789,intensity:100,charge:8,scan_id:4}]};
+ run('charts.plotDenseDeconvolutedMassProfile("isotopes",spectrum,{style:{deconv_x_min_da:3990,deconv_x_max_da:4000}})');
+ const plot=plots.get('isotopes');assert.deepEqual(JSON.parse(JSON.stringify(plot.data[0].x)),[3992.929442579032,3992.929442579032,null]);
+ assert.match(plot.data[0].text[0],/500.123456789/);assert.match(plot.layout.xaxis.title,/Neutral isotope mass/);
+ run('charts.plotMassSpectrum("raw",spectrum.mz,spectrum.intensities,[],{centroidSticks:true})');
+ assert.deepEqual(JSON.parse(JSON.stringify(plots.get('raw').data[0].x)),[500.123456789,500.123456789,null]);
+ assert.equal(context.spectrum.mz.length,1);
+});
+
+test('mass spectrum labels retain all supplied decimals through zoom and full hover text, without changing data',()=>{
+ const {run,context,plots}=fixture();context.mz=[900,955.467601234567,980,1001.12345678,1100];context.intensities=[0,100,0,80,0];
+ for(const range of ['[900,1100]','[950,960]']){
+  const labels=run(`buildAdaptiveMassSpectrumAnnotations(mz,intensities,[],${range},900)`);
+  assert.equal(labels[0].text,'955.467601234567');assert.equal(labels[0].x,context.mz[1]);
+ }
+ run('charts.plotMassSpectrum("spectrum",mz,intensities,[])');
+ const trace=plots.get('spectrum').data[0];assert.equal(trace.text[1],'955.467601234567');
+ assert.match(trace.hovertemplate,/%\{text\}/);assert.equal(trace.x,context.mz);assert.equal(trace.y,context.intensities);
+ assert.equal(run('formatSpectrumMz(955.4670000000001,0.001)'),'955.467');
+ assert.equal(run('formatSpectrumMz(955.467601234567,0.001)'),'955.467601234567');
+ assert.equal(run('formatSpectrumMz(955,0.001)'),'955.000');
+ const labels=run('buildAdaptiveMassSpectrumAnnotations([955.466,955.4670000000001,955.468],[0,100,0],[],null,900,0.001)');
+ assert.equal(labels[0].text,'955.467');
+});
+
+test('long m/z peak labels reserve their text width instead of colliding',()=>{
+ const {run}=fixture();const labels=run('buildAdaptiveMassSpectrumAnnotations([900,955.123456789012,956,958.123456789012,970],[0,100,0,90,0],[],[950,970],400)');
+ assert.equal(labels.length,1);assert.equal(labels[0].text,'955.123456789012');
+});
+
 test('guides retain component identity, deduplicate per mass, and exclude out-of-range ions', () => {
   const { run } = fixture();
   const guides = run(`computeMassSpectrumGuideMzs([100, 1000], [
@@ -71,6 +113,19 @@ test('both second-row plots keep equal heights independently of wrapped download
     assert.equal(element.style.height, '400px');
     assert.equal(element.dataset.fixedPlotHeight, '400');
   }
+});
+
+test('sidebar/window resize includes the peptide spectrum and preserves its canvas height',()=>{
+  const {run,context,elements}=fixture();const sizes=[];
+  context.setTimeout=callback=>callback();
+  context.window.Plotly={relayout:(el,size)=>sizes.push(size),Plots:{resize(){}}};
+  const plot={classList:{contains:()=>true},dataset:{fixedPlotHeight:'430'},clientWidth:900,clientHeight:430,style:{}};
+  elements.set('peptide-spectrum-plot',plot);
+  run('schedulePlotlyResize()');
+  assert.equal(sizes.length,3);assert.ok(sizes.every(size=>size.width===900&&size.height===430));
+  sizes.length=0;plot.clientWidth=480;run('schedulePlotlyResize()');
+  assert.equal(sizes.length,3);assert.ok(sizes.every(size=>size.width===480&&size.height===430));
+  assert.equal(plot.style.height,'430px');
 });
 
 test('existing download controls and all export formats are preserved', () => {

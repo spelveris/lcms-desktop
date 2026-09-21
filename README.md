@@ -25,18 +25,56 @@ fragment scans and follows the instrument's recorded parent links, not a
 retention-time guess. MS1-only runs show that no MS/MS was acquired.
 
 Individual spectra retain calibrated centroid masses and fractional intensities.
-QTOF summed spectra use a fixed 0.001 m/z grid (v0.2.55), including the intact
-deconvolution m/z panel. This is a rebinned centroid sum, not measured profile
+QTOF summed-spectrum views use a fixed 0.001 m/z grid (v0.2.55), except for the
+metadata-selected isotope-aware intact workflow described below. This is a rebinned centroid sum, not measured profile
 data or additional instrument resolution. Original individual scan values are
 unchanged. Other readers retain their existing summation behavior. The full
 regular grid is used for calculations; only redundant interior zero points are
 removed for display, keeping every occupied bin and the same line shape.
+On-screen peak labels and hover values retain the available numeric precision;
+declared QTOF grid values show three decimals rather than one. Original calibrated
+centroids and inferred ion centroids are not rounded for their hover readouts.
+For legacy instruments, the dense third-row mass view is an all-charge projection with 0.1 Da bins and
+2 Da Gaussian smoothing, not isotope-resolved deconvolution. The 0.001 m/z grid
+does not add isotope resolution or change that algorithm.
 When smoothing is applied, QTOF peak intensities are expressed on the previous
 0.01 m/z reference-bin scale, so a ten-times-finer grid does not silently lower
 the existing noise threshold by tenfold. Raw summed counts are not rescaled.
 This update does not infer peptide identities from intact spectra.
 Profile-only QTOF runs and other QTOF container layouts are not covered by this
 reader. The third-party source attribution is included with the backend.
+
+### Isotope-aware G6545XT intact workflow (v0.2.58)
+
+The instrument metadata must identify **G6545XT**, the acquisition method must
+explicitly say **Intact**, and it must not be a digest acquisition. Filenames alone
+never select this workflow. Other instrument/digest defaults are unchanged.
+
+Each positive-ion MS1 scan in the selected time window is fitted independently
+with `ms_deisotope` peptide averagine (10 ppm, charges +2–50, 95% isotope-pattern
+truncation, two passes), using calibrated centroids above m/z 300. No 0.001-grid
+resampling or smoothing enters this calculation. Fits need at least four consecutive
+measured isotope peaks; repeated interleaving peaks reject lower-charge harmonics.
+Component candidates require at least two charge states with monoisotopic estimates
+within 10 ppm. These are averaged by envelope intensity; alternative isotope
+assignments remain explicitly flagged, not claimed as separate confirmed proteoforms.
+Unresolved isotope envelopes cannot support an isotope-resolved result.
+
+The main m/z panel shows the strongest corrected MS1 scan, labelled with scan ID
+and time, retaining its stored precision. All selected scans contribute to fitting.
+The third-row graph shows each component's strongest measured envelope converted
+to neutral isotope masses using its fitted charge, with **no bins or smoothing**.
+Those neutral masses are derived coordinates, not raw acquired neutral masses.
+Fitted monoisotopic masses are averagine estimates, not sequence identifications
+or guaranteed exact monoisotopic assignments. A fit score is not R² or an FDR.
+Legacy expert settings are hidden for this preset; the mass-range controls apply.
+To bound processing, windows containing over two million centroids must be narrowed.
+
+Background subtraction uses the nearest-in-time positive QTOF MS1 blank scan and
+subtracts nearest matching centroids within 10 ppm without changing sample m/z;
+the blank must span the time window. Reference-ion exclusion is applied first.
+The packaged macOS/Windows smoke checks fit a known synthetic elemental composition
+to verify the engine is present, not just that the app starts.
 
 OpenLab UV channels retain their own original time/intensity pairs, including
 runs where the 214 and 278 nm channels have different lengths or time axes.
@@ -59,6 +97,17 @@ the **GGisoK (ε-Gly-Gly lysine)** preset, choosing chain B and position 48 for
 that example. The preset adds 114.042927 Da relative to lysine and blocks
 trypsin cleavage at the site. Do not substitute a linear GG
 sequence for an epsilon-linked modification. Cross-linked peptides are not searched.
+
+Below the sequence input, **Reduced / free thiols** preserves the original residue
+mass convention (no extra hydrogen shift). **IAM alkylation** adds C2H3NO,
+57.021463735 Da, to each free cysteine; duplicate explicit carbamidomethyl entries
+are counted once and conflicting modifications are rejected. **Unreduced disulfides**
+requires explicit pairs such as `A:3-A:18`: peptides containing bonded cysteines
+are excluded rather than treated as independent linear peptides. The algorithm
+does not infer disulfide positions from sequence. IAM does not modify those bonded
+cysteines. The long analysis qualifications are available in closed **Analysis details**;
+the main view displays only short match counts. Custom **Chemical formula** is
+immediately left of its read-only **Calculated shift (Da)**.
 
 The initial mapping implementation is **exploratory**: tryptic peptides of 5–70
 residues, 0–3 missed cleavages, precursor charges 1–6 (inferred), isotope offsets
@@ -136,6 +185,25 @@ than 12 ions match, the overview labels the strongest 12 and detail pages label
 every matched ion. No peaks are resampled or smoothed for the PDF, no theoretical
 peaks are substituted for measured values, and MS-only exports invent no b/y ions.
 All PDFs are generated locally; previous Deconvolution/UV exports are unchanged.
+The spectrum PDF's sequence ladder follows the on-screen diagram: monospaced
+residues, red y ions above/blue b ions below, angled cut marks, subscript ion
+numbers, superscript charges and separately raised modification stars. Long
+peptides wrap without shrinking the diagram; graph-axis typography is unchanged.
+Residue spacing is compact (36 rather than 52 screen pixels, with matching PDF
+proportions); ion labels and click targets fit within the closer letter spacing.
+The blue labels have additional clearance below their cut lines, including both
+fragment charges. The spectrum PDF omits the candidate-identification footer
+sentence; scientific evidence warnings remain in the application.
+Every results-table header has a filter button beside its sorting control.
+Text columns support case-insensitive matching; numeric columns have inclusive
+minimum/maximum values. Filters combine with the toolbar filters, disclose the
+visible match count, and can be cleared individually or together without altering
+analysis results or coverage. Missing fragment evidence does not pass a numeric
+fragment filter. Red coverage residues mark MS/MS modification candidates with
+at least one matched modification-bearing fragment; dotted red underlines mark
+unresolved alternative sites. MS-only hypotheses do not colour modification sites.
+Shared peptides still cannot identify a particular chain. Map PDFs preserve these
+residue colours and ambiguity marks.
 Protein coverage underlines show matched peptide spans, separate overlapping
 peptides into rows, and combine repeated observations: **blue solid** means
 MS/MS-supported; **green dashed** means tentative MS-only mass compatibility.

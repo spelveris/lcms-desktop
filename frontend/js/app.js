@@ -1190,6 +1190,7 @@ function schedulePlotlyResize(plotIds = []) {
       'uptake-assay-curve-plot',
       'timechange-ms-plot',
       'timechange-ms-offset-plot',
+      'peptide-spectrum-plot',
     ];
   const includesDeconvBottom = ids.includes('deconv-spectrum-plot') || ids.includes('deconv-mass-plot') || ids.includes('deconv-dense-mass-preview');
   [0, 120, 280].forEach((delayMs) => {
@@ -6581,6 +6582,11 @@ function getDefaultDeconvMwAlgorithmForPath(path) {
 }
 
 function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
+  const isotopeAware=state.loadedSamples[samplePath]?.isotope_aware_intact===true;
+  const isotopeNotice=document.getElementById('deconv-isotope-workflow');
+  if(isotopeNotice)isotopeNotice.hidden=!isotopeAware;
+  const expert=document.getElementById('expert-params');
+  if(expert)expert.hidden=isotopeAware;
   const select = document.getElementById('deconv-mw-algorithm');
   if (!select) return;
 
@@ -6616,6 +6622,10 @@ function getCurrentDeconvolutionParameters(samplePath = '') {
     include_singly_charged: true,
     mw_algorithm: defaultMwAlgorithm,
   };
+
+  if(state.loadedSamples[samplePath]?.isotope_aware_intact===true){
+    return {...params,min_charge:2,max_charge:50,min_peaks:4,min_input_mz:300,monoisotopic:true,fwhm:0};
+  }
 
   if (!expertMode) {
     return params;
@@ -7002,6 +7012,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value) || 0;
   const backgroundPath = getSelectedDeconvBackgroundPath(path);
   const loadedMeta = state.loadedSamples[path] || await loadSampleMeta(path,{silent:true});
+  syncDeconvMwAlgorithmDefault(path);
 
   const preferredWavelength = preferredUvWavelength(loadedMeta,getSelectedWavelengths());
 
@@ -7293,6 +7304,11 @@ function renderDeconvResults(data) {
   const resultsDiv = document.getElementById('deconv-results');
   resultsDiv.classList.remove('hidden');
   syncDeconvBottomLayout();
+  const isotopeAware=data.workflow?.id==='qtof-isotope-aware';
+  const profileDescription=document.getElementById('deconv-profile-description');
+  if(profileDescription)profileDescription.textContent=isotopeAware
+    ? `${data.workflow.scans_analyzed} MS1 scans fitted. ${data.workflow.description}`
+    : 'Smoothed charge projection: 0.1 Da bins, 2 Da smoothing. This preview is not isotope-resolved deconvolution.';
 
   const components = getDeconvDisplayComponents();
   if (components.length > 0) {
@@ -7330,8 +7346,10 @@ function renderDeconvResults(data) {
     }
     charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {
       title: (hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum')
-        + (data.spectrum.mz_grid_step ? ` · QTOF ${data.spectrum.mz_grid_step} m/z grid` : ''),
+        + (isotopeAware ? ` · MS1 scan ${data.workflow.display_scan_id} (${data.workflow.display_time.toFixed(3)} min)` : data.spectrum.mz_grid_step ? ` · QTOF ${data.spectrum.mz_grid_step} m/z grid` : ''),
+      centroidSticks:isotopeAware,
       primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
+      mzGridStep: data.spectrum.mz_grid_step,
       primaryColor: '#1f77b4',
       overlaySpectra,
       guideMzs,
@@ -7359,7 +7377,7 @@ function renderDeconvResults(data) {
     const maxIntensity = Math.max(...components.map(c => Number(c.intensity || 0)));
     let html = `<div class="data-table-wrapper"><table class="data-table">
       <thead><tr>
-        <th>#</th><th>Mass (Da)</th><th>Charges</th><th>Num Ions</th><th>R&sup2;</th><th>Rel. Intensity (%)</th>
+        <th>#</th><th>${isotopeAware?'Estimated monoisotopic mass (Da)':'Mass (Da)'}</th><th>Charges</th><th>Num Ions</th><th>${isotopeAware?'Fit score':'R&sup2;'}</th><th>Rel. Intensity (%)</th>
       </tr></thead><tbody>`;
 
     components.forEach((m, i) => {
@@ -7367,16 +7385,17 @@ function renderDeconvResults(data) {
       const relInt = maxIntensity > 0 && m.intensity != null ? ((m.intensity / maxIntensity) * 100).toFixed(1) : '-';
       html += `<tr class="deconv-row" data-idx="${i}" style="cursor:pointer;">
         <td>${i + 1}</td>
-        <td>${m.mass.toFixed(1)}</td>
+        <td>${m.isotope_aware?`${m.mass.toFixed(6)}${m.isotope_ambiguous?' *':''}`:m.mass.toFixed(1)}</td>
         <td style="font-family:var(--font);max-width:150px;overflow:hidden;text-overflow:ellipsis;">${chargeStr}</td>
         <td>${m.peaks_found || m.num_charges || '-'}</td>
-        <td>${m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
+        <td>${m.isotope_aware?Number(m.fit_score).toFixed(2):m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
         <td>${relInt}</td>
       </tr>`;
     });
 
     html += '</tbody></table></div>';
     tableContainer.innerHTML = html;
+    if(isotopeAware)tableContainer.insertAdjacentHTML('beforeend','<p class="toolbar-note">* Possible alternative isotope assignment; masses are estimates, not confirmed proteoforms.</p>');
 
     // Row click -> show ion detail
     tableContainer.querySelectorAll('.deconv-row').forEach(row => {
@@ -7537,6 +7556,7 @@ async function renderDeconvIonSelectionGraph() {
     container.style.height = Math.max(400, 350 * ionRows + 70) + 'px';
     charts.plotIonSelectionInteractive('deconv-ion-selection-plot', mz, intensities, components, {
       title: 'Ion Selection per Component',
+      mzGridStep: spectrum.mz_grid_step,
     });
   } catch (err) {
     container.classList.remove('interactive-ion-selection');
@@ -7565,11 +7585,12 @@ async function exportDeconvIonSelection(format) {
 
   showLoading(`Exporting ${format.toUpperCase()}...`);
   try {
-    const response = await api.exportIonSelection({
+  const response = await api.exportIonSelection({
       path: samplePath,
       start: tr[0],
       end: tr[1],
       components,
+      spectrum:state.deconvResults?.spectrum,
       format,
       dpi,
       style: buildCurrentDeconvStyle(),
@@ -7701,6 +7722,7 @@ function showIonDetail(component) {
   const card = document.createElement('div');
   card.className = 'ion-detail-card';
   card.innerHTML = `<h4>Ion Detail: ${component.mass.toFixed(1)} Da</h4>`;
+  if(component.isotope_aware)card.innerHTML=`<h4>Isotope-envelope candidate: ${component.mass.toFixed(6)} Da</h4><p class="toolbar-note">Mass spread ${Number(component.mass_std).toFixed(6)} Da across fitted envelopes. ${component.scan_count} MS1 scans. Observed m/z below is the envelope apex, not necessarily the monoisotopic peak.</p>`;
   container.appendChild(card);
 
   const charges = component.ion_charges || [];
@@ -7713,7 +7735,7 @@ function showIonDetail(component) {
 
   // Also show a small table of ions
   if (charges.length > 0) {
-    const PROTON = 1.00784;
+    const PROTON = component.isotope_aware?1.007276466621:1.00784;
     let html = `<div class="data-table-wrapper ion-detail-table-wrapper"><table class="data-table ion-detail-table">
       <thead><tr><th>z</th><th>m/z Theoretical</th><th>m/z Observed</th><th>Intensity</th><th>Rel. %</th><th>&Delta; ppm</th></tr></thead><tbody>`;
 
@@ -7722,11 +7744,11 @@ function showIonDetail(component) {
       const mzTheo = (component.mass + z * PROTON) / z;
       const int_ = intensities[i] || 0;
       const relPct = maxIntensity > 0 ? (Number(int_) / maxIntensity) * 100 : 0;
-      const ppm = mzTheo > 0 ? (Math.abs(mzObs - mzTheo) / mzTheo * 1e6).toFixed(1) : '-';
+      const ppm = component.isotope_aware ? '—' : mzTheo > 0 ? (Math.abs(mzObs - mzTheo) / mzTheo * 1e6).toFixed(1) : '-';
       html += `<tr>
         <td>${z}</td>
-        <td>${mzTheo.toFixed(4)}</td>
-        <td>${mzObs.toFixed(4)}</td>
+        <td>${formatSpectrumMz(mzTheo)}</td>
+        <td>${formatSpectrumMz(mzObs)}</td>
         <td>${int_.toExponential(2)}</td>
         <td>${relPct.toFixed(1)}</td>
         <td>${ppm}</td>

@@ -72,7 +72,7 @@ function run() {
   // Ensure backend runtime dependencies exist in the *same* interpreter that runs PyInstaller.
   const depsCheck = spawnSync(
     python,
-    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas"],
+    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas, ms_deisotope"],
     { stdio: "ignore" }
   );
   if (depsCheck.status !== 0) {
@@ -94,7 +94,7 @@ function run() {
 
   const depsRecheck = spawnSync(
     python,
-    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas"],
+    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas, ms_deisotope"],
     { stdio: "ignore" }
   );
   if (depsRecheck.status !== 0) {
@@ -138,6 +138,13 @@ function run() {
     lcmsAppPath,
     "--add-data",
     `${lcmsAppPath}${dataSep}lcms_app`,
+    "--collect-all", "ms_deisotope",
+    "--collect-all", "ms_peak_picker",
+    "--collect-all", "brainpy",
+    "--collect-all", "psims",
+    "--collect-all", "pyteomics",
+    "--recursive-copy-metadata", "ms_deisotope",
+    "--add-data", `${path.join(repoRoot, 'third_party')}${dataSep}third_party`,
 	    "--hidden-import",
 	    "uvicorn",
 	    "--hidden-import",
@@ -167,6 +174,16 @@ function run() {
 
   if (!fs.existsSync(exePath)) {
     console.error(`Backend build finished but executable not found: ${exePath}`);
+    process.exit(1);
+  }
+
+  // Run the real frozen executable: source-import tests cannot catch missing
+  // dynamically imported isotope-engine extensions in a packaged app.
+  const isotopeCheck = spawnSync(exePath, ["--isotope-self-test"], {
+    stdio: "inherit", timeout: 120000,
+  });
+  if (isotopeCheck.status !== 0) {
+    console.error("Packaged isotope-engine check failed.", isotopeCheck.error || "");
     process.exit(1);
   }
 

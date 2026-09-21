@@ -154,6 +154,7 @@ def _normalize_deconvolution_component(component: Optional[dict]) -> Optional[di
         'ion_mzs': [row[0] for row in ion_rows],
         'ion_intensities': [row[1] for row in ion_rows],
         'ion_charges': [row[2] for row in ion_rows],
+        'isotope_aware':component.get('isotope_aware') is True,
     }
 
 
@@ -1625,7 +1626,15 @@ def _plot_deconvoluted_masses_panel(
         bar_avoid = max(mass_range * 0.006, 0.10)
 
         for sorted_idx, (orig_idx, (m_kda, intensity, mass_da)) in enumerate(labeled_peaks):
-            if mass_da >= 10000:
+            if deconv_results[orig_idx].get('isotope_aware'):
+                # Full-precision labels stay inside the fixed-size panel even
+                # when zoomed to a few daltons; legacy offsets assume kDa spans.
+                if orig_idx < 5:
+                    ax_deconv.text(.98,.94-.13*orig_idx,f"{mass_da:.6f}",transform=ax_deconv.transAxes,
+                        ha='right',va='top',fontsize=5.5,color=label_colors[orig_idx % len(label_colors)],
+                        bbox={'facecolor':'white','edgecolor':'none','alpha':.8,'pad':1})
+                continue
+            elif mass_da >= 10000:
                 label_text = f"{mass_da:.1f}"
             else:
                 label_text = f"{mass_da:.2f}"
@@ -1912,7 +1921,8 @@ def _plot_deconvoluted_component_inset(
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(0, 105)
-    ax.set_title(f"{normalized['mass']:.1f} Da ions", fontsize=6.5, fontweight='bold', pad=2)
+    mass_label = f"{normalized['mass']:.6f}" if normalized.get('isotope_aware') else f"{normalized['mass']:.1f}"
+    ax.set_title(f"{mass_label} Da ions", fontsize=6.5, fontweight='bold', pad=2)
     ax.set_xlabel("m/z", fontsize=6)
     ax.tick_params(axis='both', labelsize=5.5, length=3)
     ax.grid(False)
@@ -2003,7 +2013,9 @@ def create_dense_deconvoluted_mass_profile_figure(
 
     mz_values = spectrum.get('mz') if isinstance(spectrum, dict) else []
     intensity_values = spectrum.get('intensities') if isinstance(spectrum, dict) else []
-    x_da, y_profile = _build_dense_zero_charge_profile(
+    isotope_profile = spectrum.get('isotope_profile') if isinstance(spectrum, dict) else None
+    x_da, y_profile = (np.array([p['mass'] for p in isotope_profile],dtype=float),
+                       np.array([p['intensity'] for p in isotope_profile],dtype=float)) if isinstance(isotope_profile,list) else _build_dense_zero_charge_profile(
         mz_values,
         intensity_values,
         x_min_da,
@@ -2017,12 +2029,10 @@ def create_dense_deconvoluted_mass_profile_figure(
 
     if x_da.size > 0 and y_profile.size > 0 and np.max(y_profile) > 0:
         y_norm = (y_profile / float(np.max(y_profile))) * 100.0
-        ax.plot(
-            x_da / 1000.0,
-            y_norm,
-            color='black',
-            linewidth=max(0.5, _coerce_finite_float(style.get('line_width', 0.8), 0.8)),
-        )
+        if isinstance(isotope_profile,list):
+            ax.vlines(x_da,0,y_norm,color='black',linewidth=max(.5,_coerce_finite_float(style.get('line_width',.8),.8)))
+        else:
+            ax.plot(x_da / 1000.0,y_norm,color='black',linewidth=max(.5,_coerce_finite_float(style.get('line_width',.8),.8)))
     else:
         ax.text(0.5, 0.5, "No masses detected", ha='center', va='center', transform=ax.transAxes)
 
@@ -2030,13 +2040,18 @@ def create_dense_deconvoluted_mass_profile_figure(
     show_subtitle = _coerce_bool(style.get('deconv_show_subtitle', True), True)
     subtitle = (sample_name[:-2] if sample_name.lower().endswith(".d") else sample_name) if show_subtitle else None
 
-    ax.set_xlim(x_min_da / 1000.0, x_max_da / 1000.0)
+    divisor = 1 if isinstance(isotope_profile,list) else 1000.
+    ax.set_xlim(x_min_da / divisor, x_max_da / divisor)
     ax.set_ylim(0, 100)
-    ax.set_xlabel("Mass (kDa)")
+    ax.set_xlabel("Neutral mass (Da)" if isinstance(isotope_profile,list) else "Mass (kDa)")
+    if isinstance(isotope_profile,list):
+        from matplotlib.ticker import MaxNLocator
+        ax.ticklabel_format(axis='x',style='plain',useOffset=False)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
     ax.set_ylabel("Relative Intensity (%)")
     if show_title:
         title_y = 1.08 if subtitle else 1.03
-        ax.set_title("Deconvoluted Masses", fontweight='bold', y=title_y)
+        ax.set_title("Measured isotopes" if isinstance(isotope_profile,list) else "Deconvoluted Masses", fontweight='bold', y=title_y)
     if subtitle:
         sub_y = 1.02 if show_title else 1.03
         ax.text(
@@ -2429,20 +2444,26 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
     # Bottom left: Summed mass spectrum
     ax_spec = fig.add_subplot(gs[1, 0])
 
-    mz, intensity = sum_spectra_in_range(sample, start_time, end_time)
+    from qtof_deconvolution import is_intact_qtof, representative_scan
+    isotope_aware=is_intact_qtof(sample)
+    if isotope_aware:
+        points=representative_scan(sample,start_time,end_time);mz,intensity=points[:,0],points[:,1]
+    else:
+        mz, intensity = sum_spectra_in_range(sample, start_time, end_time)
 
     if len(mz) > 0:
-        ax_spec.plot(mz, intensity, 'b-', linewidth=line_width)
+        if isotope_aware: ax_spec.vlines(mz,0,intensity,color='b',linewidth=line_width)
+        else: ax_spec.plot(mz, intensity, 'b-', linewidth=line_width)
         ax_spec.set_xlabel("m/z")
         ax_spec.set_ylabel("Intensity")
-        ax_spec.set_title("Summed Mass Spectrum", fontweight='bold', y=1.03)
+        ax_spec.set_title("Representative MS1 scan" if isotope_aware else "Summed Mass Spectrum", fontweight='bold', y=1.03)
         if show_grid:
             ax_spec.grid(True, alpha=0.3)
         _apply_safe_scientific_y_format(ax_spec, scilimits=(0, 0))
 
         # Add peak labels (only significant peaks > 20% of max)
         from analysis import find_spectrum_peaks
-        peaks = find_spectrum_peaks(mz, intensity, height_threshold=0.2, min_distance=5, use_centroid=True)
+        peaks = [] if isotope_aware else find_spectrum_peaks(mz, intensity, height_threshold=0.2, min_distance=5, use_centroid=True)
         peak_mz_values = np.array([p['mz'] for p in peaks], dtype=float) if peaks else np.array([])
         for peak in peaks:
             ax_spec.annotate(
@@ -2560,6 +2581,10 @@ def create_deconvoluted_masses_figure(
         fig_width_in = panel_width_in * max(2.0, _coerce_finite_float(style.get('panel_width_multiplier', 2.0), 2.0))
 
     fig, ax = plt.subplots(1, 1, figsize=(fig_width_in, panel_height_in))
+    if any(c.get('isotope_aware') for c in sorted_results):
+        from matplotlib.ticker import MaxNLocator
+        ax.ticklabel_format(axis='x',style='plain',useOffset=False)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
     _plot_deconvoluted_masses_panel(
         ax,
         sorted_results,
@@ -2601,12 +2626,10 @@ def create_deconvolution_mass_spectrum_figure(
     fig, ax = plt.subplots(1, 1, figsize=(panel_width_in, panel_height_in))
 
     if normalized_spectrum is not None:
-        ax.plot(
-            normalized_spectrum['mz'],
-            normalized_spectrum['intensities'],
-            color='#1f77b4',
-            linewidth=line_width,
-        )
+        if spectrum.get('representation') == 'calibrated centroid sticks':
+            ax.vlines(normalized_spectrum['mz'],0,normalized_spectrum['intensities'],color='#1f77b4',linewidth=line_width)
+        else:
+            ax.plot(normalized_spectrum['mz'],normalized_spectrum['intensities'],color='#1f77b4',linewidth=line_width)
         ax.set_ylim(bottom=0)
     else:
         ax.text(0.5, 0.5, 'No mass spectrum available', ha='center', va='center', transform=ax.transAxes)
@@ -3271,7 +3294,13 @@ def create_ion_selection_figure(
         color = colors[idx % len(colors)]
 
         # Draw full spectrum in light gray
-        ax.plot(mz, intensity, color='#cccccc', linewidth=0.5, zorder=1)
+        if r.get('isotope_aware'):
+            ax.vlines(mz,0,intensity,color='#cccccc',linewidth=.5,zorder=1)
+            for envelope in r.get('envelopes',[]):
+                points=np.asarray(envelope['envelope'],dtype=float)
+                ax.vlines(points[:,0],0,points[:,1],color=color,linewidth=.8,zorder=2)
+        else:
+            ax.plot(mz, intensity, color='#cccccc', linewidth=0.5, zorder=1)
 
         # Highlight selected ion peaks
         ion_mzs = r.get('ion_mzs', [])
@@ -3283,7 +3312,7 @@ def create_ion_selection_figure(
             # raw spectrum (interpolated).
             for mz_val, z, ion_int in zip(ion_mzs, ion_charges, ion_ints):
                 # Interpolate intensity at this m/z from the raw spectrum
-                raw_int = float(np.interp(mz_val, mz, intensity))
+                raw_int = max((point[1] for envelope in r.get('envelopes',[]) for point in envelope['envelope'] if point[0]==mz_val),default=0.) if r.get('isotope_aware') else float(np.interp(mz_val, mz, intensity))
                 ax.vlines(mz_val, 0, raw_int, color=color, linewidth=1.5, zorder=3)
                 # Label with charge state
                 ax.annotate(
@@ -3298,7 +3327,9 @@ def create_ion_selection_figure(
 
         # Title with mass and charge range
         mass_val = r['mass']
-        if mass_val >= 10000:
+        if r.get('isotope_aware'):
+            mass_str = f"{mass_val:.6f}"
+        elif mass_val >= 10000:
             mass_str = f"{mass_val:.1f}"
         else:
             mass_str = f"{mass_val:.2f}"

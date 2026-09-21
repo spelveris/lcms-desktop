@@ -12,7 +12,11 @@ from plotting import _get_deconvolution_panel_dimensions, _apply_safe_scientific
 
 EXPORT_LOCK = Lock()
 BLUE, RED, GREEN = '#3750aa', '#e52a2a', '#328552'
-CLEAVAGE_ROW_HEIGHT = 72
+# Match the on-screen SVG ladder's 36px cells, 216px height and angled cuts.
+# Scale its geometry to print points; keep spectrum axes at Deconvolution sizes.
+CLEAVAGE_SCALE = .45
+CLEAVAGE_CELL = 36
+CLEAVAGE_ROW_HEIGHT = (216+20)*CLEAVAGE_SCALE
 
 
 def _text(value):
@@ -67,6 +71,15 @@ def coverage_figures(payload):
             if not isinstance(s,dict): raise ValueError('Invalid coverage span')
             if not isinstance(s.get('start'), int) or not isinstance(s.get('end'), int) or not 1 <= s['start'] <= s['end'] <= len(seq) or s.get('evidence') not in {'ms1','msms'}:
                 raise ValueError('Invalid coverage span')
+        modification_sites = chain.get('modification_sites', [])
+        if not isinstance(modification_sites, list) or len(modification_sites) > len(seq):
+            raise ValueError('Invalid modification sites')
+        modified = {}
+        for site in modification_sites:
+            if not isinstance(site, dict) or type(site.get('position')) is not int or not 1 <= site['position'] <= len(seq) or type(site.get('ambiguous')) is not bool:
+                raise ValueError('Invalid modification site')
+            if site['position'] in modified: raise ValueError('Duplicate modification site')
+            modified[site['position']] = site['ambiguous']
         ms = float(chain.get('ms_percent', chain.get('percent', 0)))
         msms = float(chain.get('msms_percent', chain.get('percent', 0)))
         if not all(math.isfinite(p) and 0 <= p <= 100 for p in [ms, msms]): raise ValueError('Invalid coverage percentage')
@@ -75,7 +88,9 @@ def coverage_figures(payload):
             fig, top = _page(width, height, 'Peptide coverage map', subtitle)
             fig.text(.065, (top-3)/(height*72), 'Blue solid: MS/MS    Green dashed: tentative MS-only', fontsize=7)
             _footer(fig, 'MS includes MS/MS; percentages are not additive. Candidates, not validated identifications.')
-            return fig, top-22
+            if modified:
+                fig.text(.065, (top-15)/(height*72), 'Red residue: MS/MS modification candidate; dotted: unresolved site', fontsize=7)
+            return fig, top-(34 if modified else 22)
         fig, y = new_page()
         columns = max(10, int((width*72-60)/8)//10*10)
         cell = (width*72-60)/columns; x0 = 30
@@ -91,8 +106,15 @@ def coverage_figures(payload):
                 fig.text(x0/(width*72), y/(height*72), f'{offset+1}-{end}' + (f' (evidence lanes {lane_start+1}-{lane_start+count})' if lane_start or lanes>count else ''), fontsize=7, color='#555555')
                 y -= 15
                 for index, aa in enumerate(seq[offset:end]):
+                    position=offset+index+1
                     fig.text((x0+(index+.5)*cell)/(width*72), y/(height*72), aa, ha='center', fontsize=8,
-                             bbox=dict(facecolor='#cde7fa' if offset+index+1 in covered else '#f2f2f2', edgecolor='none', pad=.5))
+                             color='#c52b2b' if position in modified else '#222222', weight='bold' if position in modified else 'normal',
+                             gid=f'coverage-residue-{position}',
+                             bbox=dict(facecolor='#cde7fa' if position in covered else '#f2f2f2', edgecolor='none', pad=.5))
+                    if modified.get(position, False):
+                        from matplotlib.lines import Line2D
+                        xx=np.array([x0+(index+.15)*cell,x0+(index+.85)*cell])/(width*72)
+                        fig.add_artist(Line2D(xx,[(y-2)/(height*72)]*2,transform=fig.transFigure,color='#c52b2b',linestyle=':',linewidth=.8,gid=f'coverage-site-unresolved-{position}'))
                 for span in visible:
                     if not lane_start <= span['lane'] < lane_start+count: continue
                     xx = [x0+(span['lo']-offset-1)*cell+1, x0+(span['hi']-offset)*cell-1]
@@ -135,23 +157,39 @@ def _spectrum_data(payload):
     return row, mz, intensity, sorted(ions, key=lambda i:i['observed_mz'])
 
 
+def _cleavage_columns(width):
+    return max(8, int((width*72-70)/(CLEAVAGE_CELL*CLEAVAGE_SCALE)))
+
+
 def _cleavage_map(fig, row, ions, top, width, height):
-    sequence = row['sequence']; columns = max(8, int((width*72-70)/25)); step=(width*72-70)/columns
+    sequence = row['sequence']; columns = _cleavage_columns(width); scale = CLEAVAGE_SCALE
     modifications = {m['residue']:m for m in row.get('modifications', [])}
     for offset in range(0, len(sequence), columns):
         y = top-(offset//columns)*CLEAVAGE_ROW_HEIGHT
         for j, aa in enumerate(sequence[offset:offset+columns]):
-            pos=offset+j+1; x=35+(j+.5)*step
-            fig.text(x/(width*72), y/(height*72), aa+('*' if pos in modifications else ''), fontsize=8, ha='center', color=RED if pos in modifications else '#222222')
-            fig.text(x/(width*72), (y-35)/(height*72), str(pos), fontsize=6, ha='center', color='#777777')
+            pos=offset+j+1; x=35+(26+j*CLEAVAGE_CELL)*scale
+            fig.text(x/(width*72), y/(height*72), aa, fontsize=30*scale, fontfamily='monospace',
+                     ha='center', color='#c52b2b' if pos in modifications else '#222222', gid=f'peptide-residue-{pos}')
+            if pos in modifications:
+                fig.text((x+14*scale)/(width*72), (y+24*scale)/(height*72), '*',
+                         fontsize=15*scale, fontfamily='monospace', color='#c52b2b', gid=f'peptide-modification-{pos}')
+            fig.text(x/(width*72), (y-108*scale)/(height*72), str(pos), fontsize=5.5,
+                     fontfamily='monospace', ha='center', color='#666666', gid=f'peptide-position-{pos}')
             for series, direction in [('b',-1),('y',1)]:
-                at_cut = [ion for ion in ions if ion['bond']==pos and ion['series']==series]
+                at_cut = sorted([ion for ion in ions if ion['bond']==pos and ion['series']==series],key=lambda ion:ion['charge'])
                 if not at_cut: continue
                 from matplotlib.lines import Line2D
-                cut=x+step/2
-                fig.add_artist(Line2D(np.array([cut,cut,cut+direction*4])/(width*72), np.array([y+3,y+direction*7,y+direction*11])/(height*72), transform=fig.transFigure, color=BLUE if series=='b' else RED, linewidth=.7))
+                cut=x+(CLEAVAGE_CELL/2+direction*2)*scale
+                svg_y=np.array([88,110,122] if series=='b' else [82,60,48])
+                fig.add_artist(Line2D(np.array([cut,cut,cut+direction*12*scale])/(width*72),
+                                     (y+(96-svg_y)*scale)/(height*72), transform=fig.transFigure,
+                                     color=BLUE if series=='b' else RED, linewidth=1.8*scale, gid=f'peptide-cut-{series}-{pos}'))
                 for idx, ion in enumerate(at_cut):
-                    fig.text((cut+direction*5)/(width*72), (y+direction*(16+idx*8))/(height*72), f"{series}{ion['number']} +{ion['charge']}", fontsize=6, color=BLUE if series=='b' else RED, ha='center')
+                    svg_label_y=153+idx*20 if series=='b' else 39-idx*19
+                    label=rf"$\mathregular{{{series}}}_{{{ion['number']}}}^{{+{ion['charge']}}}$"
+                    fig.text((cut+direction*12*scale)/(width*72), (y+(96-svg_label_y)*scale)/(height*72),
+                             label, fontsize=15*scale, fontfamily='monospace', color=BLUE if series=='b' else RED,
+                             ha='center', gid=f"peptide-ion-{series}-{ion['number']}-{ion['charge']}")
 
 
 def spectrum_figures(payload):
@@ -159,7 +197,7 @@ def spectrum_figures(payload):
     width, linewidth, style = _style(payload)
     _, panel_height = _get_deconvolution_panel_dimensions(float(style.get('fig_width',6)))
     axis_height = panel_height*.65  # Same physical axis height and 8/7 pt fonts as Deconvolution.
-    columns=max(8, int((width*72-70)/25)); seq_rows=math.ceil(len(row['sequence'])/columns)
+    columns=_cleavage_columns(width); seq_rows=math.ceil(len(row['sequence'])/columns)
     modifications=[]
     for mod in row.get('modifications',[]):
         pos=int(mod['residue'])
@@ -169,7 +207,7 @@ def spectrum_figures(payload):
         if mod.get('kind')=='gg':modifications.append('GGisoK: GG C-terminal carbonyl attached to lysine epsilon-N. Donor chain is unresolved by the remnant.')
     mod_lines=[line for text in modifications for line in textwrap.wrap(_text(text),int(width*16))]
     mod_height=(len(mod_lines)*9+10) if mod_lines else 0
-    height = max(5.2, axis_height+2.8+seq_rows*CLEAVAGE_ROW_HEIGHT/72)+mod_height/72
+    height = max(5.2, axis_height+3.1+seq_rows*CLEAVAGE_ROW_HEIGHT/72)+mod_height/72
     strongest=sorted(sorted(ions,key=lambda i:i['intensity'],reverse=True)[:12],key=lambda i:i['observed_mz'])
     panels=[(None, strongest)]
     if len(ions)>12:
@@ -206,9 +244,9 @@ def spectrum_figures(payload):
         if len(ions)>12 and index==0:note='Strongest 12 labelled here; all matched ions labelled on detail pages. '+note
         if row.get('evidence')=='ms1':note='MS-only mass hypothesis: no b/y evidence or site localization.'
         fig.text(.065,(axis_bottom*72-38)/(page_height*72),'\n'.join(textwrap.wrap(note,int(width*16))),fontsize=7,va='top')
-        _cleavage_map(fig,row,ions,axis_bottom*72-80,width,page_height)
+        _cleavage_map(fig,row,ions,axis_bottom*72-112,width,page_height)
         if mod_lines:fig.text(.065,(35+mod_height)/(page_height*72),'\n'.join(mod_lines),fontsize=7,va='top')
-        _footer(fig,'Candidate assignments, not validated identifications. Shared peptides do not identify a chain.')
+        _footer(fig,'Shared peptides do not identify a chain.')
         yield fig
 
 

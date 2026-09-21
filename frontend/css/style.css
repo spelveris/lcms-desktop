@@ -57,9 +57,17 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 #tab-peptides, #peptide-coverage, #peptide-results { width: 100%; min-width: 0; max-width: 100%; }
 #peptide-results { max-height: 360px; overflow: auto; }
 .peptide-export-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.peptide-spectrum-card { min-width: 0; }
+/* The outer card owns padding/borders; the Plotly canvas keeps its full height. */
+.peptide-spectrum-canvas { width: 100%; max-width: 100%; min-width: 0; height: 430px; min-height: 430px; padding: 0; border: 0; }
 .peptide-linkage-evidence { border-left: 2px solid #e52a2a; padding: 6px 10px; margin-top: 8px; }
 .peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
 #peptide-linkages label[hidden] { display: none; }
+.peptide-preparation { flex-wrap: wrap; }
+#expert-params[hidden], #deconv-isotope-workflow[hidden] { display: none; }
+.peptide-preparation label[hidden], #peptide-analysis-details[hidden] { display: none; }
+#peptide-analysis-details { margin: 6px 0; }
+#peptide-analysis-details summary { cursor: pointer; }
 .peptide-coverage-chain { margin: 10px 0; }
 .peptide-coverage-chain > p { margin: 3px 0; }
 .peptide-coverage-scroll { max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
@@ -68,6 +76,8 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-coverage-grid { display: grid; grid-template-rows: 20px; grid-auto-rows: 8px; gap: 0; width: 100%; }
 .peptide-coverage-residue { font: 13px/20px var(--font-mono); text-align: center; background: var(--bg-input); color: var(--text-secondary); }
 .peptide-coverage-residue.is-covered { background: #cde7fa; color: #222; }
+.peptide-coverage-residue.is-modified { color: #c52b2b; font-weight: 700; }
+.peptide-coverage-residue.is-modification-ambiguous { text-decoration: underline dotted; text-underline-offset: 2px; }
 .peptide-coverage-underline { position: relative; height: 8px; min-height: 8px; line-height: 0; margin: 0 1px; padding: 0; border: 0; border-bottom: 2px solid #78bef4; border-radius: 0; background: transparent; cursor: pointer; }
 .peptide-coverage-underline::before, .peptide-coverage-underline::after { content: ''; position: absolute; bottom: 0; height: 3px; border-left: 1px solid #78bef4; }
 .peptide-coverage-underline::before { left: 0; }
@@ -81,7 +91,16 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 table.data-table.peptide-results-table { width: 100%; table-layout: fixed; }
 table.data-table.peptide-results-table th, table.data-table.peptide-results-table td { padding: 5px 6px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
 table.data-table.peptide-results-table th { letter-spacing: 0; text-transform: none; z-index: 1; }
-.peptide-results-table .peptide-sort-button { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.peptide-results-table .peptide-sort-button { min-width: 0; flex: 1; white-space: normal; overflow-wrap: anywhere; }
+.peptide-column-heading { display: flex; align-items: flex-start; gap: 2px; }
+.peptide-filter-button { flex: 0 0 20px; width: 20px; height: 24px; padding: 2px; border: 0; border-radius: 3px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.peptide-filter-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.peptide-filter-button:hover, .peptide-filter-button:focus-visible, .peptide-filter-button.is-active { background: var(--accent-light); color: var(--accent); outline: 1px solid currentColor; }
+.peptide-filter-button.is-active svg { fill: currentColor; }
+.peptide-column-filter-editor { flex-wrap: wrap; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+.peptide-column-filter-editor[hidden] { display: none; }
+.peptide-column-filter-editor label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.tab-toolbar.peptide-column-filter-editor input { width: 150px; min-width: 0; max-width: 100%; }
 .peptide-results-table .btn { max-width: 100%; padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; }
 .peptide-table-filters { flex-wrap: wrap; margin: 12px 0; }
 .peptide-table-filters label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
