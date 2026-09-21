@@ -2980,6 +2980,27 @@ def peptide_mapping_analyze(payload: dict = Body(...)):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/api/peptide-mapping/modification-mass")
+def peptide_modification_mass(payload: dict = Body(...)):
+    from modification_formula import formula_mass
+    try:
+        return formula_mass(payload.get('formula'))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/peptide-mapping/export-pdf")
+def peptide_export_pdf(payload: dict = Body(...)):
+    plot_runtime.get('plotting')  # Same initialized fonts as Deconvolution; no startup penalty.
+    from peptide_export import export_peptide_pdf
+    try:
+        content = export_peptide_pdf(payload)
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=content, media_type='application/pdf',
+                    headers={'Content-Disposition':f'attachment; filename="peptide-{payload["kind"]}.pdf"'})
+
+
 @app.get("/api/qtof/spectrum")
 def qtof_spectrum(path: str = Query(...), scan_id: int = Query(...), polarity: str = Query("positive")):
     """Return one measured centroid spectrum, without summing or binning."""
