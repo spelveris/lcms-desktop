@@ -187,6 +187,14 @@ function run() {
     process.exit(1);
   }
 
+  const peptideCheck = spawnSync(exePath, ["--peptide-self-test"], {
+    stdio: "inherit", timeout: 120000,
+  });
+  if (peptideCheck.status !== 0) {
+    console.error("Packaged MS1-feature check failed.", peptideCheck.error || "");
+    process.exit(1);
+  }
+
   console.log(`Backend build complete: ${exePath}`);
 }
 

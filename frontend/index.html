@@ -522,7 +522,13 @@
         <span class="toolbar-note">In Deconvolute mode, drag over UV or TIC to set the window and run automatically. Switch to Zoom if you only want to inspect the chromatogram.</span>
       </div>
       <div class="deconv-controls">
-        <p id="deconv-isotope-workflow" class="toolbar-note" hidden>QTOF intact · isotope-aware fitting · 10 ppm · charges +2–50 · at least 4 isotopes and 2 charge states. Uses raw centroids, without smoothing. Mass-range controls still apply.</p>
+        <label id="deconv-method-wrap" hidden>Intact analysis
+          <select id="deconv-intact-method">
+            <option value="envelope">Charge envelope (default)</option>
+            <option value="isotope">Isotope fitting (experimental)</option>
+          </select>
+        </label>
+        <p id="deconv-isotope-workflow" class="toolbar-note" hidden>Optional isotope fitting · 10 ppm · charges +2–50 · requires resolved isotopes. It can miss large or unresolved proteins; alternative isotope assignments are not confirmed separate proteins. Mass-range controls still apply.</p>
         <div class="input-row">
           <label>Start (min)<input type="number" id="deconv-start" step="0.05" value="0" min="0"></label>
           <label>End (min)<input type="number" id="deconv-end" step="0.05" value="30" min="0"></label>
@@ -571,6 +577,12 @@
         <div class="two-col deconv-results-grid">
           <div class="col deconv-spectrum-stack">
             <div class="deconv-plot-card">
+              <label id="deconv-spectrum-view-wrap" hidden>Spectrum
+                <select id="deconv-spectrum-view">
+                  <option value="summed">Summed time window</option>
+                  <option value="measured">Measured centroids (unrounded, before blank subtraction)</option>
+                </select>
+              </label>
               <div id="deconv-spectrum-plot" class="deconv-plot-inner"></div>
               <div class="deconv-mass-download-row" aria-label="Mass spectrum downloads">
                 <button id="btn-export-deconv-spectrum-pdf" class="btn btn-sm">Download PDF</button>

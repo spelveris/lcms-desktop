@@ -26,7 +26,7 @@ retention-time guess. MS1-only runs show that no MS/MS was acquired.
 
 Individual spectra retain calibrated centroid masses and fractional intensities.
 QTOF summed-spectrum views use a fixed 0.001 m/z grid (v0.2.55), except for the
-metadata-selected isotope-aware intact workflow described below. This is a rebinned centroid sum, not measured profile
+explicitly selected isotope-fitting option described below. This is a rebinned centroid sum, not measured profile
 data or additional instrument resolution. Original individual scan values are
 unchanged. Other readers retain their existing summation behavior. The full
 regular grid is used for calculations; only redundant interior zero points are
@@ -34,7 +34,7 @@ removed for display, keeping every occupied bin and the same line shape.
 On-screen peak labels and hover values retain the available numeric precision;
 declared QTOF grid values show three decimals rather than one. Original calibrated
 centroids and inferred ion centroids are not rounded for their hover readouts.
-For legacy instruments, the dense third-row mass view is an all-charge projection with 0.1 Da bins and
+In the default charge-envelope workflow, the dense third-row mass view is an all-charge projection with 0.1 Da bins and
 2 Da Gaussian smoothing, not isotope-resolved deconvolution. The 0.001 m/z grid
 does not add isotope resolution or change that algorithm.
 When smoothing is applied, QTOF peak intensities are expressed on the previous
@@ -44,11 +44,25 @@ This update does not infer peptide identities from intact spectra.
 Profile-only QTOF runs and other QTOF container layouts are not covered by this
 reader. The third-party source attribution is included with the backend.
 
-### Isotope-aware G6545XT intact workflow (v0.2.58)
+### Intact analysis defaults and optional isotope fitting (v0.2.59)
 
 The instrument metadata must identify **G6545XT**, the acquisition method must
 explicitly say **Intact**, and it must not be a digest acquisition. Filenames alone
-never select this workflow. Other instrument/digest defaults are unchanged.
+never select this workflow. This metadata only enables an **experimental option**;
+**Charge envelope (default)** restores the previous intact analysis and summed
+time-window spectrum. Other instrument/digest defaults are unchanged. Changing
+samples resets the option to the default; isotope fitting is never auto-selected.
+
+For supported QTOF intact samples, the m/z panel can also show **Measured centroids**:
+all acquired coordinates in the selected window, merging only exact-equal m/z
+values, with no rounding or bins. This optional view is reference-filtered but
+**before blank subtraction** and does not replace the calculation spectrum. The
+view asks for a narrower window above 500,000 points rather than downsampling.
+The summed default retains the previous background subtraction. Candidate masses
+sharing at least three ions at near-integer mass ratios receive a review warning;
+they are not silently deleted, because oligomers can also share ions.
+
+When **Isotope fitting (experimental)** is explicitly selected:
 
 Each positive-ion MS1 scan in the selected time window is fitted independently
 with `ms_deisotope` peptide averagine (10 ppm, charges +2–50, 95% isotope-pattern
@@ -60,7 +74,7 @@ within 10 ppm. These are averaged by envelope intensity; alternative isotope
 assignments remain explicitly flagged, not claimed as separate confirmed proteoforms.
 Unresolved isotope envelopes cannot support an isotope-resolved result.
 
-The main m/z panel shows the strongest corrected MS1 scan, labelled with scan ID
+In this optional mode, the main m/z panel shows the strongest corrected MS1 scan, labelled with scan ID
 and time, retaining its stored precision. All selected scans contribute to fitting.
 The third-row graph shows each component's strongest measured envelope converted
 to neutral isotope masses using its fitted charge, with **no bins or smoothing**.
@@ -120,15 +134,39 @@ peptides map to all compatible locations and do not establish chain identity.
 I/L are indistinguishable; neutral losses are not searched. Click a candidate to
 inspect its measured, annotated fragment spectrum.
 
-MS-only matching has separate adjustable intensity gates: **5% of the survey
+MS1 feature seeding has separate adjustable intensity gates: **5% of the survey
 scan maximum** by default, plus an optional **minimum intensity in counts**
-(default 0, disabled). Both gates must pass before a candidate contributes to
-the table or coverage; 0 disables the corresponding gate. The maximum is measured
+(default 0, disabled). Both gates must pass at a feature's apex; 0 disables the
+corresponding gate, not the feature evidence checks. The maximum is measured
 after reference-ion filtering. At most the 500 strongest passing peaks per scan
-are tested. Counts, relative intensity and passing observations are disclosed for
-the selected hypothesis. These gates do not alter MS/MS matching or raw data.
-They reject weak signals but are not signal-to-noise estimation or chromatographic
-peak detection: persistent background can still pass and MS-only remains tentative.
+are tested as seeds. Weaker neighbouring scans remain available for isotope and
+chromatographic checks. Counts, isotope fit and consecutive observations are shown
+for the selected feature. These gates do not change MS/MS fragment matching or raw
+data; they can change whether a precursor feature is confirmed.
+
+An MS1 mass candidate now requires a **composition-compatible isotope envelope**
+in at least three consecutive surveys at half-height of a bracketed elution peak.
+The expected pattern comes from the reference peptide and known net modification
+formulas, using Pyteomics compositions and Brain isotope centroids. Required peaks
+are at least 10% of the expected maximum, with a minimum of two (short +1 peptides
+are supported). Cosine fit must be at least 0.90, and required isotope intensities
+must be within 0.4–2.5 times their fitted expectation.
+Each envelope is aligned to a measured M/M+1/M+2 anchor within the requested
+absolute precursor ppm tolerance, then its relative isotope spacing is checked
+at that same ppm tolerance. The reported precursor must still pass the absolute
+mass gate; acquired m/z values are not shifted or rounded. Strong interleaved finer
+charge patterns reject lower-charge aliases. Isotope traces must coelute with cosine
+at least 0.95. Peak prominence must be at least 50% of apex within +/-0.5 minutes;
+survey gaps cannot exceed 0.15 minutes. Coherent shoulders down to 10% of apex are
+included for MS/MS parent linking. Isotope offsets are merged within a feature,
+while separate chromatographic peaks remain separate.
+
+These conservative heuristics are not a validated identification/FDR method, and
+can miss narrow, weak, overlapping or edge-of-run peaks. They do not eliminate all
+chemical interference. A matching MS1 feature supports mass/charge, not sequence.
+Unknown custom modification formulas (and selenium isotope origins) are not given
+MS1 envelope support; MS/MS review remains available. An isolated matching m/z or
+flat persistent trace never qualifies, even with intensity cutoffs disabled.
 
 The optional **Find site across reference** control searches every eligible
 position on one chain or all supplied chains, without requiring a written residue
@@ -206,23 +244,26 @@ Shared peptides still cannot identify a particular chain. Map PDFs preserve thes
 residue colours and ambiguity marks.
 Protein coverage underlines show matched peptide spans, separate overlapping
 peptides into rows, and combine repeated observations: **blue solid** means
-MS/MS-supported; **green dashed** means tentative MS-only mass compatibility.
+MS/MS linked to a compatible local MS1 feature; **green dashed** means an MS1
+feature-supported peptide-mass candidate. **Blue dotted** retains fragment-supported
+MS/MS candidates whose precursor feature is unconfirmed; these are also labelled
+in the table. No crowded on-screen legend is added; hover titles explain each line.
 Click an underline to open a matching spectrum. Competing sequence candidates
 remain excluded, while shared peptides are shown at every compatible location.
 Two coverage percentages count unique residue positions, never overlapping spans
-twice: **MS** combines MS-only precursor-mass hypotheses and MS/MS-supported
-candidates; **MS/MS** is the fragment-supported subset. Thus MS coverage is not
-sequence confirmation, and the two percentages must not be added. Alternative
+twice: **MS** counts feature-supported precursor candidates; **MS/MS** counts
+fragment-supported candidates, including unconfirmed precursor features. These
+independent percentages are not additive, and MS coverage is not sequence
+confirmation. Alternative
 modification positions on the same peptide can contribute sequence coverage
 without claiming site localization; competing peptide sequences remain excluded.
 
-The MS-only search compares the top 500 positive survey peaks above 1% relative
-intensity per scan to reference peptide masses, with charges +1 to +6 and isotope
-offsets 0–2. It is not isotope-envelope validation or sequence confirmation.
-Repeated observations across the run are aggregated per peptide/charge/isotope
-hypothesis; the strongest measured observation and retention-time span are shown.
-Any peptide with MS/MS support in the run is omitted from MS-only results.
-This aggregation does not identify separate chromatographic features.
+MS/MS is associated using the recorded parent survey plus compatible charge,
+precursor mass and retention time. If the acquisition has no valid parent link,
+a unique local mass/charge/RT association may be used, explicitly labelled as
+inferred. A recorded but incompatible parent is never replaced by a time guess.
+A sequence matched elsewhere in the run no longer suppresses an unrelated MS1
+feature. Strong MS/MS remains visible when precursor feature evidence is missing.
 
 The results table supports sequence/location/modification text filtering,
 evidence, charge and competing-assignment filters, and sortable columns including

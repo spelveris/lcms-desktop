@@ -64,7 +64,7 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
 #peptide-linkages label[hidden] { display: none; }
 .peptide-preparation { flex-wrap: wrap; }
-#expert-params[hidden], #deconv-isotope-workflow[hidden] { display: none; }
+#expert-params[hidden], #deconv-isotope-workflow[hidden], #deconv-method-wrap[hidden], #deconv-spectrum-view-wrap[hidden] { display: none; }
 .peptide-preparation label[hidden], #peptide-analysis-details[hidden] { display: none; }
 #peptide-analysis-details { margin: 6px 0; }
 #peptide-analysis-details summary { cursor: pointer; }
@@ -2346,3 +2346,4 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 .reference-masses-panel [hidden] { display: none !important; }
 .reference-masses-detections { overflow-x: auto; }
 .reference-masses-detections td, .reference-masses-detections th { padding: 4px 10px; font-size: 12px; text-align: left; }
+.peptide-coverage-underline.evidence-msms.precursor-unconfirmed { border-bottom-style: dotted; }

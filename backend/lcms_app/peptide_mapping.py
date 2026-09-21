@@ -11,6 +11,7 @@ from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 import numpy as np
 from modification_formula import formula_mass
+from ms1_features import find_features, link_msms
 
 PROTON = 1.007276466621
 WATER = 18.010564684
@@ -221,76 +222,6 @@ def peptide_signature(peptide):
     return (peptide['sequence'], tuple((m['residue'], m['delta']) for m in peptide['modifications']))
 
 
-def match_ms1(channel, peptides, supported, ppm, min_relative_intensity=.05, min_intensity=0.):
-    """Tentative mass compatibility only; not sequence or isotope validation.
-
-    Aggregate repeated observations across the run, retaining the strongest
-    measured survey peak per peptide/charge/isotope hypothesis. Never promote
-    these matches to MS/MS sequence coverage. Search positive charges 1–6.
-    """
-    if channel is None or not peptides:
-        return []
-    masses = np.array([p['mass'] for p in peptides])
-    hypotheses = [(pidx, charge, isotope)
-                  for charge in range(1, 7) for isotope in range(3)
-                  for pidx in range(len(peptides))]
-    predicted = np.concatenate([(masses + charge*PROTON + isotope*ISOTOPE)/charge
-                                for charge in range(1, 7) for isotope in range(3)])
-    order = np.argsort(predicted, kind='stable')
-    predicted = predicted[order]
-    best = {}
-    tolerance = ppm * 1e-6
-    for meta, scan in zip(channel.metadata, channel.scans):
-        if not len(scan): continue
-        valid = np.flatnonzero(np.isfinite(scan).all(axis=1) & (scan[:, 0] > 0) & (scan[:, 1] > 0))
-        if not len(valid): continue
-        # Intensity gates, not a chromatographic peak or signal/noise score.
-        # The scan is already reference-filtered. Keep raw arrays unchanged.
-        scan_max = float(scan[valid, 1].max())
-        threshold = max(scan_max * min_relative_intensity, min_intensity)
-        valid = valid[scan[valid, 1] >= threshold]
-        valid = valid[np.argsort(scan[valid, 1], kind='stable')[-500:]]
-        observed = scan[valid, 0]
-        starts = np.searchsorted(predicted, observed/(1+tolerance), side='left')
-        ends = np.searchsorted(predicted, observed/(1-tolerance), side='right')
-        for index, start, end in zip(valid, starts, ends):
-            alternatives = {peptide_signature(peptides[hypotheses[order[j]][0]]) for j in range(start, end)}
-            for j in range(start, end):
-                pidx, charge, isotope = key = hypotheses[order[j]]
-                peptide = peptides[pidx]
-                if peptide_signature(peptide) in supported: continue
-                hit = {k: v for k, v in peptide.items() if k != 'residue_masses'} | {
-                    'evidence': 'ms1', 'scan_id': meta['scan_id'], 'time': meta['time'],
-                    'precursor_mz': float(scan[index, 0]), 'charge': charge, 'isotope_offset': isotope,
-                    'precursor_error_ppm': float((scan[index, 0]-predicted[j])/predicted[j]*1e6),
-                    'precursor_intensity': float(scan[index, 1]), 'matched_ions': 0, 'matched_bonds': 0,
-                    'precursor_relative_intensity_pct': float(scan[index, 1]/scan_max*100),
-                    'explained_intensity_pct': None, 'fragments': [], 'ambiguous_scan': len(alternatives) > 1,
-                    'sequence_ambiguous': len({sig[0] for sig in alternatives}) > 1,
-                    'site_ambiguous': len({sig for sig in alternatives if sig[0] == peptide['sequence']}) > 1,
-                    'site_search': any(m.get('variable') for m in peptide['modifications']),
-                    'observation_count': 1, 'time_start': meta['time'], 'time_end': meta['time'],
-                }
-                previous = best.get(key)
-                if previous is not None:
-                    # Count scans, not multiple compatible peaks within a scan.
-                    count = previous['observation_count'] + (previous['_last_scan'] != meta['scan_id'])
-                    first_time, last_time = min(previous['time_start'], meta['time']), max(previous['time_end'], meta['time'])
-                    ambiguous = previous['ambiguous_scan'] or hit['ambiguous_scan']
-                    sequence_ambiguous = previous['sequence_ambiguous'] or hit['sequence_ambiguous']
-                    site_ambiguous = previous['site_ambiguous'] or hit['site_ambiguous']
-                    if previous['precursor_intensity'] > hit['precursor_intensity']:
-                        hit = previous
-                    hit.update(observation_count=count, time_start=first_time, time_end=last_time, ambiguous_scan=ambiguous,
-                               sequence_ambiguous=sequence_ambiguous, site_ambiguous=site_ambiguous)
-                hit['_last_scan'] = meta['scan_id']
-                best[key] = hit
-                if len(best) > 20000:
-                    raise ValueError('Too many MS-only mass hypotheses; reduce the reference, missed cleavages or precursor tolerance')
-    for hit in best.values(): hit.pop('_last_scan', None)
-    return list(best.values())
-
-
 def analyze(sample, payload):
     if not sample.qtof_info or not sample.qtof_info.get('is_protein_digest'):
         raise ValueError('Peptide Mapping requires a QTOF protein digest/peptide mapping acquisition')
@@ -383,6 +314,7 @@ def analyze(sample, payload):
                     if len(matches) < 4 or bonds < 3 or explained < 10: continue
                     hits.append({k:v for k,v in peptide.items() if k != 'residue_masses'} | {
                         'evidence': 'msms', 'scan_id': meta['scan_id'], 'time': meta['time'], 'precursor_mz': precursor,
+                        'parent_scan_id': meta.get('parent_scan_id'),
                         'charge': charge, 'isotope_offset': isotope, 'precursor_error_ppm': float(errors[pidx]),
                         'matched_ions': len(matches), 'matched_bonds': bonds, 'explained_intensity_pct': explained, 'fragments': matches,
                         'remnant_fragment_ions': [m['ion'] for m in remnant_ions]})
@@ -398,13 +330,10 @@ def analyze(sample, payload):
             hit['site_ambiguous'] = len({peptide_signature(h) for h in hits if h['sequence'] == hit['sequence']}) > 1
             hit['site_search'] = any(m.get('variable') for m in hit['modifications'])
             rows.append(hit)
-    # "MS-only" means there is no fragment-supported assignment for this
-    # sequence/modification anywhere in this run, including competing MS/MS hits.
-    supported = {peptide_signature(row) for row in rows}
-    # MS-only remains available for ordinary/fixed-reference mapping, never for
-    # an unknown modification site. Do not use MS1 to manufacture site evidence.
-    ms1_peptides = [p for p in peptides if not any(m.get('variable') for m in p['modifications'])]
-    rows.extend(match_ms1(survey, ms1_peptides, supported, precursor_ppm, ms1_percent/100, ms1_intensity))
+    features = find_features(survey, peptides, precursor_ppm, ms1_percent/100, ms1_intensity)
+    # A variable-site feature may support a measured MS/MS precursor, but it must
+    # never become an MS-only modification-site assignment or coverage line.
+    rows.extend(link_msms(features, rows, precursor_ppm, peptide_signature))
     rows.sort(key=lambda r:(r['time'],r['scan_id']))
     coverage = []
     for chain in chains:
@@ -414,7 +343,7 @@ def analyze(sample, payload):
             for loc in row['locations']:
                 if loc['chain'] != chain['id']: continue
                 covered = range(loc['start'],loc['end']+1)
-                ms_positions.update(covered)
+                if row.get('ms1_supported'): ms_positions.update(covered)
                 (positions if row['evidence'] == 'msms' else ms_only_positions).update(covered)
         coverage.append({**chain,'positions':sorted(positions),'percent':len(positions)/len(chain['sequence'])*100,
                          'ms_positions':sorted(ms_positions), 'ms_only_positions':sorted(ms_only_positions),
@@ -425,7 +354,9 @@ def analyze(sample, payload):
             'settings':{'enzyme':'Trypsin (not before P)', 'missed_cleavages':missed, 'precursor_ppm':precursor_ppm, 'fragment_ppm':fragment_ppm,
                         'ms1_peak_limit':500, 'ms1_min_relative_intensity':ms1_percent/100,
                         'ms1_min_relative_percent':ms1_percent, 'ms1_min_intensity':ms1_intensity, 'charges':[1,2,3,4,5,6],
+                        'ms1_min_surveys':3, 'ms1_min_isotope_fit':.9, 'ms1_min_coelution':.95,
+                        'ms1_min_peak_prominence_fraction':.5, 'ms1_threshold_scope':'feature apex',
                         'searched_modification_sites':searched_sites, 'site_search_evidence':'MS/MS only',
                         'variable_modifications_per_peptide':1 if searches else 0, 'preparation':preparation},
             'reference_filter':sample.qtof_info.get('reference_filter'),
-            'warning':f'Exploratory candidates, not validated identifications; no FDR estimate. MS-only matches are tentative mass compatibility, not sequence or isotope-envelope confirmation: top 500 survey peaks meeting both {ms1_percent:g}% of the reference-filtered scan maximum and {ms1_intensity:g} counts, aggregated across the run with the strongest passing observation shown. These are intensity cutoffs, not signal-to-noise or chromatographic peak detection; persistent background may still pass. Charge and isotope offset are hypotheses. Shared/repeated peptides map to every compatible location and do not identify an individual chain. I/L cannot be distinguished. MS coverage combines unique positions from MS-only and MS/MS candidates; MS/MS coverage requires fragments. Both exclude competing sequences, not alternative sites on the same sequence. Optional site search tests one selected variable remnant per peptide using MS/MS only, not combinations; competing modification sites remain unresolved. Unknown modification masses, intact cross-links and neutral losses are not searched.'}
+            'warning':f'Exploratory candidates, not validated identifications; no FDR estimate. MS coverage requires a formula-compatible isotope envelope across at least three consecutive surveys within one bracketed chromatographic peak (isotope cosine >=0.90, coelution >=0.95, prominence >=50% of apex). Apex gates: {ms1_percent:g}% of the reference-filtered scan maximum and {ms1_intensity:g} counts; top 500 seed peaks per scan. Short peptides may use two isotope peaks. These conservative heuristics can miss weak, narrow, overlapping or edge-of-run features, and do not prove peptide sequence or exclude all chemical background. Unknown modification formulas do not receive MS1 feature support. MS/MS coverage requires fragments; an unconfirmed precursor feature is explicitly marked and excluded from MS coverage. Parent-linked or inferred mass/charge/RT associations are distinguished. Shared/repeated peptides map to every compatible location and do not identify an individual chain. I/L cannot be distinguished. Both coverages count unique residues and exclude competing sequences. Optional site search uses MS/MS only; competing sites stay unresolved. Intact cross-links and neutral losses are not searched.'}

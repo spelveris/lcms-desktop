@@ -86,8 +86,7 @@ def coverage_figures(payload):
         subtitle = f"{payload.get('sample_name', 'Sample')} | Chain {chain.get('id','')} - {chain.get('name','')} | MS {ms:.1f}% | MS/MS {msms:.1f}%"
         def new_page():
             fig, top = _page(width, height, 'Peptide coverage map', subtitle)
-            fig.text(.065, (top-3)/(height*72), 'Blue solid: MS/MS    Green dashed: tentative MS-only', fontsize=7)
-            _footer(fig, 'MS includes MS/MS; percentages are not additive. Candidates, not validated identifications.')
+            fig.text(.065, (top-3)/(height*72), 'Blue solid: linked MS/MS    Blue dotted: precursor unconfirmed    Green dashed: MS1', fontsize=7)
             if modified:
                 fig.text(.065, (top-15)/(height*72), 'Red residue: MS/MS modification candidate; dotted: unresolved site', fontsize=7)
             return fig, top-(34 if modified else 22)
@@ -122,7 +121,7 @@ def coverage_figures(payload):
                     colour = GREEN if span['evidence']=='ms1' else '#4e9dce'
                     from matplotlib.lines import Line2D
                     fig.add_artist(Line2D(np.array(xx)/(width*72), [yy/(height*72)]*2, transform=fig.transFigure,
-                                          color=colour, linewidth=.8, linestyle='--' if span['evidence']=='ms1' else '-'))
+                                          color=colour, linewidth=.8, linestyle='--' if span['evidence']=='ms1' else ':' if span.get('ms1_supported') is False else '-'))
                     for x, endpoint in [(xx[0], span['start'] >= offset+1), (xx[1], span['end'] <= end)]:
                         if endpoint:
                             fig.add_artist(Line2D([x/(width*72)]*2, np.array([yy,yy+2])/(height*72), transform=fig.transFigure, color=colour, linewidth=.6))
@@ -185,7 +184,7 @@ def _cleavage_map(fig, row, ions, top, width, height):
                                      (y+(96-svg_y)*scale)/(height*72), transform=fig.transFigure,
                                      color=BLUE if series=='b' else RED, linewidth=1.8*scale, gid=f'peptide-cut-{series}-{pos}'))
                 for idx, ion in enumerate(at_cut):
-                    svg_label_y=153+idx*20 if series=='b' else 39-idx*19
+                    svg_label_y=153+idx*26 if series=='b' else 39-idx*25
                     label=rf"$\mathregular{{{series}}}_{{{ion['number']}}}^{{+{ion['charge']}}}$"
                     fig.text((cut+direction*12*scale)/(width*72), (y+(96-svg_label_y)*scale)/(height*72),
                              label, fontsize=15*scale, fontfamily='monospace', color=BLUE if series=='b' else RED,
@@ -246,7 +245,6 @@ def spectrum_figures(payload):
         fig.text(.065,(axis_bottom*72-38)/(page_height*72),'\n'.join(textwrap.wrap(note,int(width*16))),fontsize=7,va='top')
         _cleavage_map(fig,row,ions,axis_bottom*72-112,width,page_height)
         if mod_lines:fig.text(.065,(35+mod_height)/(page_height*72),'\n'.join(mod_lines),fontsize=7,va='top')
-        _footer(fig,'Shared peptides do not identify a chain.')
         yield fig
 
 

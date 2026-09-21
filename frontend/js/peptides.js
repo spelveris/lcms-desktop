@@ -159,7 +159,7 @@ function peptideCoverageSpans(result, chain) {
           || chain.sequence.slice(location.start - 1, location.end) !== row.sequence) continue;
       const modifications = (row.modifications || []).map(mod => [mod.residue, mod.delta]).sort((a,b) => a[0]-b[0]);
       const evidence = row.evidence || 'msms';
-      const key = JSON.stringify([location.start, location.end, modifications, evidence]);
+      const key = JSON.stringify([location.start, location.end, modifications, evidence, row.ms1_supported !== false]);
       if (!spans.has(key)) spans.set(key, { start: location.start, end: location.end, row, evidence, scanIds: new Set() });
       spans.get(key).scanIds.add(row.scan_id);
     }
@@ -224,15 +224,10 @@ function peptideRenderCoverageChain(result, chain, columns = 50) {
   const section = document.createElement('section'); section.className = 'peptide-coverage-chain';
   const title = document.createElement('p');
   title.textContent = `Chain ${chain.id} · ${chain.name} · Coverage: MS ${(chain.ms_percent ?? chain.percent).toFixed(1)}% · MS/MS ${(chain.msms_percent ?? chain.percent).toFixed(1)}%`;
-  title.title = 'MS: combined precursor-mass coverage, including tentative MS-only and MS/MS-supported matches. MS/MS: fragment-supported coverage only. Unique residue positions are counted once; competing sequences are excluded. Unresolved modification sites do not imply a different sequence.';
+  title.title = 'MS: isotope/retention-time feature-supported coverage. MS/MS: fragment-supported coverage, including candidates whose precursor feature remains unconfirmed. Unique residues are counted once; competing sequences are excluded. The percentages are independent, not additive.';
   section.appendChild(title);
   const spans = peptideCoverageSpans(result, chain), positions = new Set(chain.positions);
   const modificationSites = peptideCoverageModifications(result, chain);
-  const note = document.createElement('p'); note.className = 'toolbar-note';
-  note.textContent = 'Blue solid: MS/MS · Green dashed: tentative MS-only · Click a line to inspect';
-  if (modificationSites.size) note.textContent += ' · Red residue: MS/MS modification candidate (dotted: unresolved site)';
-  note.title = 'MS-only matches are tentative. Competing sequences are excluded; shared peptides map to each compatible chain. Alternative modification sites remain candidates.';
-  section.appendChild(note);
   const scroll = document.createElement('div'); scroll.className = 'peptide-coverage-scroll'; section.appendChild(scroll);
   for (let offset = 0; offset < chain.sequence.length; offset += columns) {
     const sequence = chain.sequence.slice(offset, offset+columns), end = offset + sequence.length;
@@ -254,9 +249,9 @@ function peptideRenderCoverageChain(result, chain, columns = 50) {
     for (const span of peptideCoverageBlockSpans(spans, offset+1, end)) {
       const start = Math.max(span.start, offset+1), stop = Math.min(span.end, end);
       const line = document.createElement('button'); line.type = 'button';
-      line.className = `peptide-coverage-underline evidence-${span.evidence}` + (span.start < start ? ' continues-left' : '') + (span.end > stop ? ' continues-right' : '');
+      line.className = `peptide-coverage-underline evidence-${span.evidence}` + (span.row.ms1_supported === false ? ' precursor-unconfirmed' : '') + (span.start < start ? ' continues-left' : '') + (span.end > stop ? ' continues-right' : '');
       line.style.gridColumn = `${start-offset} / span ${stop-start+1}`; line.style.gridRow = String(span.lane+2);
-      line.title = `${span.row.sequence} · ${chain.id}:${span.start}–${span.end} · ${span.evidence === 'ms1' ? 'MS-only mass hypothesis' : 'MS/MS-supported candidate'} · open representative scan ${span.row.scan_id}`;
+      line.title = `${span.row.sequence} · ${chain.id}:${span.start}–${span.end} · ${span.evidence === 'ms1' ? 'MS1 feature-supported mass candidate' : span.row.ms1_supported === false ? 'MS/MS candidate; precursor feature unconfirmed' : 'MS/MS linked to MS1 feature'} · open representative scan ${span.row.scan_id}`;
       const mods = (span.row.modifications || []).map(mod => `${span.row.sequence[mod.residue-1]}${mod.residue}: ${mod.delta >= 0 ? '+' : ''}${Number(mod.delta).toFixed(6)} Da`);
       if (mods.length) line.title += ` · ${mods.join('; ')}`;
       line.setAttribute('aria-label', line.title); line.addEventListener('click', () => peptideShowMatch(span.row)); grid.appendChild(line);
@@ -351,7 +346,7 @@ function peptideUseReference(index) {
   document.getElementById('peptide-fasta').value = ref.fasta;
   peptideView.modifications = ref.modifications.map(m => ({...m,kind:'unknown'}));
   peptideRenderLinkages();
-  document.getElementById('peptide-import-status').textContent = `${ref.name} · ${ref.source}. ${ref.warnings.join(' ')} ` + ref.modifications.map(m => `${m.chain}${m.position}: ${m.name} (mass unresolved).`).join(' ');
+  document.getElementById('peptide-import-status').textContent = '';
 }
 
 async function peptideImport() {
@@ -411,7 +406,7 @@ async function peptideExportPdf(kind) {
   const sampleName=peptideView.path.split(/[\\/]/).pop() || 'sample';
   const payload={kind,sample_name:sampleName,style:buildCurrentDeconvStyle(),settings:result?.settings,reference_filter:result?.reference_filter};
   if(kind==='map')payload.chains=result.coverage.map(chain=>({...chain,
-    spans:peptideCoverageSpans(result,chain).map(span=>({start:span.start,end:span.end,evidence:span.evidence})),
+    spans:peptideCoverageSpans(result,chain).map(span=>({start:span.start,end:span.end,evidence:span.evidence,ms1_supported:span.row.ms1_supported !== false})),
     modification_sites:[...peptideCoverageModifications(result,chain).values()].map(({position,ambiguous})=>({position,ambiguous}))}));
   else Object.assign(payload,{row,spectrum});
   button.disabled=true;showLoading(kind==='map'?'Exporting peptide coverage map PDF…':'Exporting annotated peptide spectrum PDF…');
@@ -438,7 +433,7 @@ function peptideLocationText(row) { return row.locations.map(l=>`${l.chain}:${l.
 function peptideModificationSiteText(row) {
   return row.locations.flatMap(location=>(row.modifications||[]).map(mod=>`${location.chain}:${location.start+mod.residue-1}${row.sequence[mod.residue-1]||''} (${mod.delta>=0?'+':''}${Number(mod.delta).toFixed(6)})${mod.variable?' · candidate':''}`)).join(', ') || '—';
 }
-function peptideEvidenceText(row) { return row.evidence === 'ms1' ? 'MS-only · tentative' : 'MS/MS'; }
+function peptideEvidenceText(row) { return row.evidence === 'ms1' ? 'MS1 feature · candidate' : row.ms1_supported === false ? 'MS/MS · precursor unconfirmed' : 'MS/MS · linked'; }
 function peptideReviewText(row) {
   return (row.sequence_ambiguous ?? row.ambiguous_scan) ? 'Competing sequence' : row.site_ambiguous ? 'Site unresolved' : 'No competing sequence';
 }
@@ -624,7 +619,8 @@ async function peptideShowMatch(row) {
   try {
     const spectrum=await api.getQtofSpectrum(peptideView.path,row.scan_id,'positive');
     if(generation!==peptideView.generation)return;
-    const overlays=msOnly ? [{x:[row.precursor_mz],y:[row.precursor_intensity],text:[`MS-only +${row.charge}`],mode:'markers+text',textposition:'top center',marker:{color:'#48a66b',size:7},type:'scatter'}] : peptideFragmentTraces(row);
+    const isotopePeaks=row.isotope_peaks || [{mz:row.precursor_mz,intensity:row.precursor_intensity,offset:row.isotope_offset}];
+    const overlays=msOnly ? [{x:isotopePeaks.map(p=>p.mz),y:isotopePeaks.map(p=>p.intensity),text:isotopePeaks.map(p=>`M${p.offset?`+${p.offset}`:''} · +${row.charge}`),mode:'markers+text',textposition:'top center',marker:{color:'#48a66b',size:7},type:'scatter'}] : peptideFragmentTraces(row);
     const maximum=spectrum.intensities.reduce((a,b)=>Math.max(a,b),0);
     await Plotly.react('peptide-spectrum-plot',[qtofStickTrace(spectrum),...overlays],peptideSpectrumLayout(maximum),PLOT_CONFIG);
     if(generation!==peptideView.generation)return;
@@ -632,8 +628,8 @@ async function peptideShowMatch(row) {
     peptideView.selectedMatch=row;peptideView.selectedSpectrum=spectrum;
     document.getElementById('btn-peptide-spectrum-pdf').disabled=false;
     document.getElementById('peptide-spectrum-status').textContent=msOnly
-      ? `${row.sequence} · measured MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · tentative +${row.charge}, isotope offset ${row.isotope_offset}. Intensity ${Number(row.precursor_intensity).toPrecision(5)} counts${row.precursor_relative_intensity_pct==null?'':` (${row.precursor_relative_intensity_pct.toFixed(2)}% of scan maximum)`}. ${row.observation_count} passing survey observations across ${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min; strongest shown. No supporting MS/MS assignment: no b/y cleavage evidence or confirmed sequence.`
-      : `${row.sequence} · measured MS/MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · precursor m/z ${row.precursor_mz.toFixed(5)}, inferred +${row.charge} · blue b / red y labels are candidate matches, not a confirmed sequence. Precursor isotope offset: ${row.isotope_offset}.`;
+      ? `${row.sequence} · MS1 feature apex: scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · +${row.charge}, isotope offset ${row.isotope_offset}. ${Number(row.precursor_intensity).toPrecision(5)} counts${row.precursor_relative_intensity_pct==null?'':` (${row.precursor_relative_intensity_pct.toFixed(2)}% of scan maximum)`}. ${row.isotope_count} required isotope peaks across ${row.observation_count} consecutive surveys (${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min); envelope fit ${(100*row.isotope_fit).toFixed(1)}%. No linked MS/MS: peptide sequence remains a candidate.`
+      : `${row.sequence} · measured MS/MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · precursor m/z ${row.precursor_mz.toFixed(5)}, inferred +${row.charge}. ${row.ms1_supported ? `MS1 feature linked (${row.precursor_link}); ${row.precursor_feature.observation_count} surveys.` : 'Precursor feature unconfirmed; excluded from MS feature coverage.'} Blue b / red y labels are candidate matches. Precursor isotope offset: ${row.isotope_offset}.`;
   } catch(error) { if(generation===peptideView.generation)document.getElementById('peptide-spectrum-status').textContent=error.message; }
 }
 
