@@ -21,7 +21,8 @@ def synthetic_sample():
     scan=np.array(sorted(peaks))
     channel=SimpleNamespace(metadata=[{'scan_id':1,'time':1.},{'scan_id':2,'time':1.01}],scans=[scan,scan.copy()])
     sample=SimpleNamespace(qtof_info={'instrument':'G6545XT','is_protein_digest':False,'acquisition_method':'Intact_Mass'},
-        qtof_channels={(0,1):channel},ms_scans=channel.scans)
+        qtof_channels={(0,1):channel},ms_scans=channel.scans,
+        ms_times=np.array([1.,1.01]),ms_mz_axis=None)
     return sample,neutral
 
 
@@ -68,13 +69,73 @@ class IsotopeAwareTests(unittest.TestCase):
     def test_api_dispatch_and_serialization_preserve_isotope_evidence(self):
         s,_=synthetic_sample()
         params={n:p.default.default for n,p in inspect.signature(server.deconvolute).parameters.items()}
-        params.update(path='synthetic.sirslt',start=.9,end=1.1,background_path=None)
+        params.update(path='synthetic.sirslt',start=.9,end=1.1,background_path=None,intact_method='isotope')
         with patch.object(server,'_get_sample',return_value=s),patch.object(server.analysis,'sum_spectra_in_range',side_effect=AssertionError('Must not rebin')):
             result=server.deconvolute(**params)
         self.assertEqual(result['workflow']['id'],'qtof-isotope-aware')
         serialized=server._serialize_deconvolution_components(result['components'])
         self.assertEqual(serialized[0]['envelopes'],result['components'][0]['envelopes'])
         self.assertIsNone(serialized[0]['r2'])
+
+    def test_default_restores_time_window_sum_and_legacy_parameters(self):
+        s,_=synthetic_sample()
+        params={n:p.default.default for n,p in inspect.signature(server.deconvolute).parameters.items()}
+        params.update(path='synthetic.sirslt',start=.9,end=1.1,background_path=None,include_singly_charged=False)
+        with patch.object(server,'_get_sample',return_value=s), \
+             patch.object(qd,'run',side_effect=AssertionError('Isotope fitting must be opt-in')), \
+             patch.object(server.analysis,'deconvolute_protein_local_lcms_machine_like',return_value=[]) as old:
+            result=server.deconvolute(**params)
+        self.assertEqual(result['workflow']['id'],'qtof-envelope')
+        self.assertEqual(result['spectrum']['mz_grid_step'],.001)
+        self.assertAlmostEqual(sum(result['spectrum']['intensities']),sum(scan[:,1].sum() for scan in s.ms_scans),places=5)
+        self.assertEqual(old.call_args.kwargs['pwhh'],.6)
+        self.assertEqual(old.call_args.kwargs['max_charge'],50)
+        np.testing.assert_array_equal(result['measured_spectrum']['mz'],s.ms_scans[0][:,0])
+        np.testing.assert_array_equal(result['measured_spectrum']['intensities'],s.ms_scans[0][:,1]*2)
+
+    def test_raw_inspection_preserves_nearby_coordinates_and_bounds_without_downsampling(self):
+        s,_=synthetic_sample()
+        s.qtof_channels[(0,1)].scans=[np.array([[500.123456789,10.]]),np.array([[500.123456799,20.]])]
+        raw=qd.measured_window_spectrum(s,.9,1.1)
+        self.assertEqual(raw['mz'],[500.123456789,500.123456799])
+        self.assertEqual(raw['intensities'],[10.,20.])
+        self.assertTrue(raw['before_background_subtraction'])
+        self.assertIsNone(qd.measured_window_spectrum(s,.9,1.1,limit=1))
+        self.assertIsNone(qd.measured_window_spectrum(s,2,3))
+
+    def test_optional_mode_rejects_unsupported_instruments_and_invalid_modes(self):
+        s,_=synthetic_sample();self.assertFalse(qd.use_isotope_workflow(s))
+        self.assertTrue(qd.use_isotope_workflow(s,'isotope'))
+        for other,mode in [(SimpleNamespace(qtof_info=None),'isotope'),(s,'automatic-isotopes')]:
+            with self.assertRaises(ValueError):qd.use_isotope_workflow(other,mode)
+
+    def test_ion_export_uses_the_displayed_subtracted_spectrum_in_default_mode(self):
+        s,_=synthetic_sample();s.name='Synthetic'
+        from matplotlib.figure import Figure
+        payload={'path':'synthetic','start':.9,'end':1.1,'format':'pdf','components':[{'mass':1000}],
+                 'spectrum':{'mz':[500.123456789,501.234567891],'intensities':[0.,3.]}}
+        with patch.object(server,'_get_sample',return_value=s), \
+             patch.object(server.plotting,'create_ion_selection_figure',return_value=Figure()) as draw, \
+             patch.object(server.plotting,'export_figure_pdf',return_value=b'%PDF-test'), \
+             patch.object(server.analysis,'sum_spectra_in_range',side_effect=AssertionError('Do not replace displayed blank subtraction')):
+            server.export_ion_selection(payload)
+        np.testing.assert_array_equal(draw.call_args.args[0],payload['spectrum']['mz'])
+        np.testing.assert_array_equal(draw.call_args.args[1],[0.,3.])
+
+    def test_report_rejects_cached_results_from_the_other_analysis_mode(self):
+        s,_=synthetic_sample();s.uv_data=None
+        with patch.object(server,'_get_sample',return_value=s),self.assertRaises(server.HTTPException) as cm:
+            server.export_report_pdf({'path':'synthetic','deconv_results':[{'mass':1000.,'isotope_aware':True}]})
+        self.assertEqual(cm.exception.status_code,400)
+
+    def test_integer_multiple_mass_flags_require_shared_ions_and_do_not_delete_results(self):
+        rows=[{'mass':10000.,'ion_mzs':[501.,1001.,1251.]},
+              {'mass':20000.,'ion_mzs':[501.,1001.,1251.]},
+              {'mass':30000.,'ion_mzs':[601.,1101.,1351.]}]
+        qd.flag_charge_ambiguities(rows)
+        self.assertEqual(len(rows),3)
+        self.assertTrue(rows[0]['review_flags']);self.assertTrue(rows[1]['review_flags'])
+        self.assertEqual(rows[2]['review_flags'],[])
 
 
 if __name__=='__main__': unittest.main()

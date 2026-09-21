@@ -2444,8 +2444,8 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
     # Bottom left: Summed mass spectrum
     ax_spec = fig.add_subplot(gs[1, 0])
 
-    from qtof_deconvolution import is_intact_qtof, representative_scan
-    isotope_aware=is_intact_qtof(sample)
+    from qtof_deconvolution import use_isotope_workflow, representative_scan
+    isotope_aware=use_isotope_workflow(sample, style.get('intact_method', 'envelope'))
     if isotope_aware:
         points=representative_scan(sample,start_time,end_time);mz,intensity=points[:,0],points[:,1]
     else:
@@ -2465,9 +2465,14 @@ def create_deconvolution_figure(sample, start_time: float, end_time: float,
         from analysis import find_spectrum_peaks
         peaks = [] if isotope_aware else find_spectrum_peaks(mz, intensity, height_threshold=0.2, min_distance=5, use_centroid=True)
         peak_mz_values = np.array([p['mz'] for p in peaks], dtype=float) if peaks else np.array([])
-        for peak in peaks:
+        label_mzs = []
+        label_spacing = (ax_spec.get_xlim()[1]-ax_spec.get_xlim()[0]) * 7 / max(1, ax_spec.get_position().width * fig_width * 72)
+        for peak in sorted(peaks, key=lambda p:p['intensity'], reverse=True):
+            if getattr(sample, 'qtof_info', None) and any(abs(peak['mz']-old) < label_spacing for old in label_mzs):
+                continue
+            label_mzs.append(peak['mz'])
             ax_spec.annotate(
-                f"{peak['mz']:.2f}",
+                f"{peak['mz']:.3f}" if getattr(sample, 'qtof_info', None) else f"{peak['mz']:.2f}",
                 xy=(peak['mz'], peak['intensity']),
                 xytext=(0, 3),
                 textcoords='offset points',

@@ -2076,6 +2076,7 @@ def _get_default_deconvolution_parameters() -> dict[str, Union[int, float, bool]
         "use_monoisotopic": DEFAULT_DECONV_USE_MONOISOTOPIC,
         "include_singly_charged": DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED,
         "mw_algorithm": DEFAULT_DECONV_MW_ALGORITHM,
+        "intact_method": "envelope",
     }
 
 
@@ -2110,6 +2111,7 @@ def _normalize_deconvolution_parameters(raw_params: Optional[dict]) -> dict[str,
         bool(params["include_singly_charged"]),
     )
     params["mw_algorithm"] = _normalize_deconvolution_mw_algorithm(raw.get("mw_algorithm"))
+    params["intact_method"] = raw.get("intact_method", "envelope")
     return params
 
 
@@ -3192,6 +3194,7 @@ def deconvolute(
     use_monoisotopic: bool = Query(DEFAULT_DECONV_USE_MONOISOTOPIC),
     include_singly_charged: bool = Query(DEFAULT_DECONV_INCLUDE_SINGLY_CHARGED),
     mw_algorithm: str = Query("auto"),
+    intact_method: str = Query("envelope"),
 ):
     """Run deconvolution on summed spectrum and return detected components."""
     sample = _get_sample(path)
@@ -3213,7 +3216,11 @@ def deconvolute(
         if background.ms_scans is None:
             raise HTTPException(status_code=404, detail="No MS data in background sample")
 
-    if qtof_deconvolution.is_intact_qtof(sample):
+    try:
+        isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, intact_method)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isotope_mode:
         try:
             result = qtof_deconvolution.run(sample,start,end,background=background,
                                             low=low_mw,high=high_mw,minimum_mz=300.)
@@ -3322,6 +3329,10 @@ def deconvolute(
     # Serialize components
     results = _serialize_deconvolution_components(components)
 
+    intact_qtof = qtof_deconvolution.is_intact_qtof(sample)
+    if intact_qtof:
+        qtof_deconvolution.flag_charge_ambiguities(results)
+
     qtof = getattr(sample, 'qtof_info', None) is not None
     if qtof:
         # Compact only after all calculations, without dropping measured bins.
@@ -3332,6 +3343,8 @@ def deconvolute(
 
     return {
         "components": results,
+        "workflow": {"id": "qtof-envelope", "method": "envelope"} if intact_qtof else None,
+        "measured_spectrum": qtof_deconvolution.measured_window_spectrum(sample, start, end, min_input_mz) if intact_qtof else None,
         "spectrum": {
             "mz": _ndarray_to_list(mz_arr),
             "intensities": _ndarray_to_list(intensity_arr),
@@ -4197,16 +4210,25 @@ def export_ion_selection(payload: dict = Body(...)):
     if not isinstance(style, dict):
         style = {}
 
-    if qtof_deconvolution.is_intact_qtof(sample):
+    if any(c.get('isotope_aware') for c in components):
         displayed=payload.get('spectrum')
         if not isinstance(displayed,dict) or displayed.get('representation')!='calibrated centroid sticks':
             raise HTTPException(status_code=400,detail='Run isotope-aware deconvolution before exporting its ion selection')
         mz_arr=np.asarray(displayed.get('mz',[]),dtype=float)
         intensity_arr=np.asarray(displayed.get('intensities',[]),dtype=float)
+    elif isinstance(payload.get('spectrum'), dict) and payload['spectrum'].get('mz'):
+        displayed = payload['spectrum']
+        mz_arr = np.asarray(displayed.get('mz', []), dtype=float)
+        intensity_arr = np.asarray(displayed.get('intensities', []), dtype=float)
     else:
         mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not obtain spectra for selected range")
+
+    if (mz_arr.ndim != 1 or intensity_arr.ndim != 1 or mz_arr.shape != intensity_arr.shape
+            or not np.isfinite(mz_arr).all() or not np.isfinite(intensity_arr).all()
+            or np.any(mz_arr <= 0) or np.any(intensity_arr < 0)):
+        raise HTTPException(status_code=400, detail="Invalid displayed spectrum for ion selection")
 
     fig = plotting.create_ion_selection_figure(mz_arr, intensity_arr, components, style)
     try:
@@ -4240,7 +4262,8 @@ def export_report_pdf(payload: dict = Body(...)):
     if not sample_path:
         raise HTTPException(status_code=400, detail="path is required")
 
-    sample = _get_sample(str(sample_path))
+    path = str(sample_path)
+    sample = _get_sample(path)
     settings = payload.get("settings", {})
     if not isinstance(settings, dict):
         settings = {}
@@ -4292,6 +4315,12 @@ def export_report_pdf(payload: dict = Body(...)):
 
     raw_deconv_parameters = payload.get("deconv_parameters")
     deconv_parameters = _normalize_deconvolution_parameters(raw_deconv_parameters)
+    try:
+        isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, deconv_parameters['intact_method'])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if deconv_results and any(bool(c.get('isotope_aware')) != isotope_mode for c in deconv_results):
+        raise HTTPException(status_code=400, detail='Run the selected analysis method before exporting its report')
     if not isinstance(raw_deconv_parameters, dict) or not str(raw_deconv_parameters.get("mw_algorithm", "")).strip():
         deconv_parameters["mw_algorithm"] = _default_deconvolution_mw_algorithm_for_path(path)
 
@@ -4319,7 +4348,7 @@ def export_report_pdf(payload: dict = Body(...)):
                 report_mz, report_intensity = report_sum
             else:
                 report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
-            if qtof_deconvolution.is_intact_qtof(sample):
+            if isotope_mode:
                 deconv_results = qtof_deconvolution.run(sample,*deconv_time_range,
                     low=deconv_parameters['low_mw'],high=deconv_parameters['high_mw'])['components']
             elif report_mz is not None and len(report_mz) > 0:
@@ -4347,7 +4376,7 @@ def export_report_pdf(payload: dict = Body(...)):
     with PdfPages(pdf_buffer) as pdf:
         # Page 1: sample info + deconvolution table
         params = _format_deconvolution_parameters_for_report(deconv_parameters)
-        if qtof_deconvolution.is_intact_qtof(sample):
+        if isotope_mode:
             params={'Workflow':'Isotope-aware intact (averagine mass estimates)',
                     'Mass range':params['Mass range'],'Charge range':'2 - 50',
                     'Isotope tolerance':'10 ppm','Minimum evidence':'4 isotopes; 2 charge states',
@@ -4399,6 +4428,7 @@ def export_report_pdf(payload: dict = Body(...)):
         if deconv_results and deconv_time_range is not None:
             display_results = deconv_results
             deconv_style = {
+                "intact_method": deconv_parameters['intact_method'],
                 "fig_width": A4_W - 0.8,
                 "line_width": line_width,
                 "show_grid": True,
@@ -4423,7 +4453,7 @@ def export_report_pdf(payload: dict = Body(...)):
             plt.close(fig_deconv)
             current_page += 1
 
-            if qtof_deconvolution.is_intact_qtof(sample):
+            if isotope_mode:
                 report_points=qtof_deconvolution.representative_scan(sample,*deconv_time_range)
                 report_mz,report_intensity=report_points[:,0],report_points[:,1]
             else:
@@ -4471,6 +4501,10 @@ def export_report_pdf(payload: dict = Body(...)):
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if '--peptide-self-test' in sys.argv:
+        from ms1_features import smoke_test
+        print(json.dumps(smoke_test()))
+        sys.exit(0)
     if '--isotope-self-test' in sys.argv:
         print(json.dumps(qtof_deconvolution.smoke_test()))
         sys.exit(0)

@@ -20,15 +20,46 @@ function fixture() {
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
 
-test('metadata-selected intact preset leaves legacy expert values and default calculations unchanged',()=>{
+test('intact metadata enables an explicit option but keeps the previous calculation as default',()=>{
  const {run,elements}=fixture();
  elements.set('deconv-isotope-workflow',{});elements.set('expert-params',{});
+ elements.set('deconv-method-wrap',{});elements.set('deconv-intact-method',{dataset:{},value:'envelope'});
  const before=JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')"));
  run("state.loadedSamples['qtof.sirslt']={isotope_aware_intact:true};syncDeconvMwAlgorithmDefault('qtof.sirslt')");
- assert.equal(elements.get('deconv-isotope-workflow').hidden,false);assert.equal(elements.get('expert-params').hidden,true);
- const q=run("getCurrentDeconvolutionParameters('qtof.sirslt')");assert.equal(q.min_charge,2);assert.equal(q.fwhm,0);assert.equal(q.monoisotopic,true);
+ assert.equal(elements.get('deconv-method-wrap').hidden,false);
+ assert.equal(elements.get('deconv-isotope-workflow').hidden,true);assert.equal(elements.get('expert-params').hidden,false);
+ assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('qtof.sirslt')")),before);
+ elements.get('deconv-intact-method').value='isotope';run("syncDeconvMwAlgorithmDefault('qtof.sirslt')");
+ const q=run("getCurrentDeconvolutionParameters('qtof.sirslt')");assert.equal(q.min_charge,2);assert.equal(q.fwhm,0);assert.equal(q.intact_method,'isotope');
+ assert.equal(elements.get('expert-params').hidden,true);
+ assert.equal(run("getCurrentDeconvolutionParameters('other.sirslt').intact_method"),'envelope');
  run("syncDeconvMwAlgorithmDefault('old.sirslt')");assert.equal(elements.get('expert-params').hidden,false);
  assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')")),before);
+});
+
+test('raw inspection does not replace the summed calculation spectrum or round measured values',()=>{
+ const {run,elements,context}=fixture();
+ context.data={workflow:{id:'qtof-envelope'},spectrum:{mz:[500.123],intensities:[30]},measured_spectrum:{mz:[500.123456789,500.123456799],intensities:[10,20]}};
+ elements.set('deconv-spectrum-view',{value:'summed'});
+ assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.spectrum);
+ elements.get('deconv-spectrum-view').value='measured';
+ assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.measured_spectrum);
+ assert.equal(context.data.spectrum.mz[0],500.123);
+ assert.equal(run('getDisplayedDeconvSpectrum(data).mz[1]'),500.123456799);
+ context.data.workflow.id='qtof-isotope-aware';assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.spectrum);
+});
+
+test('an older analysis response cannot overwrite a newly selected intact method',async()=>{
+ const {run,elements,context}=fixture();
+ for(const [id,value] of [['deconv-sample-select','sample'],['deconv-start','1'],['deconv-end','2']])elements.set(id,{value});
+ elements.set('expert-mode-toggle',{checked:false});
+ const pending=[];context.api={runDeconvolution:()=>new Promise(resolve=>pending.push(resolve))};
+ context.rendered=[];
+ run('buildActiveDeconvolutionRequest=()=>({start_time:1,end_time:2});setDeconvolutionBusy=()=>{};showLoading=()=>{};hideLoading=()=>{};toast=()=>{};renderReportSummary=()=>{};renderDeconvResults=data=>rendered.push(data.id)');
+ const first=run('runDeconvolution()'), second=run('runDeconvolution()');
+ pending[1]({id:'new',components:[]});await second;
+ pending[0]({id:'old',components:[]});await first;
+ assert.deepEqual(context.rendered,['new']);assert.equal(run('state.deconvResults.id'),'new');
 });
 
 test('isotope profile bypasses projection and preserves measured and derived decimals',()=>{

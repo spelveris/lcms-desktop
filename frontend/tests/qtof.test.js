@@ -236,11 +236,12 @@ test('blue ladder superscripts and dual-charge labels have clearance from cuts a
 });
 
 test('MS-only selection never shows invented fragment-ion evidence',async()=>{
- const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',fragments:[],observation_count:2,time_start:1,time_end:2,precursor_intensity:10};
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',ms1_supported:true,fragments:[],isotope_count:3,isotope_fit:.98,observation_count:3,time_start:1,time_end:2,precursor_intensity:10};
  ctx.api.getQtofSpectrum=async()=>({mz:[955.4676],intensities:[10]});
  await run('peptideShowMatch(row)');
  assert.equal(nodes.get('peptide-ion-sequence').hidden,true);
- assert.match(nodes.get('peptide-spectrum-status').textContent,/No supporting MS\/MS/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/No linked MS\/MS/);
+ assert.doesNotMatch(nodes.get('peptide-spectrum-status').textContent,/undefined|NaN/);
 });
 
 test('stale spectrum response cannot restore a cleared sequence map',async()=>{
@@ -392,7 +393,31 @@ test('compact MS-only and MS/MS lines keep distinct accessible buttons and selec
   assert.equal(button.type,'button');assert.ok(button.attributes['aria-label']);
   button.listeners.click();assert.equal(selected.evidence,button.classList.contains('evidence-ms1')?'ms1':'msms');
  }
- assert.ok(descendants(panel).some(n=>String(n.textContent).includes('tentative MS-only')));
+ assert.ok(buttons.some(n=>n.attributes['aria-label'].includes('MS1 feature-supported mass candidate')));
+ assert.ok(!descendants(panel).some(n=>String(n.textContent).includes('Blue solid:')));
+});
+
+test('removing the imported-reference comment does not alter reference or modification import',()=>{
+ const {run,nodes}=domFixture();
+ run("peptideView.references=[{name:'Synthetic reference',source:'method.bcpmx',fasta:'>A\\nAAAAAK',modifications:[{chain:'A',position:6,name:'Unknown modification',delta:null}],warnings:['Imported settings only']}];peptideUseReference(0)");
+ assert.equal(nodes.get('peptide-fasta').value,'>A\nAAAAAK');
+ assert.equal(nodes.get('peptide-import-status').textContent,'');
+ assert.equal(run('peptideView.modifications[0].delta'),null);
+ assert.equal(run('peptideView.modifications[0].position'),6);
+});
+
+test('unconfirmed MS/MS precursor is distinct from a linked solid blue line',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDER',positions:[],percent:0};
+ ctx.row={...candidate,ms1_supported:false,precursor_link:'unconfirmed'};
+ ctx.result={matches:[ctx.row,{...candidate,scan_id:10,ms1_supported:true}]};
+ const panel=run('peptideRenderCoverageChain(result,chain)');
+ const buttons=descendants(panel).filter(n=>n.tag==='button');
+ assert.equal(buttons.length,2);
+ assert.equal(buttons.filter(n=>n.classList.contains('precursor-unconfirmed')).length,1);
+ assert.match(run('peptideEvidenceText(row)'),/precursor unconfirmed/);
+ ctx.api.getQtofSpectrum=async()=>({mz:[100],intensities:[10]});
+ await run('peptideShowMatch(row)');
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/excluded from MS feature coverage/);
 });
 
 test('coverage uses available panel width rather than a fixed 50-residue limit',()=>{
@@ -580,11 +605,12 @@ test('reference refresh preserves reduction, IAM and disulfide choices',async()=
 });
 
 test('MS-only selected spectrum discloses actual passing intensity and relative strength',async()=>{
- const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',fragments:[],observation_count:2,time_start:1,time_end:2,precursor_intensity:250,precursor_relative_intensity_pct:7.5};
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',ms1_supported:true,fragments:[],isotope_count:3,isotope_fit:.98,observation_count:3,time_start:1,time_end:2,precursor_intensity:250,precursor_relative_intensity_pct:7.5};
  ctx.api.getQtofSpectrum=async()=>({mz:[955.4676],intensities:[250]});
  await run('peptideShowMatch(row)');
  assert.match(nodes.get('peptide-spectrum-status').textContent,/250.00 counts \(7.50% of scan maximum\)/);
- assert.match(nodes.get('peptide-spectrum-status').textContent,/2 passing survey observations/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/3 consecutive surveys/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/envelope fit 98.0%/);
 });
 
 test('applying reference filtering preserves MS-only threshold choices across its refresh',async()=>{

@@ -20,6 +20,64 @@ def is_intact_qtof(sample):
             and bool(re.search(r'(^|[^a-z0-9])intact([^a-z0-9]|$)', method)))
 
 
+def use_isotope_workflow(sample, method='envelope'):
+    """Instrument metadata enables the option; it must never select it."""
+    if method not in {'envelope', 'isotope'}:
+        raise ValueError('Choose charge-envelope analysis or optional isotope fitting')
+    if method == 'isotope' and not is_intact_qtof(sample):
+        raise ValueError('Optional isotope fitting requires supported intact QTOF metadata')
+    return method == 'isotope'
+
+
+def measured_window_spectrum(sample, start, end, minimum_mz=100., limit=500000):
+    """Unbinned inspection view; never used to replace the legacy calculation grid.
+
+    Exact equal m/z coordinates are summed. All other acquired coordinates stay
+    unchanged. Reference filtering has already been applied; blank subtraction
+    has not. Bound the optional display without downsampling measured peaks.
+    """
+    channel = sample.qtof_channels.get((0, 1))
+    if channel is None:
+        return None
+    scans = [_scan(s, minimum_mz) for m, s in zip(channel.metadata, channel.scans)
+             if start <= m['time'] <= end]
+    if not scans or sum(len(s) for s in scans) > limit:
+        return None
+    points = np.concatenate(scans)
+    mz, inverse = np.unique(points[:, 0], return_inverse=True)
+    intensity = np.bincount(inverse, weights=points[:, 1], minlength=len(mz))
+    return {**_spectrum(np.column_stack((mz, intensity))),
+            'scans_analyzed': len(scans), 'before_background_subtraction': True}
+
+
+def flag_charge_ambiguities(components):
+    """Flag overlapping integer-multiple mass assignments; never delete a mass.
+
+    Shared measured ions, not a mass ratio alone, are required. Real oligomers
+    can also share m/z, so this is a review flag rather than a rejection rule.
+    """
+    for component in components:
+        component['review_flags'] = []
+    ordered = sorted(components, key=lambda c: c['mass'])
+    for i, smaller in enumerate(ordered):
+        a = np.unique(np.asarray(smaller.get('ion_mzs', []), dtype=float))
+        if len(a) < 3 or smaller['mass'] <= 0:
+            continue
+        for larger in ordered[i+1:]:
+            multiple = round(larger['mass'] / smaller['mass'])
+            if not 2 <= multiple <= 6:
+                continue
+            if abs(larger['mass'] - multiple * smaller['mass']) > larger['mass'] * .0005:
+                continue
+            b = np.unique(np.asarray(larger.get('ion_mzs', []), dtype=float))
+            shared = sum(bool(np.any(abs(b - mz) <= mz * .0005)) for mz in a)
+            if shared < 3 or shared < min(len(a), len(b)) * .5:
+                continue
+            smaller['review_flags'].append(f'Shares {shared} ions with a candidate near {multiple}x its mass; review charge assignment or oligomer overlap.')
+            larger['review_flags'].append(f'Shares {shared} ions with a candidate near 1/{multiple} its mass; review charge assignment or oligomer overlap.')
+    return components
+
+
 def _scan(scan, minimum_mz):
     a = np.asarray(scan, dtype=float)
     if a.ndim != 2 or a.shape[1] != 2 or not np.isfinite(a).all() or np.any(a[:,1] < 0):

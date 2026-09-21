@@ -27,6 +27,16 @@ def spectrum_payload():
 
 
 class PeptideExportTests(unittest.TestCase):
+    def test_unconfirmed_precursor_uses_dotted_blue_and_has_no_old_footer(self):
+        chain={'id':'A','sequence':'PEPTIDER','positions':[], 'spans':[
+            {'start':1,'end':8,'evidence':'msms','ms1_supported':False},
+            {'start':1,'end':8,'evidence':'msms','ms1_supported':True},
+            {'start':1,'end':8,'evidence':'ms1'}]}
+        fig=next(coverage_figures({'chains':[chain]}))
+        styles={line.get_linestyle() for line in fig.artists}
+        self.assertTrue({':','-','--'} <= styles)
+        self.assertFalse(any('Shared peptides' in t.get_text() or 'validated identifications' in t.get_text() for t in fig.texts))
+
     def test_spectrum_keeps_exact_measured_sticks_ion_labels_and_deconvolution_fonts(self):
         payload=spectrum_payload();before=copy.deepcopy(payload)
         pages=list(spectrum_figures(payload));self.assertEqual(len(pages),3)
@@ -113,6 +123,19 @@ class PeptideExportTests(unittest.TestCase):
             self.assertEqual(texts['peptide-residue-9'].get_color(),'#c52b2b')
             self.assertEqual(texts['peptide-modification-9'].get_text(),'*')
             self.assertFalse(any('Candidate assignments, not validated identifications' in text.get_text() for text in fig.texts))
+            self.assertFalse(any('Shared peptides do not identify a chain.' in text.get_text() for text in fig.texts))
+
+    def test_same_cut_charge_labels_have_extra_vertical_space_without_moving_cut_marks(self):
+        payload=spectrum_payload()
+        payload['row']['fragments'] += [{**ion,'ion':ion['ion'][:-1]+'^2+'} for ion in payload['row']['fragments']]
+        fig=next(spectrum_figures(payload));fig.canvas.draw()
+        texts={t.get_gid():t for t in fig.texts if t.get_gid()}
+        for ion in payload['row']['fragments'][:18]:
+            series=ion['ion'][0];number=int(ion['ion'][1:-1])
+            first=texts[f'peptide-ion-{series}-{number}-1'];second=texts[f'peptide-ion-{series}-{number}-2']
+            distance=abs(first.get_position()[1]-second.get_position()[1])*fig.get_size_inches()[1]*72
+            self.assertAlmostEqual(distance,(26 if series=='b' else 25)*.45)
+            self.assertFalse(first.get_window_extent().overlaps(second.get_window_extent()))
 
     def test_blue_ladder_label_boxes_do_not_touch_cut_lines(self):
         payload=spectrum_payload()
