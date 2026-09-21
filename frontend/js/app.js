@@ -344,6 +344,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initWatchFolder();
   initRunRouter();
   initSingleSample();
+  initQtofViewer();
+  initPeptideMapping();
   initBackgroundSubtraction();
   initProgression();
   initUptakeAssayCC();
@@ -2028,6 +2030,7 @@ async function loadSampleMeta(path, options = {}) {
   try {
     const meta = await api.loadSample(path);
     state.loadedSamples[path] = meta;
+    qtofSyncSamples(state.selectedFiles, state.loadedSamples);
     updateWavelengthCheckboxes();
     const sampleLabel = meta.name || path.split(/[\\/]/).pop();
     if (silent) {
@@ -2106,6 +2109,7 @@ function updateSampleDropdowns() {
   syncBackgroundSubtractionSelections();
   syncDeconvBackgroundSelection();
   syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '');
+  qtofSyncSamples(state.selectedFiles, state.loadedSamples);
 }
 
 function syncBackgroundSubtractionSelections() {

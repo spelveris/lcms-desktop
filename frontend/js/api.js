@@ -82,6 +82,22 @@ const api = {
     return apiFetch(`/api/ms-spectrum?${qs({ path, time })}`);
   },
 
+  getQtofScans(path, polarity) {
+    return apiFetch(`/api/qtof/scans?${qs({ path, polarity })}`);
+  },
+
+  getPeptideReferences(path) {
+    return apiFetch(`/api/peptide-mapping/references?${qs({ path })}`);
+  },
+
+  analyzePeptides(payload) {
+    return apiFetch('/api/peptide-mapping/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  },
+
+  getQtofSpectrum(path, scanId, polarity) {
+    return apiFetch(`/api/qtof/spectrum?${qs({ path, scan_id: scanId, polarity })}`);
+  },
+
   getSummedSpectrum(path, start, end, polarity = null) {
     return apiFetch(`/api/summed-spectrum?${qs({ path, start, end, polarity })}`);
   },

@@ -12,6 +12,7 @@ from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 import streamlit as st
 import numpy as np
+from qtof_reader import inspect_qtof, read_qtof, is_digest_method
 
 try:
     import rainbow as rb
@@ -478,6 +479,8 @@ class SampleData:
         self._loaded = False
         self._error: Optional[str] = None
         self._debug_info: dict = {}
+        self.qtof_channels: dict = {}
+        self.qtof_info: Optional[dict] = None
 
     @property
     def is_loaded(self) -> bool:
@@ -809,8 +812,26 @@ class SampleData:
         intensities = values[point_count : point_count * 2]
         return mz_axis, intensities
 
-    def _load_sirslt_ms(self, bundle: Path):
+    def _load_sirslt_ms(self, bundle: Path, qtof_context=None):
         """Load MS profile data from a .sirslt bundle."""
+        if qtof_context is not None:
+            self.qtof_channels, self.qtof_info = read_qtof(bundle, qtof_context)
+            self.qtof_info["is_protein_digest"] = is_digest_method(self.acq_method)
+            self.qtof_info["acquisition_method"] = self.acq_method
+            for polarity, suffix in ((0, "pos"), (1, "neg")):
+                channel = self.qtof_channels.get((polarity, 1))
+                if channel is not None:
+                    setattr(self, f"ms_times_{suffix}", channel.times)
+                    setattr(self, f"ms_scans_{suffix}", channel.scans)
+                    setattr(self, f"tic_{suffix}", channel.tic)
+            if self.ms_times_pos is None and self.ms_times_neg is None:
+                raise ValueError("QTOF run contains no MS1 survey spectra")
+            self.acq_info["MS Instrument"] = self.qtof_info["instrument"]
+            self.acq_info["MS Data"] = "QTOF calibrated centroids (MS1); MS/MS stored separately"
+            self.acq_info["MS1 Scans"] = self.qtof_info["scan_counts"].get("1", 0)
+            self.acq_info["MS/MS Scans"] = self.qtof_info["scan_counts"].get("2", 0)
+            self._debug_info["qtof"] = self.qtof_info
+            return
         scan_path = next((path for path in sorted(bundle.glob("*.MSScan.bin")) if not path.name.startswith("._")), None)
         profile_path = next((path for path in sorted(bundle.glob("*.MSProfile.bin")) if not path.name.startswith("._")), None)
         peak_path = next((path for path in sorted(bundle.glob("*.MSPeak.bin")) if not path.name.startswith("._")), None)
@@ -1050,10 +1071,11 @@ class SampleData:
             with tempfile.TemporaryDirectory(prefix="lcms-sirslt-") as temp_dir_name:
                 extracted_dir = Path(temp_dir_name)
                 with ZipFile(dx_path) as archive:
+                    qtof_context = inspect_qtof(archive)
                     archive.extractall(extracted_dir)
                 self._load_sirslt_uv(extracted_dir)
 
-            self._load_sirslt_ms(bundle)
+            self._load_sirslt_ms(bundle, qtof_context=qtof_context)
             self.ms_times = self.ms_times_pos if self.ms_times_pos is not None else self.ms_times_neg
             self.ms_scans = self.ms_scans_pos if self.ms_scans_pos is not None else self.ms_scans_neg
             self.ms_mz_axis = self.ms_mz_axis_pos if self.ms_mz_axis_pos is not None else self.ms_mz_axis_neg

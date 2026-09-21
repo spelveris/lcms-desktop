@@ -2602,6 +2602,7 @@ def load_sample(path: str = Query(..., description="Path to a supported sample f
         "is_c4_method": sample.is_c4_method,
         "acq_method": sample.acq_method,
         "acq_info": sample.acq_info,
+        "qtof": sample.qtof_info,
         "has_uv": sample.uv_data is not None,
         "has_ms": sample.ms_scans is not None,
         "has_ms_pos": sample.ms_times_pos is not None,
@@ -2857,6 +2858,63 @@ def ms_spectrum(
         "intensities": _ndarray_to_list(intensity_arr),
         "time": time,
     }
+
+
+def _qtof_channel(sample: SampleData, polarity: str, level: int):
+    if polarity not in {"positive", "negative"}:
+        raise HTTPException(status_code=422, detail="Polarity must be positive or negative")
+    if sample.qtof_info is None:
+        raise HTTPException(status_code=404, detail="This view requires supported QTOF data")
+    if not sample.qtof_info.get("is_protein_digest"):
+        raise HTTPException(status_code=404, detail="MS/MS view is only enabled for recorded protein digest or peptide mapping methods")
+    return sample.qtof_channels.get((0 if polarity == "positive" else 1, level))
+
+
+@app.get("/api/qtof/scans")
+def qtof_scans(path: str = Query(...), polarity: str = Query("positive")):
+    """List acquired scans, retaining explicit instrument MS/MS parent links."""
+    sample = _get_sample(path)
+    ms1 = _qtof_channel(sample, polarity, 1)
+    ms2 = _qtof_channel(sample, polarity, 2)
+    return {"instrument": sample.qtof_info["instrument"], "polarity": polarity,
+            "ms1": ms1.metadata if ms1 else [], "ms2": ms2.metadata if ms2 else []}
+
+
+@app.get("/api/peptide-mapping/references")
+def peptide_references(path: str = Query(...)):
+    sample = _get_sample(path)
+    _qtof_channel(sample, "positive", 2)
+    from peptide_mapping import bioconfirm_references
+    try:
+        return {"references": bioconfirm_references(Path(sample.base_folder_path))}
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/peptide-mapping/analyze")
+def peptide_mapping_analyze(payload: dict = Body(...)):
+    sample = _get_sample(str(payload.get("path", "")))
+    from peptide_mapping import analyze
+    try:
+        return analyze(sample, payload)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/qtof/spectrum")
+def qtof_spectrum(path: str = Query(...), scan_id: int = Query(...), polarity: str = Query("positive")):
+    """Return one measured centroid spectrum, without summing or binning."""
+    sample = _get_sample(path)
+    for level in (1, 2):
+        channel = _qtof_channel(sample, polarity, level)
+        if channel is None:
+            continue
+        for index, meta in enumerate(channel.metadata):
+            if meta["scan_id"] == scan_id:
+                values = channel.scans[index]
+                return {**meta, "polarity": polarity, "representation": "measured centroid",
+                        "mz": _ndarray_to_list(values[:, 0]), "intensities": _ndarray_to_list(values[:, 1])}
+    raise HTTPException(status_code=404, detail="This acquired scan was not found")
 
 
 @app.get("/api/summed-spectrum")
