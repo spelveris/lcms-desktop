@@ -51,7 +51,7 @@ function peptideRenderIonSequence(row) {
   panel.replaceChildren(); panel.hidden = false;
   const title = document.createElement('h4'); title.textContent = 'Selected peptide · b/y-ion evidence'; panel.appendChild(title);
   const note = document.createElement('p'); note.className = 'toolbar-note';
-  note.textContent = 'N → C sequence. Blue b ions below / red y ions above. Angled marks show matched cuts; unmarked cuts have no matching evidence. +1 and +2 are fragment charges, not precursor charge. * marks a fixed modification. Candidate assignments, not a confirmed sequence.';
+  note.textContent = 'Blue b ions below · red y ions above · +1/+2 fragment charge · * modified residue';
   panel.appendChild(note);
   const scroll = document.createElement('div'); scroll.className = 'peptide-ion-scroll';
   function svgNode(tag, attributes={}, text) {
@@ -124,7 +124,7 @@ function peptideFragmentTraces(row) {
 function peptideCoverageSpans(result, chain) {
   const spans = new Map();
   for (const row of result.matches || []) {
-    if (row.ambiguous_scan) continue; // Same evidence rule as the existing coverage calculation.
+    if (row.sequence_ambiguous ?? row.ambiguous_scan) continue;
     for (const location of row.locations || []) {
       if (location.chain !== chain.id || !Number.isInteger(location.start) || !Number.isInteger(location.end)
           || location.start < 1 || location.end > chain.sequence.length || location.end < location.start
@@ -150,11 +150,12 @@ function peptideCoverageSpans(result, chain) {
 function peptideRenderCoverageChain(result, chain) {
   const section = document.createElement('section'); section.className = 'peptide-coverage-chain';
   const title = document.createElement('p');
-  title.textContent = `Chain ${chain.id} · ${chain.name} · MS/MS candidate coverage ${chain.percent.toFixed(1)}% (shared peptides included; MS-only excluded)`;
+  title.textContent = `Chain ${chain.id} · ${chain.name} · Coverage: MS ${(chain.ms_percent ?? chain.percent).toFixed(1)}% · MS/MS ${(chain.msms_percent ?? chain.percent).toFixed(1)}%`;
+  title.title = 'MS: combined precursor-mass coverage, including tentative MS-only and MS/MS-supported matches. MS/MS: fragment-supported coverage only. Unique residue positions are counted once; competing sequences are excluded. Unresolved modification sites do not imply a different sequence.';
   section.appendChild(title);
   const spans = peptideCoverageSpans(result, chain), positions = new Set(chain.positions);
   const note = document.createElement('p'); note.className = 'toolbar-note';
-  note.textContent = 'Blue solid: MS/MS-supported. Green dashed: tentative MS-only mass match, not sequence confirmation. Overlaps use separate lines; repeated observations share one underline. Click a line to inspect a spectrum. Competing candidates are excluded; shared peptides map to every compatible chain.';
+  note.textContent = 'Blue solid: MS/MS-supported. Green dashed: tentative MS-only. Click an underline to inspect a spectrum. Competing sequences are excluded; shared peptides map to each compatible chain. Alternative modification sites remain candidates.';
   section.appendChild(note);
   const scroll = document.createElement('div'); scroll.className = 'peptide-coverage-scroll'; section.appendChild(scroll);
   for (let offset = 0; offset < chain.sequence.length; offset += 50) {
@@ -191,17 +192,22 @@ function peptideRenderLinkages() {
     const chain=document.createElement('select');
     const fasta=document.getElementById('peptide-fasta').value;
     const count=Math.max(1,(fasta.match(/^>/gm)||[]).length);
+    if(mod.search_all){const option=document.createElement('option');option.value='*';option.textContent='All chains';chain.appendChild(option);}
     for(let i=0;i<Math.min(26,count);i++){const option=document.createElement('option');option.value=String.fromCharCode(65+i);option.textContent=`Chain ${option.value}`;chain.appendChild(option);}
     // Keep an imported out-of-range chain visible so validation can explain it.
     if(![...chain.options].some(o=>o.value===mod.chain)){const option=document.createElement('option');option.value=mod.chain;option.textContent=`Chain ${mod.chain} (check sequence)`;chain.appendChild(option);}
     chain.value=mod.chain;chain.onchange=()=>{mod.chain=chain.value;peptideClearResults();};label('Chain ',chain);
     const position=document.createElement('input');position.type='number';position.min=1;position.value=mod.position;position.style.width='75px';position.oninput=()=>{mod.position=Number(position.value);peptideClearResults();};label('Residue position ',position);
+    position.disabled=mod.search_all===true;
     const type=document.createElement('select');
-    for(const [value,text] of [['unknown',mod.name ? `Unresolved: ${mod.name}` : 'Unknown remnant'],['gg','GGisoK (ε-Gly-Gly lysine)'],['custom','Custom fixed mass shift']]){const option=document.createElement('option');option.value=value;option.textContent=text;type.appendChild(option);}
+    for(const [value,text] of [['unknown',mod.name ? `Unresolved: ${mod.name}` : 'Unknown remnant'],['gg','GGisoK (ε-Gly-Gly lysine)'],['custom','Custom mass shift']]){const option=document.createElement('option');option.value=value;option.textContent=text;type.appendChild(option);}
     type.value=mod.kind|| (mod.delta===null?'unknown':'custom');
     type.onchange=()=>{mod.kind=type.value;mod.delta=type.value==='gg'?114.04292747:null;if(type.value==='gg')mod.block_cleavage=true;peptideClearResults();peptideRenderLinkages();};label('Type ',type);
     const mass=document.createElement('input');mass.type='number';mass.step='0.000001';mass.placeholder='Unresolved';mass.value=mod.delta??'';mass.style.width='130px';mass.disabled=type.value==='gg'||type.value==='unknown';mass.oninput=()=>{mod.delta=mass.value===''?null:Number(mass.value);peptideClearResults();};label('Mass shift (Da) ',mass);
     const block=document.createElement('input');block.type='checkbox';block.checked=mod.block_cleavage===true;block.disabled=type.value==='gg';block.onchange=()=>{mod.block_cleavage=block.checked;peptideClearResults();};label('Blocks trypsin at this residue ',block);
+    const search=document.createElement('input');search.type='checkbox';search.checked=mod.search_all===true;
+    search.onchange=()=>{mod.search_all=search.checked;if(!search.checked&&mod.chain==='*')mod.chain='A';peptideClearResults();peptideRenderLinkages();};label('Find site across reference ',search);
+    if(mod.search_all){const residues=document.createElement('input');residues.value=mod.kind==='gg'?'K':(mod.residues||'K');residues.disabled=mod.kind==='gg';residues.style.width='65px';residues.title='Eligible residues (e.g. K, ST or * for any residue)';residues.oninput=()=>{mod.residues=residues.value.toUpperCase();peptideClearResults();};label('At residues ',residues);}
     const remove=document.createElement('button');remove.className='btn btn-sm';remove.textContent='Remove';remove.onclick=()=>{peptideView.modifications.splice(index,1);peptideClearResults();peptideRenderLinkages();};row.appendChild(remove);container.appendChild(row);
   });
 }
@@ -270,24 +276,27 @@ function peptideRender(result) {
 }
 
 const PEPTIDE_COLUMNS = [
-  ['sequence','Peptide / modifications'], ['locations','Locations'], ['evidence','Evidence'],
+  ['sequence','Peptide / modifications'], ['locations','Locations'], ['modification_sites','Protein modification sites'], ['evidence','Evidence'],
   ['time','Time (min)'], ['charge','Charge*'], ['precursor_mz','Precursor m/z'],
   ['precursor_error_ppm','Precursor ppm'], ['matched_ions','Matched ions'],
   ['explained_intensity_pct','Explained intensity'], ['ambiguous_scan','Review'],
 ];
 
 function peptideLocationText(row) { return row.locations.map(l=>`${l.chain}:${l.start}–${l.end}`).join(', '); }
+function peptideModificationSiteText(row) {
+  return row.locations.flatMap(location=>(row.modifications||[]).map(mod=>`${location.chain}:${location.start+mod.residue-1}${row.sequence[mod.residue-1]||''} (${mod.delta>=0?'+':''}${Number(mod.delta).toFixed(6)})${mod.variable?' · candidate':''}`)).join(', ') || '—';
+}
 function peptideEvidenceText(row) { return row.evidence === 'ms1' ? 'MS-only · tentative' : 'MS/MS'; }
 function peptideFilteredRows(result) {
   const filters = peptideView.filters, query = filters.text.trim().toLowerCase();
   const rows = result.matches.filter(row => {
-    const searchable = `${row.sequence} ${peptideLocationText(row)} ${row.modifications.map(m=>`${m.residue}:${m.delta}`).join(' ')}`.toLowerCase();
+    const searchable = `${row.sequence} ${peptideLocationText(row)} ${peptideModificationSiteText(row)} ${row.modifications.map(m=>`${m.residue}:${m.delta}`).join(' ')}`.toLowerCase();
     return (!query || searchable.includes(query)) && (!filters.evidence || (row.evidence || 'msms') === filters.evidence)
       && (!filters.charge || row.charge === Number(filters.charge))
-      && (!filters.review || Boolean(row.ambiguous_scan) === (filters.review === 'competing'));
+      && (!filters.review || (filters.review === 'site' ? row.site_ambiguous === true : Boolean(row.sequence_ambiguous ?? row.ambiguous_scan) === (filters.review === 'competing')));
   });
   const {key, direction} = peptideView.sort;
-  const value = row => key === 'locations' ? peptideLocationText(row) : key === 'evidence' ? peptideEvidenceText(row) : row[key];
+  const value = row => key === 'locations' ? peptideLocationText(row) : key === 'modification_sites' ? peptideModificationSiteText(row) : key === 'evidence' ? peptideEvidenceText(row) : row[key];
   return rows.sort((a,b) => {
     const av=value(a), bv=value(b);
     if (av == null || bv == null) return av == null ? (bv == null ? 0 : 1) : -1;
@@ -308,7 +317,7 @@ function peptideRenderTable(result) {
   for (const [key,label,options] of [
     ['evidence','Evidence ',[['','All'],['msms','MS/MS'],['ms1','MS-only (tentative)']]],
     ['charge','Charge* ',[['','All'],...[1,2,3,4,5,6].map(z=>[String(z),`+${z}`])]],
-    ['review','Assignments ',[['','All'],['unambiguous','No competing sequence'],['competing','Competing candidates']]],
+    ['review','Assignments ',[['','All'],['unambiguous','No competing sequence'],['competing','Competing sequences'],['site','Unresolved modification site']]],
   ]) {
     const select=document.createElement('select');
     for (const [value,label] of options) { const option=document.createElement('option');option.value=value;option.textContent=label;select.appendChild(option); }
@@ -341,9 +350,9 @@ function peptideRenderTable(result) {
     visible.forEach(row => {
     const tr = body.insertRow();
     const mods = row.modifications.map(m=>`${m.residue}:${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ');
-    const values = [row.sequence + (mods ? ` [${mods}]` : ''), peptideLocationText(row), peptideEvidenceText(row), row.time.toFixed(3), `+${row.charge}`, row.precursor_mz.toFixed(5), row.precursor_error_ppm.toFixed(2), row.evidence==='ms1' ? '—' : row.matched_ions, row.explained_intensity_pct == null ? '—' : `${row.explained_intensity_pct.toFixed(1)}%`];
+    const values = [row.sequence + (mods ? ` [${mods}]` : ''), peptideLocationText(row), peptideModificationSiteText(row), peptideEvidenceText(row), row.time.toFixed(3), `+${row.charge}`, row.precursor_mz.toFixed(5), row.precursor_error_ppm.toFixed(2), row.evidence==='ms1' ? '—' : row.matched_ions, row.explained_intensity_pct == null ? '—' : `${row.explained_intensity_pct.toFixed(1)}%`];
     values.forEach(value => { tr.insertCell().textContent = value; });
-    const button = document.createElement('button'); button.type='button';button.className = 'btn btn-sm'; button.textContent = (row.evidence==='ms1' ? 'View MS peak' : 'View fragments')+(row.ambiguous_scan ? ' · competing' : '');
+    const button = document.createElement('button'); button.type='button';button.className = 'btn btn-sm'; button.textContent = (row.evidence==='ms1' ? 'View MS peak' : 'View fragments')+((row.sequence_ambiguous ?? row.ambiguous_scan) ? ' · competing sequence' : row.site_ambiguous ? ' · site unresolved' : '');
     button.addEventListener('click',()=>peptideShowMatch(row)); tr.insertCell().appendChild(button);
     });
     empty.textContent=visible.length ? '' : result.matches.length ? 'No matches fit these filters. Reset filters to show all results.' : 'No candidates passed the current mass or fragment evidence thresholds.';

@@ -45,7 +45,7 @@ function domFixture() {
   const nodes=new Map();
   const document={getElementById(id){if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement(tag){return new Element(tag);},createElementNS(ns,tag){return new Element(tag);}};
   const ctx=vm.createContext({console,document,Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
-  for(const file of ['qtof.js','peptides.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
+  for(const file of ['qtof.js','peptides.js','reference-masses.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
   return {ctx,nodes,run:code=>vm.runInContext(code,ctx)};
 }
 
@@ -188,4 +188,76 @@ test('editing input invalidates a pending mapping response',async()=>{
   await pending;
   assert.equal(run('peptideView.results'),null);
   assert.equal(nodes.get('peptide-results').children.length,0);
+});
+
+test('coverage displays MS and MS/MS separately and no longer shows the removed instruction',()=>{
+ const {run,ctx}=domFixture();ctx.result={matches:[candidate]};
+ ctx.chain={id:'A',name:'Example',sequence:'PEPTIDER',positions:[1,2,3,4],percent:50,ms_percent:100,msms_percent:50};
+ const panel=run('peptideRenderCoverageChain(result,chain)');
+ assert.match(panel.children[0].textContent,/MS 100\.0% · MS\/MS 50\.0%/);
+ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../js/peptides.js'),'utf8'),/Angled marks show matched cuts/);
+ assert.match(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),/id="peptide-fragment-ppm"[^>]*value="20"/);
+});
+
+test('whole-reference site search disables written position and fixes GGisoK to lysines',()=>{
+ const {run,nodes}=domFixture();
+ run(`document.getElementById('peptide-fasta').value='AAAAAK';peptideView.modifications=[{chain:'A',position:1,kind:'gg',delta:114.04292747,block_cleavage:true}];peptideRenderLinkages()`);
+ let row=nodes.get('peptide-linkages').children[0];
+ const toggle=row.children[5].children[0];toggle.checked=true;toggle.onchange();
+ row=nodes.get('peptide-linkages').children[0];
+ assert.equal(row.children[1].children[0].disabled,true);
+ assert.equal(row.children[6].children[0].value,'K');assert.equal(row.children[6].children[0].disabled,true);
+ assert.ok(row.children[0].children[0].options.some(option=>option.value==='*'));
+});
+
+test('protein-wide modification positions are searchable and alternative sites do not hide sequence coverage',()=>{
+ const {run,ctx}=domFixture();ctx.row={...candidate,locations:[{chain:'B',start:45,end:52}],
+  modifications:[{residue:4,delta:114.04292747,variable:true}],ambiguous_scan:true,sequence_ambiguous:false,site_ambiguous:true};
+ assert.match(run('peptideModificationSiteText(row)'),/B:48T.*candidate/);
+ ctx.result={matches:[ctx.row]};run('peptideView.filters.text="B:48"');assert.equal(run('peptideFilteredRows(result).length'),1);
+ run('peptideView.filters.review="site"');assert.equal(run('peptideFilteredRows(result).length'),1);
+ ctx.chain={id:'B',sequence:'A'.repeat(44)+'PEPTIDER'};
+ assert.equal(run('peptideCoverageSpans(result,chain).length'),1);
+});
+
+test('reference controls validate custom masses and distinguish detected signal from selected exclusion',()=>{
+ const {run,ctx,nodes}=domFixture();
+ run(`document.getElementById('reference-masses-mode').value='custom';document.getElementById('reference-masses-values').value='922.009798, 121.050873';document.getElementById('reference-masses-polarity').value='positive';document.getElementById('reference-masses-charge').value='1';document.getElementById('reference-masses-ppm').value='20';document.getElementById('reference-masses-isotopes').checked=true;`);
+ assert.equal(run('referencePolicyFromControls().targets.length'),2);
+ run(`document.getElementById('reference-masses-values').value='not a mass'`);assert.throws(()=>run('referencePolicyFromControls()'));
+ ctx.report={policy:{mode:'auto',ppm:20,isotopes:true,targets:[]},active:true,removed_peaks:3,removed_msms_scans:0,method:{},detections:[
+   {mz:922.009798,polarity:'positive',found:true,matched_scans:3,total_scans:5,observed_mz:922.010,error_ppm:.22,selected:true},
+   {mz:121.050873,polarity:'positive',found:false,observed_mz:null,error_ppm:null,selected:false}]};
+ run('referenceRender(report)');const all=descendants(nodes.get('reference-masses-detections'));
+ assert.ok(all.some(n=>n.textContent==='Found in 3/5 MS scans'));assert.ok(all.some(n=>n.textContent==='Not found'));
+ assert.ok(all.some(n=>n.textContent==='Excluded window'));assert.ok(all.some(n=>n.textContent==='Not selected'));
+});
+
+test('applying references preserves peptide inputs then refreshes to invalidate every old calculation',async()=>{
+ const {run,ctx,nodes}=domFixture();let saved,reloaded=false;
+ ctx.sessionStorage={setItem(key,value){saved=JSON.parse(value);}};
+ ctx.window={location:{reload(){reloaded=true;}}};ctx.api.setReferenceMasses=async(path,policy)=>{assert.equal(path,'sample');assert.equal(policy.mode,'922');};
+ run(`document.getElementById('reference-masses-sample').value='sample';document.getElementById('reference-masses-mode').value='922';document.getElementById('reference-masses-ppm').value='20';document.getElementById('peptide-fasta').value='PEPTIDER';`);
+ await run('referenceApply()');assert.equal(saved.values['peptide-fasta'],'PEPTIDER');assert.equal(reloaded,true);
+});
+
+test('reference detection previews pending choices and never applies them',async()=>{
+ const {run,ctx,nodes}=domFixture();let applied=false;
+ ctx.api.setReferenceMasses=async()=>{applied=true;};
+ ctx.api.previewReferenceMasses=async(path,policy)=>{assert.equal(policy.mode,'off');return {policy,active:false,removed_peaks:0,removed_msms_scans:0,method:{},detections:[]};};
+ run(`document.getElementById('reference-masses-sample').value='sample';document.getElementById('reference-masses-mode').value='off';document.getElementById('reference-masses-ppm').value='20'`);
+ await run('referenceDetect()');assert.equal(applied,false);
+ assert.match(nodes.get('reference-masses-summary').textContent,/preview — not applied/);
+ assert.equal(run('referenceView.dirty'),true);
+});
+
+test('edited reference settings invalidate a pending detection response',async()=>{
+ const {run,ctx,nodes}=domFixture();let resolve;
+ ctx.sessionStorage={getItem(){return null;},removeItem(){}};
+ ctx.api.previewReferenceMasses=()=>new Promise(r=>{resolve=r;});run('initReferenceMasses()');
+ run(`document.getElementById('reference-masses-mode').value='922';document.getElementById('reference-masses-ppm').value='20'`);
+ const pending=run('referenceDetect()');nodes.get('reference-masses-mode').value='off';nodes.get('reference-masses-mode').listeners.change();
+ resolve({policy:{mode:'922',ppm:20,targets:[],isotopes:true},active:true,method:{},detections:[]});await pending;
+ assert.equal(nodes.get('reference-masses-mode').value,'off');
+ assert.match(nodes.get('reference-masses-status').textContent,/not applied yet/);
 });

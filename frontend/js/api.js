@@ -66,6 +66,18 @@ const api = {
     return apiFetch(`/api/load-sample?path=${encodeURIComponent(path)}`);
   },
 
+  getReferenceMasses(path) {
+    return apiFetch(`/api/reference-masses?${qs({ path })}`);
+  },
+
+  setReferenceMasses(path, policy) {
+    return apiFetch('/api/reference-masses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, policy }) });
+  },
+
+  previewReferenceMasses(path, policy) {
+    return apiFetch('/api/reference-masses/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, policy }) });
+  },
+
   getUVChromatogram(path, wavelength, smooth) {
     return apiFetch(`/api/uv-chromatogram?${qs({ path, wavelength, smooth })}`);
   },

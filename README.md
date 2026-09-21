@@ -63,13 +63,24 @@ sequence for an epsilon-linked modification. Cross-linked peptides are not searc
 The initial mapping implementation is **exploratory**: tryptic peptides of 5–70
 residues, 0–3 missed cleavages, precursor charges 1–6 (inferred), isotope offsets
 0–2, and b/y fragments of charges 1–2. Default tolerances are 10 ppm precursor
-and 50 ppm fragments. It requires four distinct matched ions, three cleavage
+and 20 ppm fragments (both remain adjustable). It requires four distinct matched ions, three cleavage
 bonds and 10% of filtered fragment intensity (top 200 peaks above 1%). These
 are review thresholds, not a validated identification score or FDR estimate.
 Ambiguous sequence candidates are excluded from coverage; repeated/shared
 peptides map to all compatible locations and do not establish chain identity.
-I/L are indistinguishable, and variable modifications/neutral losses are not
-searched. Click a candidate to inspect its measured, annotated fragment spectrum.
+I/L are indistinguishable; neutral losses are not searched. Click a candidate to
+inspect its measured, annotated fragment spectrum.
+
+The optional **Find site across reference** control searches every eligible
+position on one chain or all supplied chains, without requiring a written residue
+position. GGisoK is restricted to lysines; a known custom mass shift can target
+chosen residue letters or `*` for any residue. One variable remnant per peptide
+is tested at a time, optionally alongside fixed modifications; combinations of
+multiple variable sites within one peptide are not searched. Searches are bounded
+to 400 eligible sites and 20,000 peptide candidates. Unmodified alternatives are
+also retained. The table shows protein-wide modification positions for every
+compatible peptide location and explicitly marks searched sites as candidates.
+Competing sites remain unresolved; mass-only evidence cannot localize a site.
 
 The selected spectrum has a peptide-sequence cleavage map below it: matched b ions
 are blue below the sequence, matched y ions red above, with angled marks between
@@ -83,8 +94,12 @@ peptides into rows, and combine repeated observations: **blue solid** means
 MS/MS-supported; **green dashed** means tentative MS-only mass compatibility.
 Click an underline to open a matching spectrum. Competing sequence candidates
 remain excluded, while shared peptides are shown at every compatible location.
-The coverage percentage counts only noncompeting MS/MS candidates, never MS-only
-mass hypotheses.
+Two coverage percentages count unique residue positions, never overlapping spans
+twice: **MS** combines MS-only precursor-mass hypotheses and MS/MS-supported
+candidates; **MS/MS** is the fragment-supported subset. Thus MS coverage is not
+sequence confirmation, and the two percentages must not be added. Alternative
+modification positions on the same peptide can contribute sequence coverage
+without claiming site localization; competing peptide sequences remain excluded.
 
 The MS-only search compares the top 500 positive survey peaks above 1% relative
 intensity per scan to reference peptide masses, with charges +1 to +6 and isotope
@@ -100,6 +115,39 @@ precursor m/z (five decimal places) and the separate signed precursor ppm error.
 Precursor m/z is the recorded MS/MS precursor, or the exact measured survey peak
 for an MS-only hypothesis. Charge is inferred from mass, including +1; its
 presence in the search is not a guarantee of a +1 result in every run.
+
+### QTOF reference-ion exclusion
+
+The shared **QTOF reference ions** panel applies one per-run policy to every
+analysis and export: MS/MS peptide mapping (including precursor selection and
+fragment matching), intact/batch deconvolution, summed spectra, TIC/EIC, area and
+time analyses. The raw acquisition files and cached raw arrays are not modified.
+Automatic mode uses only enabled references from the saved acquisition method
+when its automatic recalibration is enabled. It does not infer calibrant identity
+from an arbitrary nearby analyte. When metadata is unavailable, detected preset
+signals are reported but not automatically excluded; select a preset or custom
+reference explicitly.
+
+Presets include positive HP-0921 **m/z 922.009798** and purine **m/z 121.050873**
+([Agilent reference](https://www.agilent.com/cs/library/usermanuals/public/Q-TOF_Verification_MH10.0.pdf)).
+Custom targets have an explicit polarity and charge. Detection uses raw MS1
+centroids and reports matching scan counts, median observed m/z and ppm error;
+configuration alone is never reported as a measured detection. A mass match is
+not proof of chemical identity.
+
+Masks use ±20 ppm by default (adjustable 1–50), with optional +1–+3 isotope windows
+at 1.00335483507/charge spacing (enabled by default). They exclude any coincident
+analyte in the same windows too; this is a deliberate, visible analysis setting,
+not a claim to separate unresolved compounds. Entire MS/MS scans selected on a
+reference precursor are excluded. Remaining centroid values/time axes are exact;
+TIC subtracts excluded centroid intensity from the instrument TIC, clipped at zero.
+Turning exclusion off restores the original analysis view. No second mass
+calibration/correction is applied.
+
+Preferences are saved locally in CATrupole's user-data directory, not on the NAS.
+Applying a changed policy refreshes the renderer and clears prior calculation and
+export caches; editable peptide sequence/modification inputs are retained. This
+prevents results made under the previous mask from being exported as current ones.
 
 ## Downloads
 
