@@ -2073,6 +2073,7 @@ def _run_report_deconvolution(
     mz_arr: np.ndarray,
     intensity_arr: np.ndarray,
     raw_params: Optional[dict] = None,
+    qtof: bool = False,
 ) -> list[dict]:
     """Run report deconvolution using the current deconvolution-tab parameters."""
     if mz_arr is None or intensity_arr is None or len(mz_arr) == 0:
@@ -2112,6 +2113,7 @@ def _run_report_deconvolution(
         contig_min=int(params["contig_min"]),
         use_mz_agreement=bool(params["use_mz_agreement"]),
         use_monoisotopic_proton=bool(params["use_monoisotopic"]),
+        smoothing_reference_step=0.01 if qtof else None,
     )
 
     if bool(params["include_singly_charged"]) and int(params["min_charge"]) <= 1:
@@ -2130,6 +2132,7 @@ def _run_report_deconvolution(
             pwhh=float(params["pwhh"]),
             exclude_mz_ranges=exclude_ranges,
             use_monoisotopic_proton=bool(params["use_monoisotopic"]),
+            smoothing_reference_step=0.01 if qtof else None,
         )
         components.extend(singly)
 
@@ -2302,6 +2305,9 @@ def _sum_spectra_for_polarity(
     if scans is None or times is None:
         return np.array([]), np.array([])
 
+    if getattr(sample, 'qtof_info', None) is not None:
+        return analysis.sum_qtof_centroids(times, scans, start_time, end_time)
+
     time_mask = (times >= start_time) & (times <= end_time)
     scan_indices = np.where(time_mask)[0]
     if len(scan_indices) == 0:
@@ -2392,11 +2398,14 @@ def _build_residual_ms_channel(
     if spectrum_mz.size == 0:
         return None
 
+    display_mz, display_intensities = spectrum_mz, spectrum_intensities
+    if getattr(sample, 'qtof_info', None) is not None:
+        display_mz, display_intensities = analysis.compact_spectrum_zero_runs(spectrum_mz, spectrum_intensities)
     channel = {
         "polarity": polarity,
         "spectrum": {
-            "mz": _ndarray_to_list(spectrum_mz),
-            "intensities": _ndarray_to_list(spectrum_intensities),
+            "mz": _ndarray_to_list(display_mz),
+            "intensities": _ndarray_to_list(display_intensities),
         },
         "spectrum_peaks": [],
     }
@@ -2630,13 +2639,14 @@ def uv_chromatogram(
 ):
     """Return UV chromatogram data at a specific wavelength."""
     sample = _get_sample(path)
-    uv = sample.get_uv_at_wavelength(wavelength)
-    if uv is None:
+    trace = sample.get_uv_trace(wavelength)
+    if trace is None:
         raise HTTPException(status_code=404, detail=f"No UV data at {wavelength} nm")
 
-    times = _ndarray_to_list(sample.uv_times)
+    uv_times, uv, actual_wavelength = trace
+    times = _ndarray_to_list(uv_times)
     intensities = _ndarray_to_list(analysis.smooth_data(uv, smooth) if smooth > 2 else uv)
-    return {"times": times, "intensities": intensities, "wavelength": wavelength}
+    return {"times": times, "intensities": intensities, "wavelength": actual_wavelength}
 
 
 @app.get("/api/tic")
@@ -2715,23 +2725,25 @@ def background_subtraction(payload: dict = Body(...)):
         except Exception:
             continue
 
-        sample_uv = sample.get_uv_at_wavelength(wavelength)
-        if sample_uv is None or sample.uv_times is None:
+        sample_trace = sample.get_uv_trace(wavelength)
+        if sample_trace is None:
             continue
 
-        background_uv = background.get_uv_at_wavelength(wavelength)
+        sample_times, sample_uv, actual_wavelength = sample_trace
+        background_trace = background.get_uv_trace(actual_wavelength)
+        background_times, background_uv, _ = background_trace if background_trace is not None else (None, None, None)
         uv_times, uv_intensities = _subtract_chromatograms(
-            sample.uv_times,
+            sample_times,
             sample_uv,
-            background.uv_times,
+            background_times,
             background_uv,
         )
         if uv_smoothing > 2 and uv_intensities.size > 0:
             uv_intensities = analysis.smooth_data(uv_intensities, uv_smoothing)
 
         uv_results.append({
-            "nm": wavelength,
-            "wavelength": wavelength,
+            "nm": actual_wavelength,
+            "wavelength": actual_wavelength,
             "times": _ndarray_to_list(uv_times),
             "intensities": _ndarray_to_list(uv_intensities),
         })
@@ -2934,15 +2946,23 @@ def summed_spectrum(
     if scans is None or times is None:
         raise HTTPException(status_code=404, detail="No MS data")
 
-    mz_arr, intensity_arr = analysis.sum_spectra_from_channel(times, scans, mz_axis, start, end)
+    qtof = getattr(sample, 'qtof_info', None) is not None
+    if qtof:
+        mz_arr, intensity_arr = analysis.sum_qtof_centroids(times, scans, start, end)
+    else:
+        mz_arr, intensity_arr = analysis.sum_spectra_from_channel(times, scans, mz_axis, start, end)
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
 
+    if qtof:
+        mz_arr, intensity_arr = analysis.compact_spectrum_zero_runs(mz_arr, intensity_arr)
     return {
         "mz": _ndarray_to_list(mz_arr),
         "intensities": _ndarray_to_list(intensity_arr),
         "time_range": [start, end],
         "polarity": normalized_polarity,
+        "mz_grid_step": analysis.QTOF_SUM_GRID_STEP if qtof else None,
+        "representation": "summed calibrated centroids" if qtof else None,
     }
 
 
@@ -2967,11 +2987,10 @@ def find_chromatogram_peaks(
         times = sample.ms_times
         intensities = sample.tic
     elif data_type == "uv":
-        uv = sample.get_uv_at_wavelength(wavelength)
-        if uv is None or sample.uv_times is None:
+        trace = sample.get_uv_trace(wavelength)
+        if trace is None:
             raise HTTPException(status_code=404, detail=f"No UV data at {wavelength} nm")
-        times = sample.uv_times
-        intensities = uv
+        times, intensities, _ = trace
     elif data_type == "eic":
         normalized_ion_mode = str(ion_mode).strip().lower()
         if normalized_ion_mode not in {"positive", "negative"}:
@@ -3018,8 +3037,8 @@ def peak_area(
     if data_type == "tic":
         times, intensities = sample.ms_times, sample.tic
     elif data_type == "uv":
-        times = sample.uv_times
-        intensities = sample.get_uv_at_wavelength(wavelength)
+        trace = sample.get_uv_trace(wavelength)
+        times, intensities, _ = trace if trace is not None else (None, None, None)
     elif data_type == "eic":
         normalized_ion_mode = str(ion_mode).strip().lower()
         if normalized_ion_mode not in {"positive", "negative"}:
@@ -3104,7 +3123,7 @@ def deconvolute(
             raise HTTPException(status_code=404, detail="No MS data in background sample")
 
     centroid_sum = None
-    if normalized_mw_algorithm == "centroid":
+    if normalized_mw_algorithm == "centroid" and getattr(sample, 'qtof_info', None) is None:
         centroid_sum = _sum_agilent_centroid_cdf_spectra(path, start, end)
 
     if centroid_sum is not None:
@@ -3112,13 +3131,15 @@ def deconvolute(
         spectrum_source = "agilent_cdf"
     else:
         mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
+        if getattr(sample, 'qtof_info', None) is not None:
+            spectrum_source = "qtof_centroid_grid"
     if mz_arr is None or len(mz_arr) == 0:
         raise HTTPException(status_code=404, detail="Could not sum spectra")
     raw_mz_arr = np.asarray(mz_arr, dtype=float)
     raw_intensity_arr = np.asarray(intensity_arr, dtype=float)
     if background is not None:
         bg_centroid_sum = None
-        if normalized_mw_algorithm == "centroid":
+        if normalized_mw_algorithm == "centroid" and getattr(background, 'qtof_info', None) is None:
             bg_centroid_sum = _sum_agilent_centroid_cdf_spectra(normalized_background_path, start, end)
         if bg_centroid_sum is not None:
             bg_mz_arr, bg_intensity_arr = bg_centroid_sum
@@ -3135,7 +3156,7 @@ def deconvolute(
         mz_arr = np.asarray(mz_arr, dtype=float)
         intensity_arr = np.maximum(np.asarray(intensity_arr, dtype=float), 0.0)
         positive_mask = intensity_arr > 0
-        if np.any(positive_mask):
+        if np.any(positive_mask) and getattr(sample, 'qtof_info', None) is None:
             mz_arr = mz_arr[positive_mask]
             intensity_arr = intensity_arr[positive_mask]
     mz_arr, intensity_arr = _filter_spectrum_by_min_input_mz(mz_arr, intensity_arr, min_input_mz)
@@ -3172,6 +3193,7 @@ def deconvolute(
         mw_assign_cutoff=mw_assign_cutoff,
         use_mz_agreement=use_mz_agreement,
         use_monoisotopic_proton=use_monoisotopic,
+        smoothing_reference_step=0.01 if getattr(sample, 'qtof_info', None) is not None else None,
     )
 
     # Optionally detect singly charged species
@@ -3192,17 +3214,28 @@ def deconvolute(
             pwhh=pwhh,
             exclude_mz_ranges=exclude_ranges,
             use_monoisotopic_proton=use_monoisotopic,
+            smoothing_reference_step=0.01 if getattr(sample, 'qtof_info', None) is not None else None,
         )
         components.extend(singly)
 
     # Serialize components
     results = _serialize_deconvolution_components(components)
 
+    qtof = getattr(sample, 'qtof_info', None) is not None
+    if qtof:
+        # Compact only after all calculations, without dropping measured bins.
+        mz_arr, intensity_arr = analysis.compact_spectrum_zero_runs(mz_arr, intensity_arr)
+        raw_mz_arr, raw_intensity_arr = analysis.compact_spectrum_zero_runs(raw_mz_arr, raw_intensity_arr)
+    if background is not None and getattr(background, 'qtof_info', None) is not None:
+        bg_plot_mz_arr, bg_plot_intensity_arr = analysis.compact_spectrum_zero_runs(bg_plot_mz_arr, bg_plot_intensity_arr)
+
     return {
         "components": results,
         "spectrum": {
             "mz": _ndarray_to_list(mz_arr),
             "intensities": _ndarray_to_list(intensity_arr),
+            "mz_grid_step": analysis.QTOF_SUM_GRID_STEP if qtof else None,
+            "representation": "summed calibrated centroids" if qtof else None,
         },
         "raw_spectrum": {
             "mz": _ndarray_to_list(raw_mz_arr),
@@ -4169,14 +4202,15 @@ def export_report_pdf(payload: dict = Body(...)):
                 deconv_time_range = (start, end)
         if not deconv_results and deconv_time_range is not None:
             report_sum = None
-            if deconv_parameters["mw_algorithm"] == "centroid":
+            if deconv_parameters["mw_algorithm"] == "centroid" and getattr(sample, 'qtof_info', None) is None:
                 report_sum = _sum_agilent_centroid_cdf_spectra(path, deconv_time_range[0], deconv_time_range[1])
             if report_sum is not None:
                 report_mz, report_intensity = report_sum
             else:
                 report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
             if report_mz is not None and len(report_mz) > 0:
-                deconv_results = _run_report_deconvolution(report_mz, report_intensity, deconv_parameters)
+                deconv_results = _run_report_deconvolution(report_mz, report_intensity, deconv_parameters,
+                                                          qtof=getattr(sample, 'qtof_info', None) is not None)
     else:
         deconv_results = []
         deconv_time_range = None

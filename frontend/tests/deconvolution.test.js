@@ -100,3 +100,50 @@ test('mass-spectrum PDF payload remains clean, with no screen-only guides or col
   assert.deepEqual(payload, { sample_name: 'test.D', spectrum: { mz: [100, 200], intensities: [10, 20] }, title: 'Mass Spectrum', format: 'pdf', dpi: 300, style: { fig_width: 8 } });
   assert.equal(filename, 'test_mass_spectrum.pdf');
 });
+
+test('UV defaults select recorded QTOF 214 nm and preserve the legacy 194 nm default',()=>{
+  const {run}=fixture();
+  assert.deepEqual(JSON.parse(JSON.stringify(run('uvWavelengthChoices({qtof:{uv_wavelengths:[278,214]}},[])'))),
+    [{value:214,checked:true},{value:278,checked:false}]);
+  assert.equal(run('preferredUvWavelength({uv_wavelengths:[194,280]},[])'),194);
+  assert.equal(run('preferredUvWavelength({uv_wavelengths:[278,214]},[194])'),214);
+  assert.equal(run('preferredUvWavelength({uv_wavelengths:[214,278]},[194,278])'),278);
+  assert.equal(run('preferredUvWavelength({uv_wavelengths:[214,278]},[280])'),278);
+  assert.equal(run('preferredUvWavelength({uv_wavelengths:[]},[194])'),undefined);
+});
+
+test('refreshing UV choices preserves user selections, including deliberately unchecked channels',()=>{
+  const {run}=fixture();
+  assert.equal(run('uvWavelengthChoices({sample:{uv_wavelengths:[214,278]}},[{value:"214",checked:false},{value:"278",checked:true}])[1].checked'),true);
+  assert.equal(run('uvWavelengthChoices({sample:{uv_wavelengths:[214,278]}},[{value:"214",checked:false},{value:"278",checked:false}]).some(option=>option.checked)'),false);
+  const mixed=JSON.parse(JSON.stringify(run('uvWavelengthChoices({legacy:{uv_wavelengths:[194,280]},qtof:{uv_wavelengths:[214,278]}},[{value:"194",checked:true},{value:"280",checked:false}])')));
+  assert.deepEqual(mixed.filter(option=>option.checked).map(option=>option.value),[194,214]);
+});
+
+test('UV area calculation chooses a recorded channel for the selected sample',()=>{
+  const {run}=fixture();
+  run('state.loadedSamples={qtof:{uv_wavelengths:[278,214]}};getSelectedWavelengths=()=>[194];');
+  assert.equal(run('getAreaCalculationWavelength("qtof")'),214);
+  assert.ok(Number.isNaN(run('getAreaCalculationWavelength("missing")')));
+});
+
+test('UV Time Change uses a shared recorded wavelength rather than another instruments default',async()=>{
+  const {run}=fixture();
+  run('state.selectedFiles=[{path:"a"},{path:"b"}];state.loadedSamples={a:{uv_wavelengths:[214,278]},b:{uv_wavelengths:[214,278]}};getSelectedWavelengths=()=>[194];');
+  assert.equal(await run('resolveTimeChangeUvWavelength()'),214);
+  run('state.loadedSamples.b.uv_wavelengths=[194,280]');
+  assert.ok(Number.isNaN(await run('resolveTimeChangeUvWavelength()')));
+});
+
+test('Deconvolution requests QTOF UV instead of an unavailable wavelength from another instrument',async()=>{
+  const {run,context,elements}=fixture();
+  for(const [id,value] of [['deconv-start','0'],['deconv-end','5'],['uv-smoothing','0']])elements.set(id,{value});
+  elements.set('deconv-uv-plot',{});elements.set('deconv-tic-plot',{});
+  let requested;
+  context.api={getUVChromatogram:async(path,wavelength)=>{requested=wavelength;return{times:[0,1],intensities:[1,2]};},getTIC:async()=>({times:[],intensities:[]})};
+  run(`state.loadedSamples={qtof:{uv_wavelengths:[214,278]}};getSelectedWavelengths=()=>[194];
+    getSelectedDeconvBackgroundPath=()=>'';setDeconvEmptyState=()=>{};
+    charts.plotChromatogramWithWindow=()=>{};bindDeconvWindowDragSelection=()=>{};schedulePlotlyResize=()=>{};`);
+  await run('refreshDeconvWindowContext("qtof")');
+  assert.equal(requested,214);
+});

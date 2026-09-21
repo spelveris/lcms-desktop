@@ -553,9 +553,10 @@ def create_time_progression_figure(
     # Panel 1: UV overlay
     uv_traces = []
     for i, sample in enumerate(samples):
-        uv_data = sample.get_uv_at_wavelength(uv_wavelength)
-        if uv_data is not None and sample.uv_times is not None:
-            uv_traces.append((labels[i], sample.uv_times, uv_data))
+        trace = sample.get_uv_trace(uv_wavelength)
+        if trace is not None:
+            uv_times, uv_data, _ = trace
+            uv_traces.append((labels[i], uv_times, uv_data))
 
     create_overlay_panel(
         axes[0], uv_traces, colors=colors,
@@ -697,12 +698,13 @@ def create_single_sample_figure(
 
     # UV panels - one for each wavelength
     for i, wl in enumerate(uv_wavelengths):
-        uv_data = sample.get_uv_at_wavelength(wl)
-        y_label_uv = y_label_uv_template.format(wavelength=wl)
-        panel_title_uv = panel_title_uv_template.format(wavelength=wl)
+        trace = sample.get_uv_trace(wl)
+        uv_times, uv_data, actual_wavelength = trace if trace is not None else (None, None, wl)
+        y_label_uv = y_label_uv_template.format(wavelength=actual_wavelength)
+        panel_title_uv = panel_title_uv_template.format(wavelength=actual_wavelength)
         create_single_panel(
             axes[i],
-            sample.uv_times, uv_data,
+            uv_times, uv_data,
             xlabel=x_label,
             ylabel=y_label_uv,
             color="#1f77b4",
@@ -868,12 +870,13 @@ def create_single_sample_export_figure(
 
     row_idx = 0
     for wl in uv_wavelengths:
-        uv_data = sample.get_uv_at_wavelength(wl)
-        y_label_uv = y_label_uv_template.format(wavelength=wl)
-        panel_title_uv = panel_title_uv_template.format(wavelength=wl)
+        trace = sample.get_uv_trace(wl)
+        uv_times, uv_data, actual_wavelength = trace if trace is not None else (None, None, wl)
+        y_label_uv = y_label_uv_template.format(wavelength=actual_wavelength)
+        panel_title_uv = panel_title_uv_template.format(wavelength=actual_wavelength)
         create_single_panel(
             axes[row_idx],
-            sample.uv_times, uv_data,
+            uv_times, uv_data,
             xlabel=x_label,
             ylabel=y_label_uv,
             color="#1f77b4",
@@ -883,7 +886,7 @@ def create_single_sample_export_figure(
             y_scale=y_scale
         )
         axes[row_idx].set_title(panel_title_uv)
-        _set_chrom_xlim(axes[row_idx], sample.uv_times)
+        _set_chrom_xlim(axes[row_idx], uv_times)
         row_idx += 1
 
     for tic_panel in tic_panels:

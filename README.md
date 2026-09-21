@@ -25,10 +25,30 @@ fragment scans and follows the instrument's recorded parent links, not a
 retention-time guess. MS1-only runs show that no MS/MS was acquired.
 
 Individual spectra retain calibrated centroid masses and fractional intensities.
-Existing summed-spectrum analysis retains its existing 0.01 Da binning; this
-update does not change deconvolution algorithms or infer peptide identities.
+QTOF summed spectra use a fixed 0.001 m/z grid (v0.2.55), including the intact
+deconvolution m/z panel. This is a rebinned centroid sum, not measured profile
+data or additional instrument resolution. Original individual scan values are
+unchanged. Other readers retain their existing summation behavior. The full
+regular grid is used for calculations; only redundant interior zero points are
+removed for display, keeping every occupied bin and the same line shape.
+When smoothing is applied, QTOF peak intensities are expressed on the previous
+0.01 m/z reference-bin scale, so a ten-times-finer grid does not silently lower
+the existing noise threshold by tenfold. Raw summed counts are not rescaled.
+This update does not infer peptide identities from intact spectra.
 Profile-only QTOF runs and other QTOF container layouts are not covered by this
 reader. The third-party source attribution is included with the backend.
+
+OpenLab UV channels retain their own original time/intensity pairs, including
+runs where the 214 and 278 nm channels have different lengths or time axes.
+Neither channel is truncated, zero-padded or interpolated during import. The
+chromatogram API, peak analysis, UV background subtraction and export figures
+use each selected channel's own times. The compatibility matrix marks missing
+observations with NaN; normal analysis uses the original channel arrays.
+Wavelength selection defaults to an available channel (194 nm when recorded,
+otherwise 214 nm when recorded, otherwise the first available wavelength), and
+preserves the user's choices on refresh. Deconvolution and UV area calculation
+choose a channel actually available in the selected run. UV Time Change requires
+a shared recorded wavelength across its selected runs.
 
 **Peptide Mapping**, beside Deconvolution, is also digest-only. Paste reference
 FASTA, load a FASTA file, or read reference sequences from the run's saved
@@ -50,6 +70,36 @@ Ambiguous sequence candidates are excluded from coverage; repeated/shared
 peptides map to all compatible locations and do not establish chain identity.
 I/L are indistinguishable, and variable modifications/neutral losses are not
 searched. Click a candidate to inspect its measured, annotated fragment spectrum.
+
+The selected spectrum has a peptide-sequence cleavage map below it: matched b ions
+are blue below the sequence, matched y ions red above, with angled marks between
+residues at the supported cuts. Fragment charges +1/+2 are explicit. Unmatched
+cuts have no evidence marker. Select a matched ion
+to highlight its sequence span and inspect measured/theoretical m/z and ppm error.
+Fixed modifications (including GGisoK) are marked on the appropriate residue;
+the map uses the existing matched-ion values without inventing fragment evidence.
+Protein coverage underlines show matched peptide spans, separate overlapping
+peptides into rows, and combine repeated observations: **blue solid** means
+MS/MS-supported; **green dashed** means tentative MS-only mass compatibility.
+Click an underline to open a matching spectrum. Competing sequence candidates
+remain excluded, while shared peptides are shown at every compatible location.
+The coverage percentage counts only noncompeting MS/MS candidates, never MS-only
+mass hypotheses.
+
+The MS-only search compares the top 500 positive survey peaks above 1% relative
+intensity per scan to reference peptide masses, with charges +1 to +6 and isotope
+offsets 0–2. It is not isotope-envelope validation or sequence confirmation.
+Repeated observations across the run are aggregated per peptide/charge/isotope
+hypothesis; the strongest measured observation and retention-time span are shown.
+Any peptide with MS/MS support in the run is omitted from MS-only results.
+This aggregation does not identify separate chromatographic features.
+
+The results table supports sequence/location/modification text filtering,
+evidence, charge and competing-assignment filters, and sortable columns including
+precursor m/z (five decimal places) and the separate signed precursor ppm error.
+Precursor m/z is the recorded MS/MS precursor, or the exact measured survey peak
+for an MS-only hypothesis. Charge is inferred from mass, including +1; its
+presence in the search is not a guarantee of a +1 result in every run.
 
 ## Downloads
 

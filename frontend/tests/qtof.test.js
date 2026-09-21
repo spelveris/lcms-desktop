@@ -26,15 +26,25 @@ test('new panels are hidden by default, and mapping sits beside Deconvolution',(
 
 function domFixture() {
   class Element {
-    constructor(tag='div'){this.tag=tag;this.children=[];this.style={};this.value='';this.listeners={};this.disabled=false;this.checked=false;}
+    constructor(tag='div'){
+      this.tag=tag;this.children=[];this.style={};this.value='';this.listeners={};this.disabled=false;this.checked=false;this.attributes={};this.className='';
+      this.classList={contains:name=>this.className.split(' ').includes(name),
+        add:name=>{if(!this.classList.contains(name))this.className+=' '+name;},
+        toggle:(name,enabled)=>{this.className=this.className.split(' ').filter(n=>n!==name).join(' ');if(enabled)this.classList.add(name);}};
+    }
     appendChild(child){this.children.push(child);if(this.tag==='select' && this.children.length===1)this.value=child.value;return child;}
     replaceChildren(...children){this.children=children;if(this.tag==='select')this.value='';}
     addEventListener(name,fn){this.listeners[name]=fn;}
+    setAttribute(name,value){this.attributes[name]=String(value);if(name==='class')this.className=String(value);}
+    createTHead(){return this.appendChild(new Element('thead'));}
+    createTBody(){return this.appendChild(new Element('tbody'));}
+    insertRow(){return this.appendChild(new Element('tr'));}
+    insertCell(){return this.appendChild(new Element('td'));}
     get options(){return this.children;}
   }
   const nodes=new Map();
-  const document={getElementById(id){if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement(tag){return new Element(tag);}};
-  const ctx=vm.createContext({console,document,Plotly:{purge(){}},api:{}});
+  const document={getElementById(id){if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement(tag){return new Element(tag);},createElementNS(ns,tag){return new Element(tag);}};
+  const ctx=vm.createContext({console,document,Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
   for(const file of ['qtof.js','peptides.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
   return {ctx,nodes,run:code=>vm.runInContext(code,ctx)};
 }
@@ -52,6 +62,120 @@ test('GGisoK editor resolves an imported B48 modification and locks chemistry co
   assert.equal(row.children[4].children[0].checked,true);
   assert.equal(row.children[4].children[0].disabled,true);
   assert.equal(run('peptideView.modifications[0].kind'),'gg');
+});
+
+const candidate={sequence:'PEPTIDER',modifications:[],locations:[{chain:'A',start:1,end:8}],evidence:'msms',
+ scan_id:9,time:1.5,charge:1,precursor_mz:955.4676,precursor_error_ppm:2.1,matched_ions:4,
+ explained_intensity_pct:45,isotope_offset:0,ambiguous_scan:false,
+ fragments:[{ion:'b3+',bond:3,observed_mz:324.15539,theoretical_mz:324.1554,error_ppm:-.03,intensity:100},
+ {ion:'y5^2+',bond:3,observed_mz:300.2,theoretical_mz:300.2,error_ppm:0,intensity:80}]};
+function descendants(node){return [node,...node.children.flatMap(descendants)];}
+
+test('b/y assignments preserve exact cuts, direction and explicit +1/+2 charges',()=>{
+ const {run,ctx}=domFixture();ctx.row=candidate;
+ assert.equal(run('peptideIonLabel(peptideIonAssignment(row,row.fragments[0]))'),'b3 +1');
+ assert.equal(run('peptideIonAssignment(row,row.fragments[1]).start'),4);
+ assert.equal(run('peptideIonAssignment(row,{ion:"y5+",bond:5})'),null);
+ assert.equal(run('peptideIonAssignment(row,{ion:"b8+",bond:8})'),null);
+ assert.equal(run('peptideIonEvidence(row)[2].b[0].charge'),1);
+ assert.equal(run('peptideIonEvidence(row)[3].y[0].charge'),2);
+});
+
+test('cleavage diagram puts y above and b below the actual inter-residue cut',()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row=candidate;run('peptideRenderIonSequence(row)');
+ const panel=nodes.get('peptide-ion-sequence'),all=descendants(panel);
+ const paths=all.filter(n=>n.tag==='path');assert.equal(paths.length,2);
+ assert.deepEqual(paths.map(n=>n.attributes['data-bond']),['3','3']);
+ assert.match(paths[0].attributes.d,/V 110 l -12 12/);assert.match(paths[1].attributes.d,/V 60 l 12 -12/);
+ const buttons=all.filter(n=>n.attributes.role==='button');
+ assert.match(buttons[0].attributes['aria-label'],/b3 \+1 · cut 3\|4/);
+ buttons[0].listeners.click();
+ assert.equal(all.filter(n=>n.classList.contains('is-ion-selected')).length,3);
+ assert.match(panel.children.at(-1).textContent,/PEP/);
+ buttons[1].listeners.keydown({key:'Enter',preventDefault(){}});
+ assert.equal(all.filter(n=>n.classList.contains('is-ion-selected')).length,5);
+ assert.match(panel.children.at(-1).textContent,/TIDER/);
+ assert.equal(buttons[1].attributes['aria-pressed'],'true');
+});
+
+test('fixed modifications are marked only on their residue and included fragment',()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,modifications:[{residue:4,delta:114.04292747}]};
+ run('peptideRenderIonSequence(row)');
+ assert.equal(descendants(nodes.get('peptide-ion-sequence')).filter(n=>n.classList.contains('is-modified')).length,1);
+ assert.doesNotMatch(run('peptideIonDescription(row,peptideIonAssignment(row,row.fragments[0]))'),/includes/);
+ assert.match(run('peptideIonDescription(row,peptideIonAssignment(row,row.fragments[1]))'),/includes T4: \+114.042927/);
+});
+
+test('fragment spectrum labels exact observed masses and uses matching b/y colours',()=>{
+ const {run,ctx}=domFixture();ctx.row=candidate;
+ const traces=JSON.parse(JSON.stringify(run('peptideFragmentTraces(row)')));
+ assert.equal(traces.length,4);assert.equal(traces[0].x[0],324.15539);
+ assert.equal(traces[1].text[0],'b3 +1<br>324.1554');
+ assert.equal(traces[0].line.color,traces[1].marker.color);
+ assert.equal(traces[2].line.color,'#e52a2a');
+});
+
+test('coverage deduplicates repeated scans, separates overlapping evidence, excludes competing candidates',()=>{
+ const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDERPEPTIDER',positions:[],percent:0};
+ ctx.result={matches:[candidate,{...candidate,scan_id:10},
+  {...candidate,evidence:'ms1',locations:[{chain:'A',start:9,end:16}]},
+  {...candidate,sequence:'TIDERPEP',locations:[{chain:'A',start:4,end:11}]},
+  {...candidate,ambiguous_scan:true,locations:[{chain:'A',start:9,end:16}]}]};
+ const spans=JSON.parse(JSON.stringify(run('peptideCoverageSpans(result,chain)')));
+ assert.equal(spans.length,3);assert.equal(spans[0].spectrumCount,2);
+ assert.equal(spans[1].lane,1);assert.equal(spans[2].evidence,'ms1');
+ const node=run('peptideRenderCoverageChain(result,chain)');
+ assert.equal(descendants(node).filter(n=>n.classList.contains('evidence-ms1')).length,1);
+ assert.equal(descendants(node).filter(n=>n.classList.contains('evidence-msms')).length,2);
+});
+
+test('coverage continuation at 50 residues has no false endpoint',()=>{
+ const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'A'.repeat(60),positions:[],percent:0};
+ ctx.result={matches:[{...candidate,sequence:'AAAAAA',locations:[{chain:'A',start:48,end:53}]}]};
+ const all=descendants(run('peptideRenderCoverageChain(result,chain)'));
+ assert.equal(all.filter(n=>n.classList.contains('continues-right')).length,1);
+ assert.equal(all.filter(n=>n.classList.contains('continues-left')).length,1);
+});
+
+test('table filters include charge +1 and sort precursor m/z numerically, with missing values last',()=>{
+ const {run,ctx}=domFixture();ctx.result={matches:[candidate,{...candidate,scan_id:10,evidence:'ms1',charge:2,precursor_mz:99,explained_intensity_pct:null},
+  {...candidate,scan_id:11,precursor_mz:1000,precursor_error_ppm:-12}]};
+ run('peptideView.sort={key:"precursor_mz",direction:1}');
+ assert.deepEqual(Array.from(run('peptideFilteredRows(result).map(r=>r.scan_id)')),[10,9,11]);
+ run('peptideView.filters.charge="1"');assert.equal(run('peptideFilteredRows(result).length'),2);
+ run('peptideView.filters.text="A:1"');assert.equal(run('peptideFilteredRows(result).length'),2);
+ run('peptideView.filters.evidence="ms1"');assert.equal(run('peptideFilteredRows(result).length'),0);
+ run('peptideView.filters={text:"",charge:"",evidence:"",review:""};peptideView.sort={key:"explained_intensity_pct",direction:-1}');
+ assert.equal(run('peptideFilteredRows(result).at(-1).scan_id'),10);
+});
+
+test('rendered table contains measured precursor m/z, sortable headers and resettable filters',()=>{
+ const {run,ctx,nodes}=domFixture();ctx.result={matches:[candidate]};run('peptideRenderTable(result)');
+ let all=descendants(nodes.get('peptide-results'));
+ assert.ok(all.some(n=>n.textContent==='955.46760'));assert.ok(all.some(n=>n.textContent==='+1'));
+ const header=all.find(n=>String(n.textContent).startsWith('Precursor m/z'));
+ header.listeners.click();assert.equal(run('peptideView.sort.key'),'precursor_mz');
+ const search=all.find(n=>n.type==='search');search.value='nonexistent';search.listeners.input();
+ assert.ok(descendants(nodes.get('peptide-results')).some(n=>n.textContent==='0 of 1 matches'));
+ all.find(n=>n.textContent==='Reset filters').listeners.click();
+ assert.equal(run('peptideView.filters.text'),'');
+});
+
+test('MS-only selection never shows invented fragment-ion evidence',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',fragments:[],observation_count:2,time_start:1,time_end:2,precursor_intensity:10};
+ ctx.api.getQtofSpectrum=async()=>({mz:[955.4676],intensities:[10]});
+ await run('peptideShowMatch(row)');
+ assert.equal(nodes.get('peptide-ion-sequence').hidden,true);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/No supporting MS\/MS/);
+});
+
+test('stale spectrum response cannot restore a cleared sequence map',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row=candidate;let resolve;
+ ctx.api.getQtofSpectrum=()=>new Promise(r=>{resolve=r;});
+ const pending=run('peptideShowMatch(row)');run('peptideClearResults()');
+ resolve({mz:[324.15539],intensities:[100]});await pending;
+ assert.equal(nodes.get('peptide-ion-sequence').hidden,true);
+ assert.equal(nodes.get('peptide-spectrum-status').textContent,'');
 });
 
 test('editing input invalidates a pending mapping response',async()=>{

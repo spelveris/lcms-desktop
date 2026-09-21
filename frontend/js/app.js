@@ -384,13 +384,20 @@ function initAppVersionBadge() {
 }
 
 function initUpdateIndicator() {
+  const controls = document.getElementById('update-controls');
+  const refresh = document.getElementById('update-refresh-button');
   const badge = document.getElementById('update-available-badge');
   const label = document.getElementById('update-status-label');
   const version = document.getElementById('update-available-version');
   const updates = window.catrupoleUpdates;
   if (!badge || !label || !version || !updates) return;
+  let latestStatus = { state: 'idle' };
+  let manualCheckPending = false;
+  let statusRevision = 0;
 
   const render = (status) => {
+    status = status || { state: 'offline', available: false };
+    latestStatus = status;
     const state = String(status?.state || 'idle');
     const available = Boolean(status?.available);
     const current = state === 'current';
@@ -420,6 +427,18 @@ function initUpdateIndicator() {
         ? 'CATrupole is downloading the update automatically'
         : (current ? 'This is the latest CATrupole release' : 'CATrupole could not check GitHub for updates'));
     version.textContent = available && status.latestVersion ? `v${status.latestVersion}` : '';
+    if (refresh) {
+      const busy = manualCheckPending || checking;
+      refresh.hidden = typeof updates.checkForUpdates !== 'function';
+      refresh.disabled = busy || downloading || ready || installing || (available && !canOpenDevelopmentRelease);
+      refresh.classList.toggle('is-checking', busy);
+      refresh.setAttribute('aria-busy', String(busy));
+      refresh.title = busy ? 'Checking for updates…'
+        : (ready ? 'Update ready—restart to install'
+          : (installing ? 'Installing update…'
+            : (downloading || available && !canOpenDevelopmentRelease ? 'An update is already downloading' : 'Check for updates now')));
+    }
+    if (controls) controls.hidden = badge.hidden && (!refresh || refresh.hidden);
   };
 
   badge.addEventListener('click', async () => {
@@ -431,9 +450,32 @@ function initUpdateIndicator() {
     }
   });
 
-  updates.onStatus(render);
-  updates.getStatus().then(render).catch(() => {
-    // Update checks stay quiet when GitHub is unavailable.
+  refresh?.addEventListener('click', async () => {
+    if (refresh.disabled || manualCheckPending || typeof updates.checkForUpdates !== 'function') return;
+    manualCheckPending = true;
+    const requestRevision = ++statusRevision;
+    render({ ...latestStatus, state: 'checking', available: false });
+    try {
+      const status = await updates.checkForUpdates();
+      // Do not replace a newer download/progress event with an older reply.
+      if (statusRevision === requestRevision || latestStatus.state === 'checking') render(status);
+    } catch (_) {
+      if (statusRevision === requestRevision || latestStatus.state === 'checking') {
+        render({ ...latestStatus, state: 'offline', available: false });
+      }
+    } finally {
+      manualCheckPending = false;
+      render(latestStatus);
+    }
+  });
+
+  updates.onStatus((status) => { statusRevision += 1; render(status); });
+  render(latestStatus);
+  const initialRevision = statusRevision;
+  updates.getStatus().then((status) => {
+    if (statusRevision === initialRevision) render(status);
+  }).catch(() => {
+    if (statusRevision === initialRevision) render({ state: 'offline', available: false });
   });
 }
 
@@ -2051,26 +2093,51 @@ async function loadSampleMeta(path, options = {}) {
   }
 }
 
+function availableUvWavelengths(meta) {
+  return [...new Set((meta?.uv_wavelengths || meta?.wavelengths || []).map(Number).filter(wl=>Number.isFinite(wl)&&wl>0))].sort((a,b)=>a-b);
+}
+
+function defaultUvWavelength(available) {
+  return available.includes(194) ? 194 : available.includes(214) ? 214 : available[0];
+}
+
+function preferredUvWavelength(meta, selected) {
+  const available=availableUvWavelengths(meta);
+  for(const value of selected.map(Number).filter(Number.isFinite)) {
+    const nearest=available.reduce((best,wl)=>Math.abs(wl-value)<Math.abs(best-value)?wl:best,Infinity);
+    if(Math.abs(nearest-value)<=5)return nearest;
+  }
+  return defaultUvWavelength(available);
+}
+
+function uvWavelengthChoices(samples, previous) {
+  const known=new Set(previous.map(option=>Number(option.value)));
+  const selected=new Set(previous.filter(option=>option.checked).map(option=>Number(option.value)));
+  const all=new Set();
+  for(const meta of Object.values(samples)) {
+    const available=availableUvWavelengths(meta);available.forEach(wl=>all.add(wl));
+    // Give newly encountered channels an applicable default. Preserve deliberate
+    // changes (including all-unchecked) when the same channels are loaded again.
+    if(available.length && (!previous.length || available.some(wl=>!known.has(wl)))
+        && !available.some(wl=>selected.has(wl)))selected.add(defaultUvWavelength(available));
+  }
+  return [...all].sort((a,b)=>a-b).map(value=>({value,checked:selected.has(value)}));
+}
+
 function updateWavelengthCheckboxes() {
   const container = document.getElementById('uv-wavelength-checks');
-  // Collect all unique wavelengths across loaded samples
-  const allWavelengths = new Set();
-  Object.values(state.loadedSamples).forEach(meta => {
-    (meta.uv_wavelengths || meta.wavelengths || []).forEach(wl => allWavelengths.add(wl));
-  });
+  const choices=uvWavelengthChoices(state.loadedSamples,Array.from(container.querySelectorAll('.wl-check')));
 
-  if (allWavelengths.size === 0) {
+  if (!choices.length) {
     container.innerHTML = '<p class="muted">Load a sample to see wavelengths</p>';
     return;
   }
 
-  const sorted = Array.from(allWavelengths).sort((a, b) => a - b);
   container.innerHTML = '';
-  sorted.forEach(wl => {
+  choices.forEach(({value:wl,checked}) => {
     const label = document.createElement('label');
     label.className = 'checkbox-label';
-    const isDefault = (wl === 194 || wl === '194');
-    label.innerHTML = `<input type="checkbox" class="wl-check" value="${wl}" ${isDefault ? 'checked' : ''}> ${wl} nm`;
+    label.innerHTML = `<input type="checkbox" class="wl-check" value="${wl}" ${checked ? 'checked' : ''}> ${wl} nm`;
     container.appendChild(label);
   });
 }
@@ -5506,18 +5573,7 @@ function getAreaCalculationSampleName(samplePath = '') {
 }
 
 function getAreaCalculationWavelength(samplePath = '') {
-  const selected = getSelectedWavelengths().filter((wl) => Number.isFinite(Number(wl)));
-  if (selected.length > 0) return Number(selected[0]);
-
-  const loaded = state.loadedSamples[samplePath];
-  const wavelengths = Array.isArray(loaded?.uv_wavelengths)
-    ? loaded.uv_wavelengths
-    : Array.isArray(loaded?.wavelengths)
-      ? loaded.wavelengths
-      : [];
-  const first = Number(wavelengths[0]);
-  if (Number.isFinite(first)) return first;
-  return Number.NaN;
+  return preferredUvWavelength(state.loadedSamples[samplePath],getSelectedWavelengths()) ?? Number.NaN;
 }
 
 function getAreaCalculationTargetLabel(target) {
@@ -5556,7 +5612,7 @@ function updateAreaCalculationModeUI() {
   if (runButton) runButton.textContent = isUv ? 'Load UV Area' : 'Run Area Analysis';
   if (note) {
     note.textContent = isUv
-      ? 'UV mode uses the first checked UV wavelength from Settings. Drag on the UV trace to add area windows, or add one manually and adjust start/end.'
+      ? 'UV mode uses a checked wavelength available in this sample, or its recorded default. Drag on the UV trace to add area windows, or add one manually and adjust start/end.'
       : 'EIC mode uses the current m/z targets and keeps the existing peak-area workflow.';
   }
 }
@@ -5602,9 +5658,10 @@ async function runEICBatch() {
   try {
     let data;
     if (mode === 'uv') {
+      if(!state.loadedSamples[samplePath])await loadSampleMeta(samplePath,{silent:true});
       const wavelength = getAreaCalculationWavelength(samplePath);
       if (!Number.isFinite(wavelength)) {
-        toast('Select a UV wavelength in Settings first', 'warning');
+        toast('This sample has no recorded UV wavelength available', 'warning');
         return;
       }
 
@@ -6943,22 +7000,16 @@ async function refreshDeconvWindowContext(samplePath = null) {
   const end = parseFloat(document.getElementById('deconv-end').value);
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value) || 0;
   const backgroundPath = getSelectedDeconvBackgroundPath(path);
-  const loadedMeta = state.loadedSamples[path];
+  const loadedMeta = state.loadedSamples[path] || await loadSampleMeta(path,{silent:true});
 
-  let preferredWavelength = getSelectedWavelengths()[0];
-  if (!Number.isFinite(preferredWavelength)) {
-    if (loadedMeta && Array.isArray(loadedMeta.uv_wavelengths) && loadedMeta.uv_wavelengths.length > 0) {
-      preferredWavelength = Number(loadedMeta.uv_wavelengths[0]);
-    }
-  }
-  if (!Number.isFinite(preferredWavelength)) preferredWavelength = 280;
+  const preferredWavelength = preferredUvWavelength(loadedMeta,getSelectedWavelengths());
 
   if (backgroundPath) {
     try {
       const bgsub = await api.runBackgroundSubtraction({
         samplePath: path,
         backgroundPath,
-        wavelengths: [preferredWavelength],
+        wavelengths: Number.isFinite(preferredWavelength) ? [preferredWavelength] : [],
         mzTargets: [],
         uvSmoothing,
       });
@@ -7005,6 +7056,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
     }
   } else {
     try {
+      if(!Number.isFinite(preferredWavelength))throw new Error('No recorded UV channel');
       const uv = await api.getUVChromatogram(path, preferredWavelength, uvSmoothing);
       charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
         title: `UV Chromatogram (${preferredWavelength.toFixed(0)} nm)`,
@@ -7276,7 +7328,8 @@ function renderDeconvResults(data) {
       });
     }
     charts.plotMassSpectrum('deconv-spectrum-plot', data.spectrum.mz, data.spectrum.intensities, [], {
-      title: hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum',
+      title: (hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum')
+        + (data.spectrum.mz_grid_step ? ` · QTOF ${data.spectrum.mz_grid_step} m/z grid` : ''),
       primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
       primaryColor: '#1f77b4',
       overlaySpectra,
@@ -8272,9 +8325,7 @@ function getTimeChangeEICSettings() {
 }
 
 async function resolveTimeChangeUvWavelength() {
-  const checked = getSelectedWavelengths().find((wl) => Number.isFinite(Number(wl)));
-  if (Number.isFinite(Number(checked))) return Number(checked);
-
+  let common = null;
   for (const file of state.selectedFiles) {
     let meta = state.loadedSamples[file.path];
     if (!meta) {
@@ -8284,14 +8335,11 @@ async function resolveTimeChangeUvWavelength() {
         meta = null;
       }
     }
-    const wavelengths = Array.isArray(meta?.uv_wavelengths)
-      ? meta.uv_wavelengths
-      : (Array.isArray(meta?.wavelengths) ? meta.wavelengths : []);
-    const first = wavelengths.map((wl) => Number(wl)).find((wl) => Number.isFinite(wl));
-    if (Number.isFinite(first)) return first;
+    const wavelengths = availableUvWavelengths(meta);
+    common = common === null ? wavelengths : common.filter(wl=>wavelengths.includes(wl));
   }
-
-  return NaN;
+  // An overlay must compare the same recorded wavelength in every run.
+  return preferredUvWavelength({uv_wavelengths:common || []},getSelectedWavelengths()) ?? NaN;
 }
 
 async function runTimeChangeMS(kind = 'ms') {

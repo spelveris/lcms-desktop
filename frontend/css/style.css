@@ -53,6 +53,41 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 
+/* ===== Peptide mapping evidence ===== */
+.peptide-coverage-chain { margin: 16px 0; }
+.peptide-coverage-scroll { max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
+.peptide-coverage-block { margin: 8px 0 12px; width: max-content; }
+.peptide-coverage-range { color: var(--text-secondary); font-size: 10px; margin-bottom: 3px; }
+.peptide-coverage-grid { display: grid; grid-auto-rows: minmax(16px, auto); gap: 0; width: max-content; }
+.peptide-coverage-residue { font: 13px/24px var(--font-mono); text-align: center; background: var(--bg-input); color: var(--text-secondary); }
+.peptide-coverage-residue.is-covered { background: #cde7fa; color: #222; }
+.peptide-coverage-underline { position: relative; min-height: 16px; margin: 0 1px; padding: 0; border: 0; border-bottom: 2px solid #78bef4; border-radius: 0; background: transparent; cursor: pointer; }
+.peptide-coverage-underline::before, .peptide-coverage-underline::after { content: ''; position: absolute; bottom: 0; height: 4px; border-left: 1px solid #78bef4; }
+.peptide-coverage-underline::before { left: 0; }
+.peptide-coverage-underline::after { right: 0; }
+.peptide-coverage-underline.continues-left::before, .peptide-coverage-underline.continues-right::after { display: none; }
+.peptide-coverage-underline:hover, .peptide-coverage-underline:focus-visible { background: var(--accent-light); border-bottom-color: #b4dfff; outline: 1px solid #78bef4; }
+.peptide-coverage-underline.evidence-ms1 { border-bottom: 2px dashed #5fbd83; }
+.peptide-coverage-underline.evidence-ms1::before, .peptide-coverage-underline.evidence-ms1::after { border-left-color: #5fbd83; }
+.peptide-coverage-underline.evidence-ms1:hover, .peptide-coverage-underline.evidence-ms1:focus-visible { outline-color: #5fbd83; }
+.peptide-table-scroll { max-width: 100%; overflow-x: auto; }
+.peptide-table-filters { flex-wrap: wrap; margin: 12px 0; }
+.peptide-table-filters input[type="search"] { min-width: 230px; }
+.peptide-sort-button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
+.peptide-sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.peptide-ion-sequence { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
+.peptide-ion-sequence[hidden] { display: none; }
+.peptide-ion-scroll { max-width: 100%; overflow-x: auto; margin: 8px 0; }
+.peptide-cleavage-map { display: block; background: #fff; border-radius: 4px; font-family: var(--font-mono); }
+.peptide-map-residue { font-size: 30px; fill: #222; }
+.peptide-map-residue.is-modified, .peptide-map-modification { fill: #c52b2b; }
+.peptide-map-modification { font-size: 15px; }
+.peptide-map-residue.is-ion-selected { font-weight: 800; text-decoration: underline; }
+.peptide-map-position { fill: #666; font-size: 10px; }
+.peptide-map-ion { cursor: pointer; }
+.peptide-map-ion:hover rect, .peptide-map-ion[aria-pressed="true"] rect, .peptide-map-ion:focus-visible rect { fill: #e8edf7; stroke: #3750aa; stroke-width: 1px; }
+.peptide-ion-detail { min-height: 2.5em; overflow-wrap: anywhere; }
+
 /* ===== Buttons ===== */
 .btn {
   display: inline-flex;
@@ -240,11 +275,45 @@ body.sidebar-resizing .sidebar {
   color: var(--text-primary);
   opacity: 0.85;
 }
+.update-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+}
+.update-controls[hidden], .update-refresh-button[hidden] { display: none; }
+.update-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.update-refresh-button svg { width: 14px; height: 14px; }
+.update-refresh-button:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.update-refresh-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.update-refresh-button:disabled { opacity: 0.45; cursor: default; }
+.update-refresh-button.is-checking svg { animation: update-refresh-spin 1s linear infinite; }
+@keyframes update-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .update-refresh-button.is-checking svg { animation: none; }
+}
 .update-available-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-top: 5px;
+  min-width: 0;
   padding: 3px 7px;
   border: 1px solid rgba(224, 82, 82, 0.65);
   border-radius: 999px;
