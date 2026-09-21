@@ -262,6 +262,11 @@
         <label>Precursor ppm: <input id="peptide-precursor-ppm" type="number" value="10" min="1" max="50" style="width:65px;"></label>
         <label>Fragment ppm: <input id="peptide-fragment-ppm" type="number" value="20" min="1" max="100" style="width:65px;"></label>
       </div>
+      <div class="tab-toolbar peptide-table-filters">
+        <label title="Only MS-only hypotheses are filtered. Both intensity cutoffs must be met before coverage is calculated.">MS-only minimum (% of scan maximum): <input id="peptide-ms1-relative" type="number" value="5" min="0" max="100" step="0.1" style="width:75px;"></label>
+        <label>MS-only minimum (counts): <input id="peptide-ms1-intensity" type="number" value="0" min="0" max="1000000000000000" step="any" style="width:105px;"></label>
+        <span class="toolbar-note">Higher thresholds reject weaker MS-only signals. 0 disables that cutoff. Intensity alone cannot rule out background; MS/MS is unchanged.</span>
+      </div>
       <fieldset class="settings-group">
         <legend>Digest remnants and modification sites</legend>
         <p class="toolbar-note">Choose a chain and residue, then the remnant left after digestion. GGisoK is ε-Gly-Gly lysine (+114.042927 Da relative to lysine) and blocks trypsin at that site. It is a branch on lysine, not a linear GG insertion or an intact link between two chains. Unknown masses exclude affected peptides.</p>

@@ -71,6 +71,16 @@ peptides map to all compatible locations and do not establish chain identity.
 I/L are indistinguishable; neutral losses are not searched. Click a candidate to
 inspect its measured, annotated fragment spectrum.
 
+MS-only matching has separate adjustable intensity gates: **5% of the survey
+scan maximum** by default, plus an optional **minimum intensity in counts**
+(default 0, disabled). Both gates must pass before a candidate contributes to
+the table or coverage; 0 disables the corresponding gate. The maximum is measured
+after reference-ion filtering. At most the 500 strongest passing peaks per scan
+are tested. Counts, relative intensity and passing observations are disclosed for
+the selected hypothesis. These gates do not alter MS/MS matching or raw data.
+They reject weak signals but are not signal-to-noise estimation or chromatographic
+peak detection: persistent background can still pass and MS-only remains tentative.
+
 The optional **Find site across reference** control searches every eligible
 position on one chain or all supplied chains, without requiring a written residue
 position. The unused written position is hidden while this is checked. Click

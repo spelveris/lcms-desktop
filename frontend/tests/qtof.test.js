@@ -44,6 +44,8 @@ function domFixture() {
   }
   const nodes=new Map();
   const document={getElementById(id){if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement(tag){return new Element(tag);},createElementNS(ns,tag){return new Element(tag);}};
+  document.getElementById('peptide-ms1-relative').value='5';
+  document.getElementById('peptide-ms1-intensity').value='0';
   const ctx=vm.createContext({console,document,showLoading(){},hideLoading(){},Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
   for(const file of ['qtof.js','peptides.js','reference-masses.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
   return {ctx,nodes,run:code=>vm.runInContext(code,ctx)};
@@ -437,4 +439,40 @@ test('both peptide PDF downloads use Deconvolution style and original analysis o
  run("peptideView.selectedMatch=row;peptideView.selectedSpectrum={scan_id:9,mz:[324.15539],intensities:[100]};document.getElementById('btn-peptide-spectrum-pdf').disabled=false");
  await run("peptideExportPdf('spectrum')");assert.equal(payload.spectrum.mz[0],324.15539);assert.equal(payload.row,candidate);assert.match(saved,/_peptide_scan_9.pdf$/);
  run('peptideClearResults()');assert.equal(nodes.get('btn-peptide-map-pdf').disabled,true);assert.equal(nodes.get('btn-peptide-spectrum-pdf').disabled,true);
+});
+
+test('MS-only thresholds are adjustable, sent to matching, and cleared edits invalidate coverage',async()=>{
+ const {run,ctx,nodes}=domFixture();let payload;
+ ctx.api.analyzePeptides=async p=>{payload=p;return {matches:[],coverage:[],excluded_modified_peptides:0,warning:''};};
+ run('initPeptideMapping()');
+ const relative=nodes.get('peptide-ms1-relative'),intensity=nodes.get('peptide-ms1-intensity');
+ relative.value='7.5';intensity.value='250';await run('peptideAnalyze()');
+ assert.equal(payload.ms1_min_relative_percent,7.5);assert.equal(payload.ms1_min_intensity,250);
+ relative.value='0';intensity.value='0';await run('peptideAnalyze()');
+ assert.equal(payload.ms1_min_relative_percent,0);assert.equal(payload.ms1_min_intensity,0);
+ relative.listeners.input();assert.equal(run('peptideView.results'),null);
+ await run('peptideAnalyze()');intensity.listeners.input();assert.equal(run('peptideView.results'),null);
+ intensity.value='';payload=null;await run('peptideAnalyze()');
+ assert.equal(payload,null);assert.match(nodes.get('peptide-status').textContent,/Enter both MS-only thresholds/);
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ assert.match(html,/id="peptide-ms1-relative"[^>]*value="5"/);
+ assert.match(html,/id="peptide-ms1-intensity"[^>]*value="0"/);
+});
+
+test('MS-only selected spectrum discloses actual passing intensity and relative strength',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',fragments:[],observation_count:2,time_start:1,time_end:2,precursor_intensity:250,precursor_relative_intensity_pct:7.5};
+ ctx.api.getQtofSpectrum=async()=>({mz:[955.4676],intensities:[250]});
+ await run('peptideShowMatch(row)');
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/250.00 counts \(7.50% of scan maximum\)/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/2 passing survey observations/);
+});
+
+test('applying reference filtering preserves MS-only threshold choices across its refresh',async()=>{
+ const {run,ctx,nodes}=domFixture();let saved,reloaded=false;
+ ctx.sessionStorage={setItem(key,value){saved=value;},getItem(){return saved;},removeItem(){}};
+ ctx.window={location:{reload(){reloaded=true;}}};ctx.api.setReferenceMasses=async()=>{};
+ run("document.getElementById('reference-masses-sample').value='sample';document.getElementById('reference-masses-mode').value='off';document.getElementById('reference-masses-ppm').value='20';document.getElementById('peptide-ms1-relative').value='8';document.getElementById('peptide-ms1-intensity').value='1500'");
+ await run('referenceApply()');assert.equal(reloaded,true);
+ run("document.getElementById('peptide-ms1-relative').value='5';document.getElementById('peptide-ms1-intensity').value='0';initReferenceMasses()");
+ assert.equal(nodes.get('peptide-ms1-relative').value,'8');assert.equal(nodes.get('peptide-ms1-intensity').value,'1500');
 });

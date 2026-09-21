@@ -488,7 +488,10 @@ async function peptideAnalyze() {
   peptideView.analyzing=true;button.disabled=true;button.setAttribute('aria-busy','true');showLoading(status.textContent);
   try {
     const path=document.getElementById('peptide-sample-select').value;
-    const result=await api.analyzePeptides({ path, fasta:document.getElementById('peptide-fasta').value, modifications:peptideView.modifications, missed_cleavages:Number(document.getElementById('peptide-missed').value), precursor_ppm:Number(document.getElementById('peptide-precursor-ppm').value), fragment_ppm:Number(document.getElementById('peptide-fragment-ppm').value) });
+    const relative=document.getElementById('peptide-ms1-relative').value;
+    const intensity=document.getElementById('peptide-ms1-intensity').value;
+    if(!String(relative).trim()||!String(intensity).trim())throw new Error('Enter both MS-only thresholds; use 0 to disable a cutoff.');
+    const result=await api.analyzePeptides({ path, fasta:document.getElementById('peptide-fasta').value, modifications:peptideView.modifications, missed_cleavages:Number(document.getElementById('peptide-missed').value), precursor_ppm:Number(document.getElementById('peptide-precursor-ppm').value), fragment_ppm:Number(document.getElementById('peptide-fragment-ppm').value), ms1_min_relative_percent:Number(relative), ms1_min_intensity:Number(intensity) });
     if (generation !== peptideView.generation) return;
     Object.assign(peptideView,{results:result,path});
     status.textContent=`${result.matches.filter(r=>r.evidence!=='ms1').length} MS/MS candidate-spectrum matches; ${result.matches.filter(r=>r.evidence==='ms1').length} tentative MS-only hypotheses. ${result.settings?.searched_modification_sites ? `${result.settings.searched_modification_sites} modification sites searched. ` : ''}${result.excluded_modified_peptides} peptides excluded for unresolved modifications. Charge* is inferred from mass (+1 to +6; isotope offsets 0–2). ${result.warning}`;
@@ -515,7 +518,7 @@ async function peptideShowMatch(row) {
     peptideView.selectedMatch=row;peptideView.selectedSpectrum=spectrum;
     document.getElementById('btn-peptide-spectrum-pdf').disabled=false;
     document.getElementById('peptide-spectrum-status').textContent=msOnly
-      ? `${row.sequence} · measured MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · tentative +${row.charge}, isotope offset ${row.isotope_offset}. ${row.observation_count} survey observations across ${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min; strongest shown. No supporting MS/MS assignment: no b/y cleavage evidence or confirmed sequence.`
+      ? `${row.sequence} · measured MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · tentative +${row.charge}, isotope offset ${row.isotope_offset}. Intensity ${Number(row.precursor_intensity).toPrecision(5)} counts${row.precursor_relative_intensity_pct==null?'':` (${row.precursor_relative_intensity_pct.toFixed(2)}% of scan maximum)`}. ${row.observation_count} passing survey observations across ${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min; strongest shown. No supporting MS/MS assignment: no b/y cleavage evidence or confirmed sequence.`
       : `${row.sequence} · measured MS/MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · precursor m/z ${row.precursor_mz.toFixed(5)}, inferred +${row.charge} · blue b / red y labels are candidate matches, not a confirmed sequence. Precursor isotope offset: ${row.isotope_offset}.`;
   } catch(error) { if(generation===peptideView.generation)document.getElementById('peptide-spectrum-status').textContent=error.message; }
 }
@@ -529,7 +532,7 @@ function initPeptideMapping() {
   document.getElementById('peptide-reference-select').addEventListener('change',e=>peptideUseReference(Number(e.target.value)));
   document.getElementById('peptide-sample-select').addEventListener('change',()=>{ peptideClearResults(); peptideView.references=[];document.getElementById('peptide-reference-select').replaceChildren();document.getElementById('peptide-import-status').textContent='Reference retained; verify it belongs to the newly selected sample before analysis.'; });
   document.getElementById('btn-peptide-add-linkage').addEventListener('click',()=>{peptideView.modifications.push({chain:'A',position:1,delta:null,kind:'custom',block_cleavage:false});peptideClearResults();peptideRenderLinkages();});
-  for(const id of ['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm'])document.getElementById(id).addEventListener('input',peptideClearResults);
+  for(const id of ['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'])document.getElementById(id).addEventListener('input',peptideClearResults);
   document.getElementById('peptide-fasta').addEventListener('change',peptideRenderLinkages);
   document.getElementById('peptide-fasta-file').addEventListener('change',async event=>{
     const file=event.target.files[0]; if(!file)return;
