@@ -8,6 +8,52 @@ from typing import Optional
 
 from data_reader import SampleData
 
+QTOF_SUM_GRID_STEP = 0.001
+
+
+def sum_qtof_centroids(times, scans, start_time, end_time):
+    """Sum calibrated MS1 centroids on a fixed 0.001 m/z grid.
+
+    This is explicitly a rebinned sum, not acquired profile data. Each centroid
+    is assigned to its nearest grid point (at most 0.0005 m/z displacement).
+    Keep the complete regular grid for smoothing/deconvolution calculations.
+    """
+    if times is None or scans is None:
+        return np.array([]), np.array([])
+    selected = np.flatnonzero((times >= start_time) & (times <= end_time))
+    arrays = [np.asarray(scans[i], dtype=float) for i in selected if scans[i] is not None and len(scans[i])]
+    if not arrays:
+        return np.array([]), np.array([])
+    if any(scan.ndim != 2 or scan.shape[1] != 2 for scan in arrays):
+        raise ValueError('QTOF summation requires calibrated centroid pairs')
+    points = np.concatenate(arrays)
+    if not np.all(np.isfinite(points)) or np.any(points[:, 0] <= 0) or np.any(points[:, 1] < 0):
+        raise ValueError('Invalid QTOF centroid values')
+    if np.max(points[:, 0]) > 100000:
+        raise ValueError('QTOF m/z range exceeds the supported summation range')
+    indexes = np.rint(points[:, 0] / QTOF_SUM_GRID_STEP).astype(np.int64)
+    first, last = int(indexes.min()) - 1, int(indexes.max()) + 1
+    count = last - first + 1
+    if count > 10_000_000:
+        raise ValueError('QTOF spectrum range is too wide for a 0.001 m/z grid')
+    summed = np.bincount(indexes - first, weights=points[:, 1], minlength=count)
+    mz = np.arange(first, last+1, dtype=float) * QTOF_SUM_GRID_STEP
+    return mz, summed
+
+
+def compact_spectrum_zero_runs(mz, intensity):
+    """Remove only redundant interior zeros for display; retain every peak.
+
+    Keeping both ends of each zero run preserves the identical straight-line
+    plot. Never use this nonuniform display axis for spectrum calculations.
+    """
+    mz, intensity = np.asarray(mz), np.asarray(intensity)
+    if len(mz) < 3:
+        return mz, intensity
+    keep = np.ones(len(mz), dtype=bool)
+    keep[1:-1] = ~((intensity[:-2] == 0) & (intensity[1:-1] == 0) & (intensity[2:] == 0))
+    return mz[keep], intensity[keep]
+
 
 def smooth_data(data: np.ndarray, window_size: int = 5) -> np.ndarray:
     """
@@ -396,6 +442,8 @@ def sum_spectra_in_range(sample: 'SampleData', start_time: float, end_time: floa
     Returns:
         Tuple of (mz_array, intensity_array)
     """
+    if getattr(sample, 'qtof_info', None) is not None:
+        return sum_qtof_centroids(sample.ms_times, sample.ms_scans, start_time, end_time)
     return sum_spectra_from_channel(
         sample.ms_times,
         sample.ms_scans,
@@ -663,7 +711,8 @@ def deconvolute_protein(mz: np.ndarray, intensity: np.ndarray,
     return results
 
 
-def _smooth_spectrum(mz: np.ndarray, intensity: np.ndarray, fwhm_da: float) -> np.ndarray:
+def _smooth_spectrum(mz: np.ndarray, intensity: np.ndarray, fwhm_da: float,
+                     reference_step: Optional[float] = None) -> np.ndarray:
     if len(mz) < 2 or fwhm_da <= 0:
         return intensity
     try:
@@ -677,32 +726,32 @@ def _smooth_spectrum(mz: np.ndarray, intensity: np.ndarray, fwhm_da: float) -> n
     sigma_pts = sigma_da / resolution
     if sigma_pts < 0.5:
         return intensity
-    return gaussian_filter1d(intensity, sigma_pts)
+    smoothed = gaussian_filter1d(intensity, sigma_pts)
+    # QTOF uses a finer count-per-bin grid. Keep the existing 0.01 m/z
+    # smoothing/noise-threshold intensity scale; raw counts remain unchanged.
+    return smoothed * (reference_step / resolution) if reference_step else smoothed
 
 
 def _find_peaks_simple(intensity: np.ndarray, min_distance_pts: int = 2) -> list[int]:
     if len(intensity) < 3:
         return []
-    peak_idx = []
-    for i in range(1, len(intensity) - 1):
-        if intensity[i] >= intensity[i - 1] and intensity[i] >= intensity[i + 1]:
-            peak_idx.append(i)
+    peak_idx = (np.flatnonzero((intensity[1:-1] >= intensity[:-2]) &
+                              (intensity[1:-1] >= intensity[2:])) + 1).tolist()
 
     if not peak_idx:
         return []
 
     # OPTIMIZATION: Use a set for O(1) lookup instead of O(n) list scan
     # Mark indices that are "blocked" by higher-intensity peaks
-    blocked = set()
+    blocked = np.zeros(len(intensity), dtype=bool)
     filtered = []
 
     for idx in sorted(peak_idx, key=lambda x: intensity[x], reverse=True):
-        if idx in blocked:
+        if blocked[idx]:
             continue
         filtered.append(idx)
         # Block nearby indices
-        for offset in range(-min_distance_pts + 1, min_distance_pts):
-            blocked.add(idx + offset)
+        blocked[max(0, idx-min_distance_pts+1):min(len(intensity), idx+min_distance_pts)] = True
 
     return sorted(filtered)
 
@@ -866,6 +915,7 @@ def deconvolute_protein_local_lcms_machine_like(
     use_mz_agreement: bool = False,
     use_monoisotopic_proton: bool = False,
     max_overlap: float = 0.0,
+    smoothing_reference_step: Optional[float] = None,
 ) -> list[dict]:
     """
     Local LC-MS machine-like deconvolution workflow:
@@ -886,7 +936,7 @@ def deconvolute_protein_local_lcms_machine_like(
     if len(mz) == 0 or len(intensity) == 0:
         return []
 
-    inten = _smooth_spectrum(mz, intensity, pwhh)
+    inten = _smooth_spectrum(mz, intensity, pwhh, smoothing_reference_step)
     resolution = float(np.median(np.diff(mz))) if len(mz) > 1 else 1.0
     min_distance_pts = max(2, int(pwhh / resolution)) if resolution > 0 else 2
     peak_idx = _find_peaks_simple(inten, min_distance_pts=min_distance_pts)
@@ -1227,6 +1277,7 @@ def detect_singly_charged(
     pwhh: float = 0.6,
     exclude_mz_ranges: list = None,
     use_monoisotopic_proton: bool = False,
+    smoothing_reference_step: Optional[float] = None,
 ) -> list[dict]:
     """
     Detect singly-charged (z=1) species like small molecules.
@@ -1254,7 +1305,7 @@ def detect_singly_charged(
         return []
 
     # Smooth spectrum
-    inten = _smooth_spectrum(mz, intensity, pwhh)
+    inten = _smooth_spectrum(mz, intensity, pwhh, smoothing_reference_step)
 
     # Find peaks
     resolution = float(np.median(np.diff(mz))) if len(mz) > 1 else 1.0

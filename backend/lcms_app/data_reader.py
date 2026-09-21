@@ -460,6 +460,8 @@ class SampleData:
         self.uv_times: Optional[np.ndarray] = None
         self.uv_data: Optional[np.ndarray] = None
         self.uv_wavelengths: Optional[np.ndarray] = None
+        # OpenLab channels can have independent acquisition time axes.
+        self.uv_channels: list[tuple[float, np.ndarray, np.ndarray]] = []
         # Per-polarity MS data (MSD1=positive, MSD2=negative)
         self.ms_times_pos: Optional[np.ndarray] = None
         self.ms_scans_pos: Optional[list] = None
@@ -669,9 +671,7 @@ class SampleData:
             self._debug_info["sirslt_uv_import_error"] = str(exc)
             return
 
-        all_uv_data = []
-        all_uv_wavelengths = []
-        uv_times = None
+        channels = []
 
         for entry in sorted(extracted_dir.iterdir()):
             if not entry.is_file():
@@ -720,29 +720,38 @@ class SampleData:
                 if wl_arr.size != uv_arr.shape[1]:
                     wl_arr = np.arange(uv_arr.shape[1], dtype=float)
 
-            if uv_times is None:
-                uv_times = np.array(times, dtype=float)
-
-            all_uv_data.append(uv_arr)
-            all_uv_wavelengths.extend(np.array(wl_arr, dtype=float).tolist())
+            channel_times = np.asarray(times, dtype=float)
+            if (channel_times.ndim != 1 or uv_arr.ndim != 2 or not len(channel_times)
+                    or len(channel_times) != uv_arr.shape[0]
+                    or not np.all(np.isfinite(channel_times)) or np.any(np.diff(channel_times) <= 0)
+                    or not np.all(np.isfinite(uv_arr))):
+                self._debug_info[f"sirslt_uv_parse_error_{entry.name}"] = "Invalid UV time/intensity pairs"
+                continue
+            for index, wavelength in enumerate(np.asarray(wl_arr, dtype=float)):
+                channels.append((float(wavelength), channel_times.copy(), uv_arr[:, index].copy()))
             self._debug_info[f"sirslt_uv_{entry.name}"] = {
                 "signal": signal,
                 "shape": list(uv_arr.shape),
                 "wavelengths": np.array(wl_arr, dtype=float).tolist(),
             }
 
-        if not all_uv_data:
+        if not channels:
             return
 
-        try:
-            self.uv_times = uv_times
-            self.uv_data = np.hstack(all_uv_data)
-            self.uv_wavelengths = np.array(all_uv_wavelengths, dtype=float)
-        except Exception as exc:
-            self._debug_info["sirslt_uv_combine_error"] = str(exc)
-            self.uv_times = uv_times
-            self.uv_data = all_uv_data[0]
-            self.uv_wavelengths = np.array(all_uv_wavelengths[: all_uv_data[0].shape[1]], dtype=float)
+        self.uv_channels = channels
+        self.uv_wavelengths = np.array([channel[0] for channel in channels], dtype=float)
+        if all(np.array_equal(times, channels[0][1]) for _, times, _ in channels):
+            self.uv_times = channels[0][1]
+            self.uv_data = np.column_stack([values for _, _, values in channels])
+        else:
+            # Compatibility matrix on the union of recorded times. Missing
+            # observations are NaN, never interpolated, padded with zero, or
+            # discarded. Analysis/plots use get_uv_trace's original pairs.
+            self.uv_times = np.unique(np.concatenate([times for _, times, _ in channels]))
+            self.uv_data = np.full((len(self.uv_times), len(channels)), np.nan)
+            for index, (_, times, values) in enumerate(channels):
+                self.uv_data[np.searchsorted(self.uv_times, times), index] = values
+            self._debug_info["sirslt_uv_independent_time_axes"] = True
 
     def _read_sirslt_ms_records(self, scan_path: Path) -> list[dict]:
         """Read fixed-width scan records from .sirslt MSScan.bin."""
@@ -1351,6 +1360,23 @@ class SampleData:
         except Exception as e:
             self._error = str(e)
             return False
+
+    def get_uv_trace(self, wavelength: float, tolerance: float = 5.0) -> Optional[tuple]:
+        """Return (original times, intensities, actual wavelength) as one unit."""
+        if not np.isfinite(wavelength) or self.uv_wavelengths is None or not len(self.uv_wavelengths):
+            return None
+        wavelengths = np.asarray(self.uv_wavelengths, dtype=float)
+        index = int(np.argmin(np.abs(wavelengths - wavelength)))
+        if abs(wavelengths[index] - wavelength) > tolerance:
+            return None
+        if self.uv_channels:
+            actual, times, values = self.uv_channels[index]
+            return times, values, actual
+        # Existing .d readers keep their established common time axis.
+        values = self.get_uv_at_wavelength(wavelength, tolerance)
+        if values is None or self.uv_times is None:
+            return None
+        return self.uv_times, values, float(wavelengths[index])
 
     def get_uv_at_wavelength(self, wavelength: float, tolerance: float = 5.0) -> Optional[np.ndarray]:
         """Get UV chromatogram at specific wavelength."""

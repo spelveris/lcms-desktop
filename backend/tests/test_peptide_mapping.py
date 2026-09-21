@@ -11,6 +11,60 @@ from peptide_mapping import AA, PROTON, WATER, parse_fasta, digest, fragments, m
 
 
 class PeptideMappingTests(unittest.TestCase):
+    def make_sample(self, scans, msms=None):
+        survey=SimpleNamespace(metadata=[{'scan_id':i+1,'time':float(i)} for i in range(len(scans))],scans=scans)
+        channels={(0,1):survey}
+        if msms is not None: channels[(0,2)]=msms
+        return SimpleNamespace(qtof_info={'is_protein_digest':True},qtof_channels=channels)
+
+    def test_ms1_includes_all_charges_starting_at_one_without_claiming_msms_coverage(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        peaks=np.array(sorted(((peptide['mass']+z*PROTON)/z,100.) for z in range(1,7)))
+        result=analyze(self.make_sample([peaks]),{'fasta':'PEPTIDER','missed_cleavages':0})
+        self.assertEqual({r['charge'] for r in result['matches']},{1,2,3,4,5,6})
+        self.assertTrue(all(r['evidence']=='ms1' and not r['fragments'] for r in result['matches']))
+        self.assertTrue(all(r['explained_intensity_pct'] is None for r in result['matches']))
+        self.assertEqual(result['coverage'][0]['percent'],0)
+
+    def test_ms1_repeated_scans_keep_strongest_exact_observation_and_rt_span(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        mz=peptide['mass']+PROTON
+        scans=[np.array([[mz,100.]]),np.array([[mz*(1+2e-6),500.]]),np.array([[mz,80.]])]
+        rows=analyze(self.make_sample(scans),{'fasta':'PEPTIDER'})['matches']
+        self.assertEqual(len(rows),1)
+        row=rows[0];self.assertEqual(row['scan_id'],2);self.assertEqual(row['observation_count'],3)
+        self.assertEqual((row['time_start'],row['time_end']),(0.,2.))
+        self.assertEqual(row['precursor_mz'],scans[1][0,0]);self.assertAlmostEqual(row['precursor_error_ppm'],2.)
+
+    def test_ms1_ppm_noise_filters_and_sequence_ambiguity(self):
+        mass=digest(parse_fasta('PEPTIDER'),0,[])[0][0]['mass']
+        sample=self.make_sample([np.array([[mass+PROTON,100.]])])
+        rows=analyze(sample,{'fasta':'>one\nPEPTIDER\n>two\nPEPTLDER'})['matches']
+        self.assertEqual(len(rows),2);self.assertTrue(all(r['ambiguous_scan'] for r in rows))
+        for scan in [np.array([[(mass+PROTON)*(1+30e-6),100.]]),np.array([[mass+PROTON,.5],[200.,100.]])]:
+            self.assertEqual(analyze(self.make_sample([scan]),{'fasta':'PEPTIDER'})['matches'],[])
+
+    def test_msms_charge_one_is_found_and_takes_precedence_over_ms_only(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        mz=peptide['mass']+PROTON
+        ions=fragments(peptide['residue_masses'],1)
+        channel=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':mz}],
+            scans=[np.array(sorted((mass,100.) for _,mass,_ in ions))])
+        result=analyze(self.make_sample([np.array([[mz,100.]])],channel),{'fasta':'PEPTIDER'})
+        self.assertEqual(len(result['matches']),1);row=result['matches'][0]
+        self.assertEqual(row['evidence'],'msms');self.assertEqual(row['charge'],1)
+        self.assertTrue(all('^2+' not in f['ion'] for f in row['fragments']))
+        self.assertEqual(result['coverage'][0]['percent'],100.)
+
+    def test_ms1_ggisok_mass_and_unresolved_modification_exclusion(self):
+        fasta='LIFAGKQLEDGR';mod={'chain':'A','position':6,'delta':114.04292747,'block_cleavage':True}
+        peptide=digest(parse_fasta(fasta),0,[mod])[0][0]
+        sample=self.make_sample([np.array([[peptide['mass']+PROTON,100.]])])
+        result=analyze(sample,{'fasta':fasta,'modifications':[{**mod,'kind':'gg'}],'missed_cleavages':0})
+        self.assertEqual(len(result['matches']),1);self.assertEqual(result['matches'][0]['modifications'][0]['residue'],6)
+        result=analyze(sample,{'fasta':fasta,'modifications':[{**mod,'delta':None}],'missed_cleavages':0})
+        self.assertEqual(result['matches'],[]);self.assertEqual(result['excluded_modified_peptides'],1)
+
     def test_known_masses_and_fragments(self):
         masses=np.array([AA[a] for a in 'PEPTIDE'])
         self.assertAlmostEqual((masses.sum()+WATER+2*PROTON)/2,400.6872584803735,places=5)

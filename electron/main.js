@@ -36,6 +36,7 @@ let isQuitting = false;
 let backendReady = false;
 let mainWindowReady = false;
 let updateCheckTimer = null;
+let updateCheckPromise = null;
 let packagedUpdaterConfigured = false;
 let downloadedUpdateFile = "";
 let macUpdateHelperStarted = false;
@@ -185,14 +186,22 @@ function launchMacUpdateHelper() {
   return true;
 }
 
-async function checkForUpdates() {
+function checkForUpdates() {
+  // Manual, startup and daily checks share one request, including cleanup.
+  if (!updateCheckPromise) {
+    updateCheckPromise = runUpdateCheck().finally(() => { updateCheckPromise = null; });
+  }
+  return updateCheckPromise;
+}
+
+async function runUpdateCheck() {
   const currentVersion = String(app.getVersion() || "");
   if (app.isPackaged) {
     configurePackagedUpdater();
     // All automatic and renderer-triggered checks share this barrier, so a new
     // download cannot race startup cleanup. Opening the window never waits.
     await cleanupStartupUpdates();
-    if (updateStatus.state === "downloading" || updateStatus.state === "ready" || updateStatus.state === "installing") {
+    if (updateStatus.state === "available" || updateStatus.state === "downloading" || updateStatus.state === "ready" || updateStatus.state === "installing") {
       return updateStatus;
     }
     try {
@@ -211,6 +220,7 @@ async function checkForUpdates() {
     }
   }
 
+  sendUpdateStatus({ state: "checking", available: false, currentVersion });
   try {
     const release = await fetchLatestRelease();
     const available = isNewerVersion(release.version, currentVersion);
@@ -249,6 +259,8 @@ ipcMain.handle("updates:get-status", async () => {
   }
   return updateStatus;
 });
+
+ipcMain.handle("updates:check-now", () => checkForUpdates());
 
 ipcMain.handle("updates:open-release", async () => {
   const candidate = String(updateStatus.releaseUrl || RELEASES_URL);

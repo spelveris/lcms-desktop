@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("catrupoleUpdates", {
   getStatus: () => ipcRenderer.invoke("updates:get-status"),
+  checkForUpdates: () => ipcRenderer.invoke("updates:check-now"),
   openRelease: () => ipcRenderer.invoke("updates:open-release"),
   performAction: () => ipcRenderer.invoke("updates:perform-action"),
   onStatus: (callback) => {
