@@ -89,7 +89,7 @@ async function referenceApply() {
     // Preserve the user's editable peptide inputs, but never stale analysis results.
     const draft={path:document.getElementById('peptide-sample-select').value, referencePath:path,
       referenceOpen:document.getElementById('reference-masses-panel').open, modifications:peptideView.modifications,
-      values:Object.fromEntries(['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm'].map(id=>[id,document.getElementById(id).value]))};
+      values:Object.fromEntries(['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'].map(id=>[id,document.getElementById(id).value]))};
     sessionStorage.setItem(REFERENCE_DRAFT_KEY,JSON.stringify(draft));
     await api.setReferenceMasses(path,policy);
     // A renderer refresh cancels old requests and clears every result/export cache.
@@ -117,7 +117,7 @@ function initReferenceMasses() {
   try {
     const text=sessionStorage.getItem(REFERENCE_DRAFT_KEY);sessionStorage.removeItem(REFERENCE_DRAFT_KEY);
     if(text){const draft=JSON.parse(text);
-      for(const [id,value] of Object.entries(draft.values||{}))if(['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm'].includes(id))document.getElementById(id).value=value;
+      for(const [id,value] of Object.entries(draft.values||{}))if(['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'].includes(id))document.getElementById(id).value=value;
       peptideView.modifications=Array.isArray(draft.modifications)?draft.modifications:[];
       referenceView.peptidePath=draft.path||'';referenceView.referencePath=draft.referencePath||'';
       document.getElementById('reference-masses-panel').open=draft.referenceOpen===true;peptideRenderLinkages();

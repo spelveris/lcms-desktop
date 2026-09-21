@@ -44,7 +44,9 @@ function domFixture() {
   }
   const nodes=new Map();
   const document={getElementById(id){if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement(tag){return new Element(tag);},createElementNS(ns,tag){return new Element(tag);}};
-  const ctx=vm.createContext({console,document,Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
+  document.getElementById('peptide-ms1-relative').value='5';
+  document.getElementById('peptide-ms1-intensity').value='0';
+  const ctx=vm.createContext({console,document,showLoading(){},hideLoading(){},Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
   for(const file of ['qtof.js','peptides.js','reference-masses.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
   return {ctx,nodes,run:code=>vm.runInContext(code,ctx)};
 }
@@ -260,4 +262,217 @@ test('edited reference settings invalidate a pending detection response',async()
  resolve({policy:{mode:'922',ppm:20,targets:[],isotopes:true},active:true,method:{},detections:[]});await pending;
  assert.equal(nodes.get('reference-masses-mode').value,'off');
  assert.match(nodes.get('reference-masses-status').textContent,/not applied yet/);
+});
+
+test('compact coverage uses half-height clickable evidence lanes and preserves line colours',()=>{
+ const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
+ assert.match(css,/\.peptide-coverage-grid\s*\{[^}]*grid-template-rows: 20px;[^}]*grid-auto-rows: 8px;/);
+ assert.match(css,/\.peptide-coverage-underline\s*\{[^}]*height: 8px;[^}]*min-height: 8px;[^}]*border-bottom: 2px solid #78bef4/);
+ assert.match(css,/\.peptide-coverage-underline\.evidence-ms1\s*\{[^}]*2px dashed #5fbd83/);
+});
+
+test('wrapped coverage repacks sparse later lines without changing peptide locations or click targets',()=>{
+ const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Example',sequence:'A'.repeat(100),positions:[],percent:0};
+ ctx.result={matches:[[1,40],[2,41],[3,70]].map(([start,end],i)=>({...candidate,scan_id:i+1,
+   sequence:'A'.repeat(end-start+1),locations:[{chain:'A',start,end}]}))};
+ let selected;ctx.capture=row=>{selected=row;};run('peptideShowMatch=capture');
+ const panel=run('peptideRenderCoverageChain(result,chain)');
+ const blocks=descendants(panel).filter(n=>n.classList.contains('peptide-coverage-block'));
+ const later=descendants(blocks[1]).filter(n=>n.tag==='button');
+ assert.equal(later.length,1);assert.equal(later[0].style.gridRow,'2');
+ assert.equal(later[0].classList.contains('continues-left'),true);
+ later[0].listeners.click();assert.equal(selected.scan_id,3);
+ assert.deepEqual(selected.locations,[{chain:'A',start:3,end:70}]);
+});
+
+test('compact local lanes reuse nonoverlapping space but keep overlapping evidence separately clickable',()=>{
+ const {run,ctx}=domFixture();ctx.spans=[{start:1,end:5,lane:2},{start:6,end:10,lane:3},{start:3,end:8,lane:4}];
+ const before=JSON.stringify(ctx.spans);
+ const compact=JSON.parse(JSON.stringify(run('peptideCoverageBlockSpans(spans,1,50)')));
+ assert.deepEqual(compact.map(span=>span.lane),[0,1,0]);
+ assert.equal(JSON.stringify(ctx.spans),before);
+});
+
+test('compact wrapped lanes preserve every evidence target without overlap or empty lanes',()=>{
+ const {run,ctx}=domFixture();
+ ctx.spans=Array.from({length:80},(_,id)=>({id,start:1+(id*17)%160,end:Math.min(200,15+(id*17)%160+(id*7)%40),lane:id}));
+ for(let start=1;start<=200;start+=50){
+  ctx.blockStart=start;ctx.blockEnd=start+49;
+  const compact=JSON.parse(JSON.stringify(run('peptideCoverageBlockSpans(spans,blockStart,blockEnd)')));
+  assert.deepEqual(compact.map(s=>s.id).sort((a,b)=>a-b),ctx.spans.filter(s=>s.start<=start+49&&s.end>=start).map(s=>s.id));
+  const lanes=[...new Set(compact.map(s=>s.lane))].sort((a,b)=>a-b);
+  assert.deepEqual(lanes,lanes.map((_,i)=>i));
+  for(const lane of lanes){
+   const members=compact.filter(s=>s.lane===lane);
+   for(let i=1;i<members.length;i++)assert.ok(members[i-1].blockEnd<members[i].blockStart);
+  }
+ }
+});
+
+test('compact MS-only and MS/MS lines keep distinct accessible buttons and select their own spectrum',()=>{
+ const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDER',positions:[],percent:0};
+ ctx.result={matches:[candidate,{...candidate,scan_id:10,evidence:'ms1'}]};
+ let selected;ctx.capture=row=>{selected=row;};run('peptideShowMatch=capture');
+ const panel=run('peptideRenderCoverageChain(result,chain)');
+ const buttons=descendants(panel).filter(n=>n.tag==='button');
+ assert.equal(buttons.length,2);assert.notEqual(buttons[0].style.gridRow,buttons[1].style.gridRow);
+ for(const button of buttons){
+  assert.equal(button.type,'button');assert.ok(button.attributes['aria-label']);
+  button.listeners.click();assert.equal(selected.evidence,button.classList.contains('evidence-ms1')?'ms1':'msms');
+ }
+ assert.ok(descendants(panel).some(n=>String(n.textContent).includes('tentative MS-only')));
+});
+
+test('coverage uses available panel width rather than a fixed 50-residue limit',()=>{
+ const run=fixture();
+ for(const [width,columns] of [[480,30],[800,50],[1280,80],[1560,90],[120,7],[0,50]]){
+  assert.equal(run(`peptideCoverageColumns(${width})`),columns);
+ }
+ assert.equal(run('peptideCoverageColumns(undefined)'),50);
+});
+
+test('responsive sequence wrapping preserves every residue, range and crossing peptide',()=>{
+ const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'A'.repeat(185),positions:[],percent:0};
+ ctx.result={matches:[{...candidate,sequence:'A'.repeat(16),locations:[{chain:'A',start:75,end:90}]}]};
+ const all=descendants(run('peptideRenderCoverageChain(result,chain,80)'));
+ assert.equal(all.filter(n=>n.classList.contains('peptide-coverage-residue')).length,185);
+ assert.deepEqual(all.filter(n=>n.classList.contains('peptide-coverage-range')).map(n=>n.textContent),['1–80','81–160','161–185']);
+ assert.ok(all.filter(n=>n.classList.contains('peptide-coverage-grid')).every(n=>n.style.gridTemplateColumns==='repeat(80, minmax(0, 1fr))'));
+ assert.equal(all.filter(n=>n.classList.contains('continues-left')).length,1);
+ assert.equal(all.filter(n=>n.classList.contains('continues-right')).length,1);
+ const lines=all.filter(n=>n.tag==='button');
+ assert.deepEqual(lines.map(n=>n.style.gridColumn),['75 / span 6','1 / span 10']);
+});
+
+test('panel resize reflows coverage without rerunning analysis, resetting filters or replacing the table',()=>{
+ const {run,ctx,nodes}=domFixture();let callback,observed;
+ ctx.ResizeObserver=class{constructor(fn){callback=fn;}observe(node){observed=node;}disconnect(){}};
+ ctx.result={matches:[candidate],coverage:[{id:'A',name:'Reference',sequence:'PEPTIDER'.repeat(20),positions:[],percent:0}]};
+ nodes.get('peptide-coverage') || run("document.getElementById('peptide-coverage')");
+ const coverage=nodes.get('peptide-coverage');coverage.clientWidth=800;
+ run('peptideView.results=result;peptideRender(result);peptideView.filters.charge="1";peptideInitCoverageResize()');
+ assert.equal(observed,coverage);
+ const table=nodes.get('peptide-results').children[1];const original=coverage.children[0];
+ callback([{target:coverage,contentRect:{width:810}}]);assert.equal(coverage.children[0],original);
+ callback([{target:coverage,contentRect:{width:1280}}]);assert.notEqual(coverage.children[0],original);
+ assert.equal(run('peptideView.coverageColumns'),80);
+ assert.equal(run('peptideView.filters.charge'),'1');assert.equal(nodes.get('peptide-results').children[1],table);
+ const resized=coverage.children[0];callback([{target:coverage,contentRect:{width:0}}]);assert.equal(coverage.children[0],resized);
+ run('peptideClearResults()');callback([{target:coverage,contentRect:{width:480}}]);assert.equal(coverage.children.length,0);
+});
+
+test('peptide table allocates one panel width, wraps long values and preserves all columns and exact numbers',()=>{
+ const {run,ctx,nodes}=domFixture();ctx.result={matches:[{...candidate,sequence:'K'.repeat(70),modifications:[{residue:45,delta:114.04292747}]}]};
+ run('peptideRenderTable(result)');
+ const all=descendants(nodes.get('peptide-results'));
+ const table=all.find(n=>n.tag==='table');assert.ok(table.classList.contains('peptide-results-table'));
+ const columns=all.filter(n=>n.tag==='col');assert.equal(columns.length,11);
+ assert.equal(columns.reduce((sum,n)=>sum+parseFloat(n.style.width),0),100);
+ assert.equal(all.filter(n=>n.tag==='th').length,11);assert.equal(all.filter(n=>n.tag==='td').length,11);
+ assert.ok(all.some(n=>n.textContent==='K'.repeat(70)+' [45:+114.04292747]'));
+ assert.ok(all.some(n=>n.textContent==='955.46760'&&n.title==='955.46760'));
+ const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
+ assert.match(css,/table\.data-table\.peptide-results-table\s*\{[^}]*width: 100%;[^}]*table-layout: fixed/);
+ assert.match(css,/table\.data-table\.peptide-results-table th, table\.data-table\.peptide-results-table td\s*\{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere/);
+ assert.match(css,/\.peptide-results-table \.peptide-sort-button\s*\{[^}]*white-space: normal/);
+ assert.match(css,/\.peptide-results-table \.btn\s*\{[^}]*white-space: normal/);
+});
+
+test('mapping shows a loading overlay, prevents duplicate searches, and restores controls on error',async()=>{
+ const {run,ctx,nodes}=domFixture();let resolve,calls=0,shown=[],hidden=0;
+ ctx.showLoading=text=>shown.push(text);ctx.hideLoading=()=>hidden++;
+ ctx.api.analyzePeptides=()=>{calls++;return new Promise(r=>{resolve=r;});};
+ run("peptideView.modifications=[{chain:'A',kind:'gg',search_all:true}]");
+ const pending=run('peptideAnalyze()');await run('peptideAnalyze()');
+ assert.equal(calls,1);assert.match(shown[0],/Searching eligible modification sites/);
+ assert.equal(nodes.get('btn-peptide-analyze').disabled,true);
+ resolve({matches:[],coverage:[],settings:{searched_modification_sites:15},excluded_modified_peptides:0,warning:''});await pending;
+ assert.equal(hidden,1);assert.equal(nodes.get('btn-peptide-analyze').disabled,false);
+ assert.match(nodes.get('peptide-status').textContent,/15 modification sites searched/);
+ ctx.api.analyzePeptides=async()=>{throw Error('Invalid composition');};await run('peptideAnalyze()');
+ assert.equal(hidden,2);assert.equal(nodes.get('btn-peptide-analyze').attributes['aria-busy'],'false');
+ assert.equal(nodes.get('peptide-status').textContent,'Invalid composition');
+});
+
+test('whole-reference checkbox hides the unused written position and explains how to start',()=>{
+ const {run,nodes}=domFixture();run("peptideView.modifications=[{chain:'A',kind:'gg',position:48,delta:114.04292747}];peptideRenderLinkages()");
+ let row=nodes.get('peptide-linkages').children[0];
+ const checkbox=row.children.find(n=>n.textContent==='Find site across reference ').children[0];
+ checkbox.checked=true;checkbox.onchange();row=nodes.get('peptide-linkages').children[0];
+ const position=row.children.find(n=>n.textContent==='Residue position ');
+ assert.equal(position.hidden,true);assert.equal(position.children[0].disabled,true);
+ assert.equal(run('peptideView.modifications[0].search_all'),true);
+ assert.match(nodes.get('peptide-status').textContent,/Click Map/);
+});
+
+test('custom modification accepts composition, displays calculated mass and rejects stale previews',async()=>{
+ const {run,ctx,nodes}=domFixture();let resolve;
+ ctx.api.peptideModificationMass=()=>new Promise(r=>{resolve=r;});
+ run("peptideView.modifications=[{chain:'A',kind:'custom',position:1,delta:null}];peptideRenderLinkages()");
+ const row=nodes.get('peptide-linkages').children[0];
+ const formula=row.children.find(n=>n.textContent==='Net elemental change ').children[0];
+ const mass=row.children.find(n=>n.textContent==='Calculated shift (Da) ').children[0];
+ assert.equal(mass.disabled,true);formula.value='C2H2O';const pending=formula.oninput();
+ run("peptideView.modifications[0].formula='H-2'");resolve({delta:42.01056468403});await pending;
+ assert.equal(mass.value,'');ctx.api.peptideModificationMass=async()=>({delta:-2.01565006446});
+ formula.value='H-2';await formula.oninput();assert.equal(mass.value,-2.01565006);
+ assert.equal(run('peptideView.modifications[0].formula'),'H-2');
+});
+
+test('GGisoK linkage view identifies acceptor sites without claiming donor-chain identity',()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,sequence:'AAAAAK',modifications:[{residue:6,delta:114.04292747,kind:'gg'}],
+  locations:[{chain:'A',start:43,end:48},{chain:'B',start:43,end:48}]};
+ run("peptideRenderLinkageEvidence(document.getElementById('peptide-ion-sequence'),row)");
+ const text=descendants(nodes.get('peptide-ion-sequence')).map(n=>n.textContent||'').join(' ');
+ assert.match(text,/A:K48 or B:K48/);assert.match(text,/Nε of Lys 6/);assert.match(text,/does not identify the donor chain/);
+ assert.match(text,/not inserted into the backbone/);
+});
+
+test('both peptide PDF downloads use Deconvolution style and original analysis or selected scan',async()=>{
+ const {run,ctx,nodes}=domFixture();let payload,saved;
+ ctx.buildCurrentDeconvStyle=()=>({fig_width:6,line_width:.8,show_grid:false});
+ ctx.backendResponseToBlob=async r=>r;ctx.downloadBlob=(blob,name)=>{saved=name;};ctx.sanitizeFilename=name=>name;ctx.toast=()=>{};
+ ctx.api.exportPeptidePdf=async p=>{payload=p;return 'pdf';};
+ ctx.result={matches:[candidate],coverage:[{id:'A',name:'Reference',sequence:'PEPTIDER',positions:[],percent:0}]};ctx.row=candidate;
+ run("peptideView.results=result;peptideView.path='/local/sample.sirslt';peptideRender(result)");
+ await run("peptideExportPdf('map')");assert.equal(payload.style.fig_width,6);assert.equal(payload.chains[0].spans.length,1);assert.match(saved,/_peptide_map.pdf$/);
+ run("peptideView.selectedMatch=row;peptideView.selectedSpectrum={scan_id:9,mz:[324.15539],intensities:[100]};document.getElementById('btn-peptide-spectrum-pdf').disabled=false");
+ await run("peptideExportPdf('spectrum')");assert.equal(payload.spectrum.mz[0],324.15539);assert.equal(payload.row,candidate);assert.match(saved,/_peptide_scan_9.pdf$/);
+ run('peptideClearResults()');assert.equal(nodes.get('btn-peptide-map-pdf').disabled,true);assert.equal(nodes.get('btn-peptide-spectrum-pdf').disabled,true);
+});
+
+test('MS-only thresholds are adjustable, sent to matching, and cleared edits invalidate coverage',async()=>{
+ const {run,ctx,nodes}=domFixture();let payload;
+ ctx.api.analyzePeptides=async p=>{payload=p;return {matches:[],coverage:[],excluded_modified_peptides:0,warning:''};};
+ run('initPeptideMapping()');
+ const relative=nodes.get('peptide-ms1-relative'),intensity=nodes.get('peptide-ms1-intensity');
+ relative.value='7.5';intensity.value='250';await run('peptideAnalyze()');
+ assert.equal(payload.ms1_min_relative_percent,7.5);assert.equal(payload.ms1_min_intensity,250);
+ relative.value='0';intensity.value='0';await run('peptideAnalyze()');
+ assert.equal(payload.ms1_min_relative_percent,0);assert.equal(payload.ms1_min_intensity,0);
+ relative.listeners.input();assert.equal(run('peptideView.results'),null);
+ await run('peptideAnalyze()');intensity.listeners.input();assert.equal(run('peptideView.results'),null);
+ intensity.value='';payload=null;await run('peptideAnalyze()');
+ assert.equal(payload,null);assert.match(nodes.get('peptide-status').textContent,/Enter both MS-only thresholds/);
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ assert.match(html,/id="peptide-ms1-relative"[^>]*value="5"/);
+ assert.match(html,/id="peptide-ms1-intensity"[^>]*value="0"/);
+});
+
+test('MS-only selected spectrum discloses actual passing intensity and relative strength',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row={...candidate,evidence:'ms1',fragments:[],observation_count:2,time_start:1,time_end:2,precursor_intensity:250,precursor_relative_intensity_pct:7.5};
+ ctx.api.getQtofSpectrum=async()=>({mz:[955.4676],intensities:[250]});
+ await run('peptideShowMatch(row)');
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/250.00 counts \(7.50% of scan maximum\)/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/2 passing survey observations/);
+});
+
+test('applying reference filtering preserves MS-only threshold choices across its refresh',async()=>{
+ const {run,ctx,nodes}=domFixture();let saved,reloaded=false;
+ ctx.sessionStorage={setItem(key,value){saved=value;},getItem(){return saved;},removeItem(){}};
+ ctx.window={location:{reload(){reloaded=true;}}};ctx.api.setReferenceMasses=async()=>{};
+ run("document.getElementById('reference-masses-sample').value='sample';document.getElementById('reference-masses-mode').value='off';document.getElementById('reference-masses-ppm').value='20';document.getElementById('peptide-ms1-relative').value='8';document.getElementById('peptide-ms1-intensity').value='1500'");
+ await run('referenceApply()');assert.equal(reloaded,true);
+ run("document.getElementById('peptide-ms1-relative').value='5';document.getElementById('peptide-ms1-intensity').value='0';initReferenceMasses()");
+ assert.equal(nodes.get('peptide-ms1-relative').value,'8');assert.equal(nodes.get('peptide-ms1-intensity').value,'1500');
 });

@@ -53,7 +53,7 @@ a shared recorded wavelength across its selected runs.
 **Peptide Mapping**, beside Deconvolution, is also digest-only. Paste reference
 FASTA, load a FASTA file, or read reference sequences from the run's saved
 BioConfirm method. This imports method XML, not proprietary binary result scores.
-Set fixed, site-specific mass shifts explicitly; imported unresolved modifications
+Set fixed, site-specific modifications explicitly; imported unresolved modifications
 exclude affected peptides. For a confirmed diglycyl lysine remnant, use
 the **GGisoK (ε-Gly-Gly lysine)** preset, choosing chain B and position 48 for
 that example. The preset adds 114.042927 Da relative to lysine and blocks
@@ -71,16 +71,40 @@ peptides map to all compatible locations and do not establish chain identity.
 I/L are indistinguishable; neutral losses are not searched. Click a candidate to
 inspect its measured, annotated fragment spectrum.
 
+MS-only matching has separate adjustable intensity gates: **5% of the survey
+scan maximum** by default, plus an optional **minimum intensity in counts**
+(default 0, disabled). Both gates must pass before a candidate contributes to
+the table or coverage; 0 disables the corresponding gate. The maximum is measured
+after reference-ion filtering. At most the 500 strongest passing peaks per scan
+are tested. Counts, relative intensity and passing observations are disclosed for
+the selected hypothesis. These gates do not alter MS/MS matching or raw data.
+They reject weak signals but are not signal-to-noise estimation or chromatographic
+peak detection: persistent background can still pass and MS-only remains tentative.
+
 The optional **Find site across reference** control searches every eligible
 position on one chain or all supplied chains, without requiring a written residue
-position. GGisoK is restricted to lysines; a known custom mass shift can target
+position. The unused written position is hidden while this is checked. Click
+**Map measured MS / MS/MS to reference** to start; a loading overlay shows the
+active search and the completed status reports the number of sites tested.
+GGisoK is restricted to lysines; a custom elemental change can target
 chosen residue letters or `*` for any residue. One variable remnant per peptide
 is tested at a time, optionally alongside fixed modifications; combinations of
 multiple variable sites within one peptide are not searched. Searches are bounded
 to 400 eligible sites and 20,000 peptide candidates. Unmodified alternatives are
 also retained. The table shows protein-wide modification positions for every
 compatible peptide location and explicitly marks searched sites as candidates.
-Competing sites remain unresolved; mass-only evidence cannot localize a site.
+Unknown-site candidates require MS/MS evidence, including at least one matched
+fragment that carries the variable remnant. MS-only does not generate unknown-site
+candidates or their coverage. Unmodified and explicitly fixed-reference peptides
+retain the normal MS-only search. Competing sites remain unresolved; the thresholds
+are not a validated site-localization score or a false-discovery-rate estimate.
+
+For **Custom elemental change**, enter the net atoms added or removed relative to
+the original residue, not the complete modified amino acid. For example `C2H2O`
+adds 42.01056468 Da, `H-2` removes 2.01565006 Da, and `C4H6N2O2` has the GG-remnant
+mass. The calculated neutral monoisotopic shift is read-only and recalculated by
+the backend. Supported elements: C, H, N, O, P, S, F, Cl, Br, I, Si and Se. Charges,
+isotope labels and bracketed formulas are rejected rather than guessed.
 
 The selected spectrum has a peptide-sequence cleavage map below it: matched b ions
 are blue below the sequence, matched y ions red above, with angled marks between
@@ -89,6 +113,29 @@ cuts have no evidence marker. Select a matched ion
 to highlight its sequence span and inspect measured/theoretical m/z and ppm error.
 Fixed modifications (including GGisoK) are marked on the appropriate residue;
 the map uses the existing matched-ion values without inventing fragment evidence.
+
+Named GGisoK candidates also show the expected GG-remnant carbonyl-to-lysine
+epsilon-N connectivity and all compatible acceptor positions. In a ubiquitin
+context this is consistent with donor G76 linked to that acceptor lysine. A GG
+remnant alone does not establish donor-chain identity or intact chain topology;
+shared peptides cannot distinguish chains. This remains a linear-remnant search,
+not an intact cross-linked-peptide search.
+
+**Download map PDF** exports all reference chains, sequence coverage percentages,
+and blue solid MS/MS / green dashed MS-only spans as vector text and lines.
+Long sequences and dense evidence continue onto further pages without dropping
+residues or lines. On screen, sequence rows follow the available panel width and
+coverage lanes use compact spacing; the results table wraps to one panel width.
+
+**Download spectrum PDF** exports the selected measured spectrum, blue b / red y
+peaks with measured m/z to five decimals, the sequence cleavage diagram and
+modification details. The existing Deconvolution renderer supplies the font family,
+8-point axis labels, 7-point ticks, line-width/grid settings and physical axis
+height. An annotation-friendly wider canvas prevents label crowding. When more
+than 12 ions match, the overview labels the strongest 12 and detail pages label
+every matched ion. No peaks are resampled or smoothed for the PDF, no theoretical
+peaks are substituted for measured values, and MS-only exports invent no b/y ions.
+All PDFs are generated locally; previous Deconvolution/UV exports are unchanged.
 Protein coverage underlines show matched peptide spans, separate overlapping
 peptides into rows, and combine repeated observations: **blue solid** means
 MS/MS-supported; **green dashed** means tentative MS-only mass compatibility.

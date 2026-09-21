@@ -64,15 +64,18 @@ class PeptideMappingTests(unittest.TestCase):
         fasta='LIFAGKQLEDGR'
         fixed={'chain':'A','position':6,'delta':114.04292747,'block_cleavage':True}
         peptide=digest(parse_fasta(fasta),0,[fixed])[0][0]
-        sample=self.make_sample([np.array([[peptide['mass']+PROTON,100.]])])
+        channel=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':peptide['mass']+PROTON}],
+            scans=[np.array(sorted((mass,100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))])
+        sample=self.make_sample([np.array([[peptide['mass']+PROTON,100.]])],channel)
         search={'chain':'A','search_all':True,'kind':'gg','position':1,'delta':0}
         result=analyze(sample,{'fasta':fasta,'modifications':[search],'missed_cleavages':0})
         self.assertEqual(result['settings']['searched_modification_sites'],1)
         hits=[r for r in result['matches'] if any(m.get('variable') for m in r['modifications'])]
         self.assertEqual(len(hits),1);self.assertEqual(hits[0]['modifications'][0]['residue'],6)
         self.assertTrue(hits[0]['site_search']);self.assertEqual(search['position'],1)
+        self.assertEqual(hits[0]['evidence'],'msms');self.assertTrue(hits[0]['remnant_fragment_ions'])
 
-    def test_mass_only_cannot_localize_competing_sites_but_sequence_coverage_is_counted_once(self):
+    def test_mass_only_never_generates_unknown_site_candidates_or_their_coverage(self):
         fasta='AAKAAKAAAAR';chains=parse_fasta(fasta)
         search={'chain':'A','residues':'K','delta':114.04292747,'block_cleavage':True}
         peptides,_,_=digest_with_site_search(chains,3,[],[search])
@@ -82,9 +85,9 @@ class PeptideMappingTests(unittest.TestCase):
         result=analyze(self.make_sample([np.array([[(mass+2*PROTON)/2,100.]])]),
             {'fasta':fasta,'missed_cleavages':3,'modifications':[{**search,'kind':'gg','search_all':True}]})
         hits=[r for r in result['matches'] if r['sequence']==fasta]
-        self.assertEqual(len(hits),2)
-        self.assertTrue(all(r['site_ambiguous'] and r['ambiguous_scan'] and not r['sequence_ambiguous'] for r in hits))
-        self.assertEqual(result['coverage'][0]['ms_percent'],100)
+        self.assertEqual(hits,[])
+        self.assertFalse(any(r['site_search'] for r in result['matches']))
+        self.assertEqual(result['coverage'][0]['ms_percent'],0)
         self.assertEqual(result['coverage'][0]['msms_percent'],0)
 
     def test_custom_site_search_uses_selected_residues_all_chains_and_respects_fixed_sites(self):
@@ -114,6 +117,56 @@ class PeptideMappingTests(unittest.TestCase):
         self.assertEqual(len(rows),2);self.assertTrue(all(r['ambiguous_scan'] for r in rows))
         for scan in [np.array([[(mass+PROTON)*(1+30e-6),100.]]),np.array([[mass+PROTON,.5],[200.,100.]])]:
             self.assertEqual(analyze(self.make_sample([scan]),{'fasta':'PEPTIDER'})['matches'],[])
+
+    def test_ms1_default_five_percent_threshold_is_adjustable_and_updates_coverage(self):
+        mz=digest(parse_fasta('PEPTIDER'),0,[])[0][0]['mass']+PROTON
+        sample=self.make_sample([np.array([[mz,4.],[200.,100.]])])
+        strict=analyze(sample,{'fasta':'PEPTIDER'})
+        self.assertEqual(strict['settings']['ms1_min_relative_percent'],5)
+        self.assertEqual(strict['matches'],[])
+        self.assertEqual(strict['coverage'][0]['ms_percent'],0)
+        relaxed=analyze(sample,{'fasta':'PEPTIDER','ms1_min_relative_percent':1})
+        self.assertEqual(len(relaxed['matches']),1)
+        self.assertEqual(relaxed['matches'][0]['precursor_relative_intensity_pct'],4)
+        self.assertEqual(relaxed['coverage'][0]['ms_percent'],100)
+        self.assertEqual(relaxed['coverage'][0]['msms_percent'],0)
+
+    def test_ms1_requires_both_intensity_cutoffs_and_preserves_measured_arrays(self):
+        mz=digest(parse_fasta('PEPTIDER'),0,[])[0][0]['mass']+PROTON
+        scans=[np.array([[mz,5.],[200.,100.]]),np.array([[mz,10.],[200.,100.]])]
+        originals=[s.copy() for s in scans];sample=self.make_sample(scans)
+        result=analyze(sample,{'fasta':'PEPTIDER','ms1_min_relative_percent':5,'ms1_min_intensity':6})
+        row=result['matches'][0]
+        self.assertEqual(row['observation_count'],1)
+        self.assertEqual(row['scan_id'],2)
+        self.assertEqual(row['precursor_mz'],mz)
+        self.assertEqual(row['precursor_intensity'],10)
+        self.assertEqual(row['precursor_relative_intensity_pct'],10)
+        self.assertEqual(result['settings']['ms1_min_intensity'],6)
+        self.assertEqual(analyze(sample,{'fasta':'PEPTIDER','ms1_min_relative_percent':11})['matches'],[])
+        self.assertEqual(analyze(sample,{'fasta':'PEPTIDER','ms1_min_intensity':11})['matches'],[])
+        self.assertEqual(analyze(sample,{'fasta':'PEPTIDER','ms1_min_relative_percent':0,'ms1_min_intensity':0})['matches'][0]['observation_count'],2)
+        for original,current in zip(originals,scans):np.testing.assert_array_equal(original,current)
+
+    def test_ms1_threshold_boundaries_are_inclusive_and_invalid_values_rejected(self):
+        mz=digest(parse_fasta('PEPTIDER'),0,[])[0][0]['mass']+PROTON
+        sample=self.make_sample([np.array([[mz,5.],[200.,100.]])])
+        self.assertTrue(analyze(sample,{'fasta':'PEPTIDER','ms1_min_relative_percent':5,'ms1_min_intensity':5})['matches'])
+        for key,values in [('ms1_min_relative_percent',[-1,101,float('nan'),float('inf'),None,True,'']),
+                           ('ms1_min_intensity',[-1,1e16,float('nan'),float('inf'),None,False,''])]:
+            for value in values:
+                with self.subTest(key=key,value=value),self.assertRaisesRegex(ValueError,'MS-only'):
+                    analyze(sample,{'fasta':'PEPTIDER',key:value})
+
+    def test_ms1_thresholds_do_not_change_msms_assignments_or_coverage(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        channel=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':peptide['mass']+PROTON}],
+            scans=[np.array(sorted((mass,100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))])
+        sample=self.make_sample([np.array([[peptide['mass']+PROTON,100.]])],channel)
+        before=analyze(sample,{'fasta':'PEPTIDER'})
+        after=analyze(sample,{'fasta':'PEPTIDER','ms1_min_relative_percent':100,'ms1_min_intensity':1e15})
+        self.assertEqual(after['matches'],before['matches'])
+        self.assertEqual(after['coverage'],before['coverage'])
 
     def test_msms_charge_one_is_found_and_takes_precedence_over_ms_only(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]

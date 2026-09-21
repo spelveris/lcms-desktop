@@ -54,15 +54,22 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 
 /* ===== Peptide mapping evidence ===== */
-.peptide-coverage-chain { margin: 16px 0; }
+#tab-peptides, #peptide-coverage, #peptide-results { width: 100%; min-width: 0; max-width: 100%; }
+#peptide-results { max-height: 360px; overflow: auto; }
+.peptide-export-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.peptide-linkage-evidence { border-left: 2px solid #e52a2a; padding: 6px 10px; margin-top: 8px; }
+.peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
+#peptide-linkages label[hidden] { display: none; }
+.peptide-coverage-chain { margin: 10px 0; }
+.peptide-coverage-chain > p { margin: 3px 0; }
 .peptide-coverage-scroll { max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
-.peptide-coverage-block { margin: 8px 0 12px; width: max-content; }
-.peptide-coverage-range { color: var(--text-secondary); font-size: 10px; margin-bottom: 3px; }
-.peptide-coverage-grid { display: grid; grid-auto-rows: minmax(16px, auto); gap: 0; width: max-content; }
-.peptide-coverage-residue { font: 13px/24px var(--font-mono); text-align: center; background: var(--bg-input); color: var(--text-secondary); }
+.peptide-coverage-block { margin: 4px 0 7px; width: 100%; }
+.peptide-coverage-range { color: var(--text-secondary); font-size: 10px; margin-bottom: 2px; }
+.peptide-coverage-grid { display: grid; grid-template-rows: 20px; grid-auto-rows: 8px; gap: 0; width: 100%; }
+.peptide-coverage-residue { font: 13px/20px var(--font-mono); text-align: center; background: var(--bg-input); color: var(--text-secondary); }
 .peptide-coverage-residue.is-covered { background: #cde7fa; color: #222; }
-.peptide-coverage-underline { position: relative; min-height: 16px; margin: 0 1px; padding: 0; border: 0; border-bottom: 2px solid #78bef4; border-radius: 0; background: transparent; cursor: pointer; }
-.peptide-coverage-underline::before, .peptide-coverage-underline::after { content: ''; position: absolute; bottom: 0; height: 4px; border-left: 1px solid #78bef4; }
+.peptide-coverage-underline { position: relative; height: 8px; min-height: 8px; line-height: 0; margin: 0 1px; padding: 0; border: 0; border-bottom: 2px solid #78bef4; border-radius: 0; background: transparent; cursor: pointer; }
+.peptide-coverage-underline::before, .peptide-coverage-underline::after { content: ''; position: absolute; bottom: 0; height: 3px; border-left: 1px solid #78bef4; }
 .peptide-coverage-underline::before { left: 0; }
 .peptide-coverage-underline::after { right: 0; }
 .peptide-coverage-underline.continues-left::before, .peptide-coverage-underline.continues-right::after { display: none; }
@@ -70,9 +77,16 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-coverage-underline.evidence-ms1 { border-bottom: 2px dashed #5fbd83; }
 .peptide-coverage-underline.evidence-ms1::before, .peptide-coverage-underline.evidence-ms1::after { border-left-color: #5fbd83; }
 .peptide-coverage-underline.evidence-ms1:hover, .peptide-coverage-underline.evidence-ms1:focus-visible { outline-color: #5fbd83; }
-.peptide-table-scroll { max-width: 100%; overflow-x: auto; }
+.peptide-table-scroll { width: 100%; min-width: 0; max-width: 100%; }
+table.data-table.peptide-results-table { width: 100%; table-layout: fixed; }
+table.data-table.peptide-results-table th, table.data-table.peptide-results-table td { padding: 5px 6px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+table.data-table.peptide-results-table th { letter-spacing: 0; text-transform: none; z-index: 1; }
+.peptide-results-table .peptide-sort-button { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.peptide-results-table .btn { max-width: 100%; padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; }
 .peptide-table-filters { flex-wrap: wrap; margin: 12px 0; }
-.peptide-table-filters input[type="search"] { min-width: 230px; }
+.peptide-table-filters label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.tab-toolbar.peptide-table-filters input, .tab-toolbar.peptide-table-filters select { min-width: 0; max-width: 100%; }
+.peptide-table-filters input[type="search"] { width: 230px; }
 .peptide-sort-button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
 .peptide-sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .peptide-ion-sequence { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }

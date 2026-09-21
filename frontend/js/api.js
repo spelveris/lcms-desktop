@@ -106,6 +106,14 @@ const api = {
     return apiFetch('/api/peptide-mapping/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   },
 
+  exportPeptidePdf(payload) {
+    return apiFetch('/api/peptide-mapping/export-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  },
+
+  peptideModificationMass(formula) {
+    return apiFetch('/api/peptide-mapping/modification-mass', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({formula}) });
+  },
+
   getQtofSpectrum(path, scanId, polarity) {
     return apiFetch(`/api/qtof/spectrum?${qs({ path, scan_id: scanId, polarity })}`);
   },

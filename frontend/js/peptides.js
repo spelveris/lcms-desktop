@@ -1,6 +1,8 @@
 const peptideView = { generation: 0, references: [], results: null, path: '', modifications: [],
+  analyzing: false, selectedMatch: null, selectedSpectrum: null,
   filters: { text: '', evidence: '', charge: '', review: '' }, sort: { key: 'time', direction: 1 } };
 const PEPTIDE_ION_COLORS = { b: '#3750aa', y: '#e52a2a' };
+let peptideCoverageObserver;
 
 function peptideIonLabel(ion) { return `${ion.series}${ion.number} +${ion.charge}`; }
 
@@ -43,6 +45,30 @@ function peptideIonDescription(row, ion) {
 function peptideClearIonSequence() {
   const panel = document.getElementById('peptide-ion-sequence');
   if (panel) { panel.hidden = true; panel.replaceChildren(); }
+}
+
+function peptideLinkageEvidence(row) {
+  return (row.modifications||[]).filter(mod=>mod.kind==='gg'&&row.sequence[mod.residue-1]==='K').map(mod=>({
+    residue:mod.residue,
+    sites:(row.locations||[]).map(loc=>`${loc.chain}:K${loc.start+mod.residue-1}`).join(' or '),
+    evidence:row.evidence==='ms1'?'Fixed-site hypothesis; no MS/MS support':row.site_ambiguous?'MS/MS candidate; competing sites remain':'MS/MS-supported candidate',
+    ions:(row.fragments||[]).map(fragment=>peptideIonAssignment(row,fragment)).filter(ion=>ion&&ion.start<=mod.residue&&ion.end>=mod.residue)
+      .map(ion=>`${peptideIonLabel(ion)} (${Number(ion.observed_mz).toFixed(5)})`).join(', '),
+  }));
+}
+
+function peptideRenderLinkageEvidence(panel,row) {
+  for(const link of peptideLinkageEvidence(row)){
+    const box=document.createElement('div');box.className='peptide-linkage-evidence';
+    const heading=document.createElement('p');heading.textContent=`GGisoK: ${link.sites} · ${link.evidence}`;box.appendChild(heading);
+    const scheme=document.createElement('p');scheme.className='peptide-linkage-scheme';
+    scheme.textContent=`GG remnant — C-terminal carbonyl — Nε of Lys ${link.residue}`;
+    box.appendChild(scheme);
+    if(link.ions){const ions=document.createElement('p');ions.className='toolbar-note';ions.textContent=`Remnant-containing candidate ions (measured m/z): ${link.ions}`;box.appendChild(ions);}
+    const note=document.createElement('p');note.className='toolbar-note';
+    note.textContent='The remnant is attached to the lysine side chain, not inserted into the backbone. For ubiquitin, this is consistent with donor G76 linked to acceptor lysine. The GG remnant alone does not identify the donor chain; shared peptides do not distinguish A from B. Intact cross-link topology is not determined by this search.';
+    box.appendChild(note);panel.appendChild(box);
+  }
 }
 
 function peptideRenderIonSequence(row) {
@@ -105,6 +131,7 @@ function peptideRenderIonSequence(row) {
     }
   }
   panel.appendChild(detail);
+  peptideRenderLinkageEvidence(panel,row);
 }
 
 function peptideFragmentTraces(row) {
@@ -147,7 +174,28 @@ function peptideCoverageSpans(result, chain) {
   return sorted;
 }
 
-function peptideRenderCoverageChain(result, chain) {
+function peptideCoverageBlockSpans(spans, start, end) {
+  // Repack each wrapped sequence line independently: an old high lane must not
+  // force empty rows underneath later sequence lines. Never merge click targets.
+  const visible = spans.filter(span=>span.start<=end&&span.end>=start)
+    .map(span=>({...span,blockStart:Math.max(start,span.start),blockEnd:Math.min(end,span.end)}))
+    .sort((a,b)=>a.blockStart-b.blockStart||a.blockEnd-b.blockEnd||a.lane-b.lane);
+  const laneEnds=[];
+  for(const span of visible){
+    let lane=laneEnds.findIndex(stop=>stop<span.blockStart);
+    if(lane<0)lane=laneEnds.length;
+    span.lane=lane;laneEnds[lane]=span.blockEnd;
+  }
+  return visible;
+}
+
+function peptideCoverageColumns(width) {
+  if (!Number.isFinite(width) || width <= 0) return 50;
+  const count = Math.max(1, Math.floor(width / 16));
+  return count >= 20 ? Math.floor(count / 10) * 10 : count;
+}
+
+function peptideRenderCoverageChain(result, chain, columns = 50) {
   const section = document.createElement('section'); section.className = 'peptide-coverage-chain';
   const title = document.createElement('p');
   title.textContent = `Chain ${chain.id} · ${chain.name} · Coverage: MS ${(chain.ms_percent ?? chain.percent).toFixed(1)}% · MS/MS ${(chain.msms_percent ?? chain.percent).toFixed(1)}%`;
@@ -155,21 +203,22 @@ function peptideRenderCoverageChain(result, chain) {
   section.appendChild(title);
   const spans = peptideCoverageSpans(result, chain), positions = new Set(chain.positions);
   const note = document.createElement('p'); note.className = 'toolbar-note';
-  note.textContent = 'Blue solid: MS/MS-supported. Green dashed: tentative MS-only. Click an underline to inspect a spectrum. Competing sequences are excluded; shared peptides map to each compatible chain. Alternative modification sites remain candidates.';
+  note.textContent = 'Blue solid: MS/MS · Green dashed: tentative MS-only · Click a line to inspect';
+  note.title = 'MS-only matches are tentative. Competing sequences are excluded; shared peptides map to each compatible chain. Alternative modification sites remain candidates.';
   section.appendChild(note);
   const scroll = document.createElement('div'); scroll.className = 'peptide-coverage-scroll'; section.appendChild(scroll);
-  for (let offset = 0; offset < chain.sequence.length; offset += 50) {
-    const sequence = chain.sequence.slice(offset, offset+50), end = offset + sequence.length;
+  for (let offset = 0; offset < chain.sequence.length; offset += columns) {
+    const sequence = chain.sequence.slice(offset, offset+columns), end = offset + sequence.length;
     const block = document.createElement('div'); block.className = 'peptide-coverage-block';
     const range = document.createElement('div'); range.className = 'peptide-coverage-range'; range.textContent = `${offset+1}–${end}`; block.appendChild(range);
-    const grid = document.createElement('div'); grid.className = 'peptide-coverage-grid'; grid.style.gridTemplateColumns = `repeat(${sequence.length}, 16px)`;
+    const grid = document.createElement('div'); grid.className = 'peptide-coverage-grid'; grid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
     [...sequence].forEach((aa, index) => {
       const position = offset + index + 1, letter = document.createElement('span');
       letter.className = `peptide-coverage-residue${positions.has(position) ? ' is-covered' : ''}`;
       letter.textContent = aa; letter.title = `${chain.id}${position}`;
       letter.style.gridColumn = String(index+1); letter.style.gridRow = '1'; grid.appendChild(letter);
     });
-    for (const span of spans.filter(span => span.start <= end && span.end > offset)) {
+    for (const span of peptideCoverageBlockSpans(spans, offset+1, end)) {
       const start = Math.max(span.start, offset+1), stop = Math.min(span.end, end);
       const line = document.createElement('button'); line.type = 'button';
       line.className = `peptide-coverage-underline evidence-${span.evidence}` + (span.start < start ? ' continues-left' : '') + (span.end > stop ? ' continues-right' : '');
@@ -199,15 +248,31 @@ function peptideRenderLinkages() {
     chain.value=mod.chain;chain.onchange=()=>{mod.chain=chain.value;peptideClearResults();};label('Chain ',chain);
     const position=document.createElement('input');position.type='number';position.min=1;position.value=mod.position;position.style.width='75px';position.oninput=()=>{mod.position=Number(position.value);peptideClearResults();};label('Residue position ',position);
     position.disabled=mod.search_all===true;
+    // Hide the unused written position so it cannot look like a site-search constraint.
+    if(mod.search_all)row.children[row.children.length-1].hidden=true;
     const type=document.createElement('select');
-    for(const [value,text] of [['unknown',mod.name ? `Unresolved: ${mod.name}` : 'Unknown remnant'],['gg','GGisoK (ε-Gly-Gly lysine)'],['custom','Custom mass shift']]){const option=document.createElement('option');option.value=value;option.textContent=text;type.appendChild(option);}
+    for(const [value,text] of [['unknown',mod.name ? `Unresolved: ${mod.name}` : 'Unknown remnant'],['gg','GGisoK (ε-Gly-Gly lysine)'],['custom','Custom elemental change']]){const option=document.createElement('option');option.value=value;option.textContent=text;type.appendChild(option);}
     type.value=mod.kind|| (mod.delta===null?'unknown':'custom');
-    type.onchange=()=>{mod.kind=type.value;mod.delta=type.value==='gg'?114.04292747:null;if(type.value==='gg')mod.block_cleavage=true;peptideClearResults();peptideRenderLinkages();};label('Type ',type);
-    const mass=document.createElement('input');mass.type='number';mass.step='0.000001';mass.placeholder='Unresolved';mass.value=mod.delta??'';mass.style.width='130px';mass.disabled=type.value==='gg'||type.value==='unknown';mass.oninput=()=>{mod.delta=mass.value===''?null:Number(mass.value);peptideClearResults();};label('Mass shift (Da) ',mass);
+    type.onchange=()=>{mod.kind=type.value;mod.delta=type.value==='gg'?114.04292747:null;if(type.value==='gg'){mod.block_cleavage=true;mod.formula='C4H6N2O2';}peptideClearResults();peptideRenderLinkages();};label('Type ',type);
+    const mass=document.createElement('input');mass.type='number';mass.step='0.000001';mass.placeholder='Unresolved';mass.value=mod.delta??'';mass.style.width='130px';mass.disabled=true;label('Calculated shift (Da) ',mass);
     const block=document.createElement('input');block.type='checkbox';block.checked=mod.block_cleavage===true;block.disabled=type.value==='gg';block.onchange=()=>{mod.block_cleavage=block.checked;peptideClearResults();};label('Blocks trypsin at this residue ',block);
     const search=document.createElement('input');search.type='checkbox';search.checked=mod.search_all===true;
-    search.onchange=()=>{mod.search_all=search.checked;if(!search.checked&&mod.chain==='*')mod.chain='A';peptideClearResults();peptideRenderLinkages();};label('Find site across reference ',search);
+    search.onchange=()=>{mod.search_all=search.checked;if(!search.checked&&mod.chain==='*')mod.chain='A';peptideClearResults();peptideRenderLinkages();
+      document.getElementById('peptide-status').textContent=search.checked ? 'Site search configured. Click Map measured MS / MS/MS to reference to search all eligible residues in the selected chain(s); the written residue position is not used.' : 'Fixed-site mapping configured. Click Map measured MS / MS/MS to reference to recalculate.';
+    };label('Find site across reference ',search);
     if(mod.search_all){const residues=document.createElement('input');residues.value=mod.kind==='gg'?'K':(mod.residues||'K');residues.disabled=mod.kind==='gg';residues.style.width='65px';residues.title='Eligible residues (e.g. K, ST or * for any residue)';residues.oninput=()=>{mod.residues=residues.value.toUpperCase();peptideClearResults();};label('At residues ',residues);}
+    if(type.value==='custom'){
+      const formula=document.createElement('input');formula.type='text';formula.value=mod.formula||'';formula.placeholder='C2H2O or H-2';formula.style.width='150px';
+      formula.title='Net atoms added or removed relative to the existing residue, not the whole amino acid. Example: C2H2O adds acetyl; H-2 removes two hydrogens.';
+      label('Net elemental change ',formula);
+      const note=document.createElement('span');note.className='toolbar-note';row.appendChild(note);
+      formula.oninput=async()=>{
+        const value=formula.value;mod.formula=value;mod.delta=null;mass.value='';peptideClearResults();note.textContent='Calculating composition…';
+        try{const parsed=await api.peptideModificationMass(value);if(mod.formula!==value||mod.kind!=='custom')return;mod.delta=parsed.delta;mass.value=Number(parsed.delta.toFixed(8));note.textContent='Net change relative to the original residue.';}
+        catch(error){if(mod.formula===value)note.textContent=error.message;}
+      };
+      if(mod.formula&&mod.delta==null)formula.oninput();
+    }
     const remove=document.createElement('button');remove.className='btn btn-sm';remove.textContent='Remove';remove.onclick=()=>{peptideView.modifications.splice(index,1);peptideClearResults();peptideRenderLinkages();};row.appendChild(remove);container.appendChild(row);
   });
 }
@@ -215,6 +280,8 @@ function peptideRenderLinkages() {
 function peptideClearResults() {
   peptideView.generation += 1;
   peptideView.results = null;
+  peptideClearSpectrumExport();
+  document.getElementById('btn-peptide-map-pdf').disabled=true;
   document.getElementById('peptide-coverage').replaceChildren();
   document.getElementById('peptide-results').replaceChildren();
   document.getElementById('peptide-spectrum-status').textContent = '';
@@ -267,19 +334,67 @@ async function peptideImport() {
   } catch (error) { if (generation === peptideView.generation) status.textContent = error.message; }
 }
 
-function peptideRender(result) {
+function peptideRenderCoverage(result, width = document.getElementById('peptide-coverage').clientWidth) {
   const coverage = document.getElementById('peptide-coverage'); coverage.replaceChildren();
+  const columns = peptideCoverageColumns(width);
+  peptideView.coverageColumns = columns;
   for (const chain of result.coverage) {
-    coverage.appendChild(peptideRenderCoverageChain(result, chain));
+    coverage.appendChild(peptideRenderCoverageChain(result, chain, columns));
   }
+}
+
+function peptideInitCoverageResize() {
+  if (typeof ResizeObserver === 'undefined') return;
+  if (peptideCoverageObserver) peptideCoverageObserver.disconnect();
+  const coverage = document.getElementById('peptide-coverage');
+  peptideCoverageObserver = new ResizeObserver(entries => {
+    const width = entries.find(entry => entry.target === coverage)?.contentRect.width;
+    if (width > 0 && peptideView.results && peptideCoverageColumns(width) !== peptideView.coverageColumns) {
+      // Reflow evidence only: never rerun matching, reset filters or reload spectra.
+      peptideRenderCoverage(peptideView.results, width);
+    }
+  });
+  peptideCoverageObserver.observe(coverage);
+}
+
+function peptideRender(result) {
+  peptideRenderCoverage(result);
   peptideRenderTable(result);
+  document.getElementById('btn-peptide-map-pdf').disabled=!result.coverage?.length;
+}
+
+function peptideClearSpectrumExport() {
+  peptideView.selectedMatch=null;peptideView.selectedSpectrum=null;
+  document.getElementById('btn-peptide-spectrum-pdf').disabled=true;
+}
+
+async function peptideExportPdf(kind) {
+  const result=peptideView.results, row=peptideView.selectedMatch, spectrum=peptideView.selectedSpectrum;
+  if(kind==='map' ? !result?.coverage?.length : !row || !spectrum)return;
+  const button=document.getElementById(kind==='map'?'btn-peptide-map-pdf':'btn-peptide-spectrum-pdf');
+  if(button.disabled)return;
+  const sampleName=peptideView.path.split(/[\\/]/).pop() || 'sample';
+  const payload={kind,sample_name:sampleName,style:buildCurrentDeconvStyle(),settings:result?.settings,reference_filter:result?.reference_filter};
+  if(kind==='map')payload.chains=result.coverage.map(chain=>({...chain,spans:peptideCoverageSpans(result,chain).map(span=>({start:span.start,end:span.end,evidence:span.evidence}))}));
+  else Object.assign(payload,{row,spectrum});
+  button.disabled=true;showLoading(kind==='map'?'Exporting peptide coverage map PDF…':'Exporting annotated peptide spectrum PDF…');
+  try{
+    const response=await api.exportPeptidePdf(payload);
+    const blob=await backendResponseToBlob(response);
+    downloadBlob(blob,`${sanitizeFilename(sampleName)}_peptide_${kind==='map'?'map':`scan_${row.scan_id}`}.pdf`);
+    toast('Peptide PDF exported','success');
+  }catch(error){toast(`PDF export failed: ${error.message}`,'error');}
+  finally{
+    button.disabled=kind==='map'?!peptideView.results?.coverage?.length:!peptideView.selectedSpectrum;
+    hideLoading();
+  }
 }
 
 const PEPTIDE_COLUMNS = [
-  ['sequence','Peptide / modifications'], ['locations','Locations'], ['modification_sites','Protein modification sites'], ['evidence','Evidence'],
-  ['time','Time (min)'], ['charge','Charge*'], ['precursor_mz','Precursor m/z'],
-  ['precursor_error_ppm','Precursor ppm'], ['matched_ions','Matched ions'],
-  ['explained_intensity_pct','Explained intensity'], ['ambiguous_scan','Review'],
+  ['sequence','Peptide / modifications',21], ['locations','Locations',8], ['modification_sites','Protein modification sites',12], ['evidence','Evidence',8],
+  ['time','Time (min)',7], ['charge','Charge*',5], ['precursor_mz','Precursor m/z',9],
+  ['precursor_error_ppm','Precursor ppm',7], ['matched_ions','Matched ions',6],
+  ['explained_intensity_pct','Explained intensity',8], ['ambiguous_scan','Review',9],
 ];
 
 function peptideLocationText(row) { return row.locations.map(l=>`${l.chain}:${l.start}–${l.end}`).join(', '); }
@@ -328,7 +443,11 @@ function peptideRenderTable(result) {
   reset.addEventListener('click',()=>{peptideView.filters={text:'',evidence:'',charge:'',review:''};peptideRenderTable(result);});toolbar.appendChild(reset);
   const count=document.createElement('span');count.className='toolbar-note';count.setAttribute('role','status');toolbar.appendChild(count);container.appendChild(toolbar);
   const scroll=document.createElement('div');scroll.className='peptide-table-scroll';container.appendChild(scroll);
-  const table = document.createElement('table'); table.className = 'data-table';scroll.appendChild(table);
+  const table = document.createElement('table'); table.className = 'data-table peptide-results-table';scroll.appendChild(table);
+  const colgroup = document.createElement('colgroup'); table.appendChild(colgroup);
+  for (const [,,width] of PEPTIDE_COLUMNS) {
+    const col = document.createElement('col'); col.style.width = `${width}%`; colgroup.appendChild(col);
+  }
   const header = table.createTHead().insertRow();
   const headers=[];
   for (const [key,label] of PEPTIDE_COLUMNS) {
@@ -351,7 +470,7 @@ function peptideRenderTable(result) {
     const tr = body.insertRow();
     const mods = row.modifications.map(m=>`${m.residue}:${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ');
     const values = [row.sequence + (mods ? ` [${mods}]` : ''), peptideLocationText(row), peptideModificationSiteText(row), peptideEvidenceText(row), row.time.toFixed(3), `+${row.charge}`, row.precursor_mz.toFixed(5), row.precursor_error_ppm.toFixed(2), row.evidence==='ms1' ? '—' : row.matched_ions, row.explained_intensity_pct == null ? '—' : `${row.explained_intensity_pct.toFixed(1)}%`];
-    values.forEach(value => { tr.insertCell().textContent = value; });
+    values.forEach(value => { const cell = tr.insertCell(); cell.textContent = value; cell.title = String(value); });
     const button = document.createElement('button'); button.type='button';button.className = 'btn btn-sm'; button.textContent = (row.evidence==='ms1' ? 'View MS peak' : 'View fragments')+((row.sequence_ambiguous ?? row.ambiguous_scan) ? ' · competing sequence' : row.site_ambiguous ? ' · site unresolved' : '');
     button.addEventListener('click',()=>peptideShowMatch(row)); tr.insertCell().appendChild(button);
     });
@@ -361,20 +480,29 @@ function peptideRenderTable(result) {
 }
 
 async function peptideAnalyze() {
+  if(peptideView.analyzing)return;
   peptideClearResults(); const generation=peptideView.generation;
-  const status=document.getElementById('peptide-status'); status.textContent='Comparing measured MS and MS/MS with the supplied sequence…';
+  const status=document.getElementById('peptide-status'),button=document.getElementById('btn-peptide-analyze');
+  const searching=peptideView.modifications.some(mod=>mod.search_all);
+  status.textContent=searching?'Searching eligible modification sites across the reference and matching MS/MS…':'Comparing measured MS and MS/MS with the supplied sequence…';
+  peptideView.analyzing=true;button.disabled=true;button.setAttribute('aria-busy','true');showLoading(status.textContent);
   try {
     const path=document.getElementById('peptide-sample-select').value;
-    const result=await api.analyzePeptides({ path, fasta:document.getElementById('peptide-fasta').value, modifications:peptideView.modifications, missed_cleavages:Number(document.getElementById('peptide-missed').value), precursor_ppm:Number(document.getElementById('peptide-precursor-ppm').value), fragment_ppm:Number(document.getElementById('peptide-fragment-ppm').value) });
+    const relative=document.getElementById('peptide-ms1-relative').value;
+    const intensity=document.getElementById('peptide-ms1-intensity').value;
+    if(!String(relative).trim()||!String(intensity).trim())throw new Error('Enter both MS-only thresholds; use 0 to disable a cutoff.');
+    const result=await api.analyzePeptides({ path, fasta:document.getElementById('peptide-fasta').value, modifications:peptideView.modifications, missed_cleavages:Number(document.getElementById('peptide-missed').value), precursor_ppm:Number(document.getElementById('peptide-precursor-ppm').value), fragment_ppm:Number(document.getElementById('peptide-fragment-ppm').value), ms1_min_relative_percent:Number(relative), ms1_min_intensity:Number(intensity) });
     if (generation !== peptideView.generation) return;
     Object.assign(peptideView,{results:result,path});
-    status.textContent=`${result.matches.filter(r=>r.evidence!=='ms1').length} MS/MS candidate-spectrum matches; ${result.matches.filter(r=>r.evidence==='ms1').length} tentative MS-only hypotheses. ${result.excluded_modified_peptides} peptides excluded for unresolved modifications. Charge* is inferred from mass (+1 to +6; isotope offsets 0–2). ${result.warning}`;
+    status.textContent=`${result.matches.filter(r=>r.evidence!=='ms1').length} MS/MS candidate-spectrum matches; ${result.matches.filter(r=>r.evidence==='ms1').length} tentative MS-only hypotheses. ${result.settings?.searched_modification_sites ? `${result.settings.searched_modification_sites} modification sites searched. ` : ''}${result.excluded_modified_peptides} peptides excluded for unresolved modifications. Charge* is inferred from mass (+1 to +6; isotope offsets 0–2). ${result.warning}`;
     peptideRender(result);
   } catch(error) { if(generation===peptideView.generation) status.textContent=error.message; }
+  finally{peptideView.analyzing=false;button.disabled=false;button.setAttribute('aria-busy','false');hideLoading();}
 }
 
 async function peptideShowMatch(row) {
   const generation=++peptideView.generation;
+  peptideClearSpectrumExport();
   peptideClearIonSequence();
   const msOnly=row.evidence==='ms1';
   document.getElementById('peptide-spectrum-status').textContent=msOnly ? 'Loading measured MS survey…' : 'Loading measured fragment spectrum…';
@@ -387,19 +515,24 @@ async function peptideShowMatch(row) {
     await Plotly.react('peptide-spectrum-plot',[qtofStickTrace(spectrum),...overlays],{...WEBAPP_LAYOUT,height:430,showlegend:false,xaxis:{...WEBAPP_LAYOUT.xaxis,title:'Mass-to-charge (m/z)',showgrid:false},yaxis:{...WEBAPP_LAYOUT.yaxis,title:'Counts',showgrid:false,range:[0,maximum>0?maximum*1.25:1]}},PLOT_CONFIG);
     if(generation!==peptideView.generation)return;
     if(!msOnly)peptideRenderIonSequence(row);
+    peptideView.selectedMatch=row;peptideView.selectedSpectrum=spectrum;
+    document.getElementById('btn-peptide-spectrum-pdf').disabled=false;
     document.getElementById('peptide-spectrum-status').textContent=msOnly
-      ? `${row.sequence} · measured MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · tentative +${row.charge}, isotope offset ${row.isotope_offset}. ${row.observation_count} survey observations across ${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min; strongest shown. No supporting MS/MS assignment: no b/y cleavage evidence or confirmed sequence.`
+      ? `${row.sequence} · measured MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · tentative +${row.charge}, isotope offset ${row.isotope_offset}. Intensity ${Number(row.precursor_intensity).toPrecision(5)} counts${row.precursor_relative_intensity_pct==null?'':` (${row.precursor_relative_intensity_pct.toFixed(2)}% of scan maximum)`}. ${row.observation_count} passing survey observations across ${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min; strongest shown. No supporting MS/MS assignment: no b/y cleavage evidence or confirmed sequence.`
       : `${row.sequence} · measured MS/MS scan ${row.scan_id} · ${row.time.toFixed(4)} min · precursor m/z ${row.precursor_mz.toFixed(5)}, inferred +${row.charge} · blue b / red y labels are candidate matches, not a confirmed sequence. Precursor isotope offset: ${row.isotope_offset}.`;
   } catch(error) { if(generation===peptideView.generation)document.getElementById('peptide-spectrum-status').textContent=error.message; }
 }
 
 function initPeptideMapping() {
+  peptideInitCoverageResize();
+  document.getElementById('btn-peptide-map-pdf').addEventListener('click',()=>peptideExportPdf('map'));
+  document.getElementById('btn-peptide-spectrum-pdf').addEventListener('click',()=>peptideExportPdf('spectrum'));
   document.getElementById('btn-peptide-import').addEventListener('click',peptideImport);
   document.getElementById('btn-peptide-analyze').addEventListener('click',peptideAnalyze);
   document.getElementById('peptide-reference-select').addEventListener('change',e=>peptideUseReference(Number(e.target.value)));
   document.getElementById('peptide-sample-select').addEventListener('change',()=>{ peptideClearResults(); peptideView.references=[];document.getElementById('peptide-reference-select').replaceChildren();document.getElementById('peptide-import-status').textContent='Reference retained; verify it belongs to the newly selected sample before analysis.'; });
   document.getElementById('btn-peptide-add-linkage').addEventListener('click',()=>{peptideView.modifications.push({chain:'A',position:1,delta:null,kind:'custom',block_cleavage:false});peptideClearResults();peptideRenderLinkages();});
-  for(const id of ['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm'])document.getElementById(id).addEventListener('input',peptideClearResults);
+  for(const id of ['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'])document.getElementById(id).addEventListener('input',peptideClearResults);
   document.getElementById('peptide-fasta').addEventListener('change',peptideRenderLinkages);
   document.getElementById('peptide-fasta-file').addEventListener('change',async event=>{
     const file=event.target.files[0]; if(!file)return;
