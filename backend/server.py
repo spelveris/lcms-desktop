@@ -46,6 +46,7 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
         sys.path.append(abs_external)
 
 # Import existing modules
+import qtof_deconvolution
 from data_reader import (
     OLAX_CONTAINER_SUFFIX,
     RSLT_CONTAINER_SUFFIX,
@@ -2122,10 +2123,11 @@ def _serialize_deconvolution_components(components: list[dict]) -> list[dict]:
             "num_charges": int(comp.get("num_charges", 0)),
             "charge_states": comp.get("charge_states", []),
             "peaks_found": int(comp.get("peaks_found", 0)),
-            "r2": float(comp.get("r2", 0)),
+            "r2": None if comp.get('isotope_aware') else float(comp.get("r2", 0)),
             "ion_mzs": comp.get("ion_mzs", []),
             "ion_charges": comp.get("ion_charges", []),
             "ion_intensities": comp.get("ion_intensities", []),
+            **({key:comp.get(key) for key in ('isotope_aware','fit_score','scan_count','ion_mono_mzs','envelopes','isotope_ambiguous')} if comp.get('isotope_aware') else {}),
         })
     return results
 
@@ -2679,6 +2681,7 @@ def load_sample(path: str = Query(..., description="Path to a supported sample f
         "acq_method": sample.acq_method,
         "acq_info": sample.acq_info,
         "qtof": sample.qtof_info,
+        "isotope_aware_intact": qtof_deconvolution.is_intact_qtof(sample),
         "has_uv": sample.uv_data is not None,
         "has_ms": sample.ms_scans is not None,
         "has_ms_pos": sample.ms_times_pos is not None,
@@ -3209,6 +3212,16 @@ def deconvolute(
         background = _get_sample(normalized_background_path)
         if background.ms_scans is None:
             raise HTTPException(status_code=404, detail="No MS data in background sample")
+
+    if qtof_deconvolution.is_intact_qtof(sample):
+        try:
+            result = qtof_deconvolution.run(sample,start,end,background=background,
+                                            low=low_mw,high=high_mw,minimum_mz=300.)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**result,'background_path':normalized_background_path or None,
+                'reference_filter':sample.qtof_info.get('reference_filter'),
+                'background_reference_filter':(getattr(background,'qtof_info',None) or {}).get('reference_filter')}
 
     centroid_sum = None
     if normalized_mw_algorithm == "centroid" and getattr(sample, 'qtof_info', None) is None:
@@ -4184,9 +4197,16 @@ def export_ion_selection(payload: dict = Body(...)):
     if not isinstance(style, dict):
         style = {}
 
-    mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
+    if qtof_deconvolution.is_intact_qtof(sample):
+        displayed=payload.get('spectrum')
+        if not isinstance(displayed,dict) or displayed.get('representation')!='calibrated centroid sticks':
+            raise HTTPException(status_code=400,detail='Run isotope-aware deconvolution before exporting its ion selection')
+        mz_arr=np.asarray(displayed.get('mz',[]),dtype=float)
+        intensity_arr=np.asarray(displayed.get('intensities',[]),dtype=float)
+    else:
+        mz_arr, intensity_arr = analysis.sum_spectra_in_range(sample, start, end)
     if mz_arr is None or len(mz_arr) == 0:
-        raise HTTPException(status_code=404, detail="Could not sum spectra for selected range")
+        raise HTTPException(status_code=404, detail="Could not obtain spectra for selected range")
 
     fig = plotting.create_ion_selection_figure(mz_arr, intensity_arr, components, style)
     try:
@@ -4299,7 +4319,10 @@ def export_report_pdf(payload: dict = Body(...)):
                 report_mz, report_intensity = report_sum
             else:
                 report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
-            if report_mz is not None and len(report_mz) > 0:
+            if qtof_deconvolution.is_intact_qtof(sample):
+                deconv_results = qtof_deconvolution.run(sample,*deconv_time_range,
+                    low=deconv_parameters['low_mw'],high=deconv_parameters['high_mw'])['components']
+            elif report_mz is not None and len(report_mz) > 0:
                 deconv_results = _run_report_deconvolution(report_mz, report_intensity, deconv_parameters,
                                                           qtof=getattr(sample, 'qtof_info', None) is not None)
     else:
@@ -4324,6 +4347,12 @@ def export_report_pdf(payload: dict = Body(...)):
     with PdfPages(pdf_buffer) as pdf:
         # Page 1: sample info + deconvolution table
         params = _format_deconvolution_parameters_for_report(deconv_parameters)
+        if qtof_deconvolution.is_intact_qtof(sample):
+            params={'Workflow':'Isotope-aware intact (averagine mass estimates)',
+                    'Mass range':params['Mass range'],'Charge range':'2 - 50',
+                    'Isotope tolerance':'10 ppm','Minimum evidence':'4 isotopes; 2 charge states',
+                    'Input':'Calibrated centroids, m/z >= 300; no smoothing',
+                    'Caution':'Alternative isotope assignments may remain'}
         fig_info = plotting.create_report_info_page(
             sample_name=sample.name,
             acq_method=sample.acq_method,
@@ -4394,7 +4423,11 @@ def export_report_pdf(payload: dict = Body(...)):
             plt.close(fig_deconv)
             current_page += 1
 
-            report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
+            if qtof_deconvolution.is_intact_qtof(sample):
+                report_points=qtof_deconvolution.representative_scan(sample,*deconv_time_range)
+                report_mz,report_intensity=report_points[:,0],report_points[:,1]
+            else:
+                report_mz, report_intensity = analysis.sum_spectra_in_range(sample, deconv_time_range[0], deconv_time_range[1])
             if report_mz is not None and len(report_mz) > 0:
                 ion_style = {
                     "fig_width": A4_W - 0.8,
@@ -4438,6 +4471,9 @@ def export_report_pdf(payload: dict = Body(...)):
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if '--isotope-self-test' in sys.argv:
+        print(json.dumps(qtof_deconvolution.smoke_test()))
+        sys.exit(0)
     port = int(os.environ.get("LCMS_PORT", 8741))
     print(f"LC-MS Backend starting on http://localhost:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")

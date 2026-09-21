@@ -7,10 +7,37 @@ from zipfile import ZipFile
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lcms_app'))
-from peptide_mapping import AA, PROTON, WATER, parse_fasta, digest, digest_with_site_search, fragments, match_fragments, analyze, bioconfirm_references
+from peptide_mapping import AA, PROTON, WATER, IAM_DELTA, preparation_modifications, parse_fasta, digest, digest_with_site_search, fragments, match_fragments, analyze, bioconfirm_references
 
 
 class PeptideMappingTests(unittest.TestCase):
+    def test_iam_and_reduction_use_free_cysteine_masses_once(self):
+        chains=parse_fasta('AACCAAR')
+        base=digest(chains,0,[])[0][0]
+        mods,prep=preparation_modifications(chains,[],{'iam':True,'reduced':True})
+        peptide=digest(chains,0,mods)[0][0]
+        self.assertAlmostEqual(peptide['mass']-base['mass'],2*IAM_DELTA)
+        self.assertEqual([m['formula'] for m in mods],['C2H3NO','C2H3NO'])
+        self.assertIn('no extra hydrogen',prep['description'])
+        explicit=preparation_modifications(chains,[mods[0]],{'iam':True})[0]
+        self.assertEqual(len(explicit),2)
+        scan=np.array([[peptide['mass']+PROTON,100.]])
+        result=analyze(self.make_sample([scan]),{'fasta':'AACCAAR','preparation':{'iam':True}})
+        self.assertTrue(result['matches']);self.assertTrue(result['settings']['preparation']['iam'])
+        self.assertFalse(analyze(self.make_sample([scan]),{'fasta':'AACCAAR'})['matches'])
+
+    def test_unreduced_linked_peptides_excluded_not_given_invented_linear_masses(self):
+        chains=parse_fasta('AACCAAR')
+        mods,prep=preparation_modifications(chains,[],{'reduced':False,'iam':True,'disulfides':'A:3-A:4'})
+        self.assertTrue(all(m['delta'] is None for m in mods))
+        self.assertEqual(digest(chains,0,mods),([],1))
+        for prep in [{'reduced':False},{'reduced':False,'disulfides':'A:1-A:4'},
+                     {'reduced':False,'disulfides':'A:3-A:3'},{'reduced':False,'disulfides':'A:3-A:4,A:3-A:4'},
+                     {'iam':'yes'},{'reduced':False,'disulfides':'bad'}]:
+            with self.assertRaises(ValueError):preparation_modifications(chains,[],prep)
+        with self.assertRaisesRegex(ValueError,'conflicts'):
+            preparation_modifications(chains,[{'chain':'A','position':3,'delta':42}],{'iam':True})
+
     def make_sample(self, scans, msms=None):
         survey=SimpleNamespace(metadata=[{'scan_id':i+1,'time':float(i)} for i in range(len(scans))],scans=scans)
         channels={(0,1):survey}

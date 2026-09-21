@@ -1,6 +1,7 @@
 /* One persisted per-run policy for every downstream QTOF analysis. */
 const referenceView = { generation: 0, dirty: false, peptidePath: '', referencePath: '', metadata: {} };
 const REFERENCE_DRAFT_KEY = 'catrupole-reference-refresh-draft';
+const REFERENCE_PEPTIDE_INPUTS = ['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity','peptide-reduction','peptide-disulfides'];
 
 function referencePolicyFromControls() {
   const mode = document.getElementById('reference-masses-mode').value;
@@ -89,7 +90,8 @@ async function referenceApply() {
     // Preserve the user's editable peptide inputs, but never stale analysis results.
     const draft={path:document.getElementById('peptide-sample-select').value, referencePath:path,
       referenceOpen:document.getElementById('reference-masses-panel').open, modifications:peptideView.modifications,
-      values:Object.fromEntries(['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'].map(id=>[id,document.getElementById(id).value]))};
+      iam:document.getElementById('peptide-iam').checked,
+      values:Object.fromEntries(REFERENCE_PEPTIDE_INPUTS.map(id=>[id,document.getElementById(id).value]))};
     sessionStorage.setItem(REFERENCE_DRAFT_KEY,JSON.stringify(draft));
     await api.setReferenceMasses(path,policy);
     // A renderer refresh cancels old requests and clears every result/export cache.
@@ -117,7 +119,9 @@ function initReferenceMasses() {
   try {
     const text=sessionStorage.getItem(REFERENCE_DRAFT_KEY);sessionStorage.removeItem(REFERENCE_DRAFT_KEY);
     if(text){const draft=JSON.parse(text);
-      for(const [id,value] of Object.entries(draft.values||{}))if(['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'].includes(id))document.getElementById(id).value=value;
+      for(const [id,value] of Object.entries(draft.values||{}))if(REFERENCE_PEPTIDE_INPUTS.includes(id))document.getElementById(id).value=value;
+      document.getElementById('peptide-iam').checked=draft.iam===true;
+      document.getElementById('peptide-disulfides-label').hidden=document.getElementById('peptide-reduction').value!=='unreduced';
       peptideView.modifications=Array.isArray(draft.modifications)?draft.modifications:[];
       referenceView.peptidePath=draft.path||'';referenceView.referencePath=draft.referencePath||'';
       document.getElementById('reference-masses-panel').open=draft.referenceOpen===true;peptideRenderLinkages();

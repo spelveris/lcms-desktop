@@ -18,6 +18,8 @@ ISOTOPE = 1.00335483507
 # Unimod 121: epsilon-linked diglycyl remnant after tryptic digestion.
 # https://www.unimod.org/modifications_view.php?editid1=121
 GGISOK_DELTA = 114.04292747
+# Unimod 4: iodoacetamide adds C2H3NO to a free cysteine thiol.
+IAM_DELTA = 57.021463735
 AA = dict(zip('ACDEFGHIKLMNPQRSTVWY', [71.037113805,103.009184505,115.026943065,129.042593135,147.068413945,57.021463735,137.058911875,113.084063975,128.094963015,113.084063975,131.040484645,114.04292747,97.052763875,128.05857754,156.10111105,87.032028435,101.047678505,99.068413945,186.07931298,163.063328575]))
 
 
@@ -40,6 +42,55 @@ def parse_fasta(text):
         if set(seq) - AA.keys():
             raise ValueError('Use standard one-letter amino acids only; add modifications separately')
     return [{'id': chr(65+i), 'name': name, 'sequence': seq} for i, (name, seq) in enumerate(records)]
+
+
+def preparation_modifications(chains, fixed, preparation=None):
+    """Do not add reduction hydrogens twice: residue masses are free thiols.
+
+    Intact disulfide-linked peptides are outside this linear-peptide search.
+    Explicit unreduced cysteine pairs therefore exclude affected candidates.
+    """
+    prep = {} if preparation is None else preparation
+    if not isinstance(prep, dict):
+        raise ValueError('Invalid sample preparation settings')
+    reduced, iam = prep.get('reduced', True), prep.get('iam', False)
+    if not isinstance(reduced, bool) or not isinstance(iam, bool):
+        raise ValueError('Reduction and IAM must be true or false')
+    pairs_text = prep.get('disulfides', '')
+    if not isinstance(pairs_text, str) or len(pairs_text) > 10000:
+        raise ValueError('Enter disulfide pairs as A:3-A:18, A:8-A:25')
+    cysteines = {(c['id'], i) for c in chains for i, aa in enumerate(c['sequence'], 1) if aa == 'C'}
+    paired, pairs = set(), []
+    if not reduced:
+        for token in filter(None, (t.strip() for t in pairs_text.split(','))):
+            match = re.fullmatch(r'([A-Z]):(\d+)\s*-\s*([A-Z]):(\d+)', token)
+            if not match:
+                raise ValueError('Enter disulfide pairs as A:3-A:18, A:8-A:25')
+            a, b = (match[1], int(match[2])), (match[3], int(match[4]))
+            if a == b or a not in cysteines or b not in cysteines or a in paired or b in paired:
+                raise ValueError('Disulfide pairs need two distinct, unused cysteine positions')
+            paired.update((a, b)); pairs.append([list(a), list(b)])
+        if cysteines and not pairs:
+            raise ValueError('Specify the unreduced disulfide pairs, or choose Reduced / free thiols')
+    mods = [dict(m) for m in fixed]
+    existing = {(m['chain'], m['position']): m for m in mods}
+    for chain, position in sorted(cysteines):
+        site = (chain, position)
+        if site not in paired and not iam:
+            continue
+        if site in existing:
+            old = existing[site]
+            if site not in paired and old.get('delta') is not None and abs(float(old['delta'])-IAM_DELTA) < 1e-6 and not old.get('block_cleavage'):
+                continue  # An explicitly entered carbamidomethyl is counted once.
+            raise ValueError(f'Preparation conflicts with the modification at {chain}:C{position}')
+        mods.append({'chain':chain, 'position':position, 'kind':'disulfide' if site in paired else 'iam',
+                     'delta':None if site in paired else IAM_DELTA,
+                     'formula':None if site in paired else 'C2H3NO', 'block_cleavage':False})
+    description = ('Reduced/free cysteines; no extra hydrogen shift.' if reduced else
+                   f'{len(pairs)} unreduced disulfide pairs; peptides containing bonded cysteines are excluded (linked peptides are not searched).')
+    if iam:
+        description += ' IAM: +57.021464 Da per free cysteine (C2H3NO).'
+    return mods, {'reduced':reduced, 'iam':iam, 'disulfides':pairs, 'description':description}
 
 
 def bioconfirm_references(bundle):
@@ -305,6 +356,7 @@ def analyze(sample, payload):
         fixed.append(mod)
     if len(searches) > 1:
         raise ValueError('Use one whole-reference modification search at a time; fixed sites may be combined with it')
+    fixed, preparation = preparation_modifications(chains, fixed, payload.get('preparation'))
     peptides, excluded, searched_sites = digest_with_site_search(chains, missed, fixed, searches)
     if len(peptides) > 20000: raise ValueError('Reference search is too large; use fewer chains')
     masses = np.array([p['mass'] for p in peptides])
@@ -374,6 +426,6 @@ def analyze(sample, payload):
                         'ms1_peak_limit':500, 'ms1_min_relative_intensity':ms1_percent/100,
                         'ms1_min_relative_percent':ms1_percent, 'ms1_min_intensity':ms1_intensity, 'charges':[1,2,3,4,5,6],
                         'searched_modification_sites':searched_sites, 'site_search_evidence':'MS/MS only',
-                        'variable_modifications_per_peptide':1 if searches else 0},
+                        'variable_modifications_per_peptide':1 if searches else 0, 'preparation':preparation},
             'reference_filter':sample.qtof_info.get('reference_filter'),
             'warning':f'Exploratory candidates, not validated identifications; no FDR estimate. MS-only matches are tentative mass compatibility, not sequence or isotope-envelope confirmation: top 500 survey peaks meeting both {ms1_percent:g}% of the reference-filtered scan maximum and {ms1_intensity:g} counts, aggregated across the run with the strongest passing observation shown. These are intensity cutoffs, not signal-to-noise or chromatographic peak detection; persistent background may still pass. Charge and isotope offset are hypotheses. Shared/repeated peptides map to every compatible location and do not identify an individual chain. I/L cannot be distinguished. MS coverage combines unique positions from MS-only and MS/MS candidates; MS/MS coverage requires fragments. Both exclude competing sequences, not alternative sites on the same sequence. Optional site search tests one selected variable remnant per peptide using MS/MS only, not combinations; competing modification sites remain unresolved. Unknown modification masses, intact cross-links and neutral losses are not searched.'}

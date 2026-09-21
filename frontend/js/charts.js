@@ -369,11 +369,16 @@ function getMassSpectrumViewRange(plotEl, mzValues, eventData = null) {
   return [fallbackMin, fallbackMax > fallbackMin ? fallbackMax : fallbackMin + 1];
 }
 
-function getMassSpectrumLabelDecimals(span) {
-  return 1;
+function formatSpectrumMz(value, gridStep = null) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '?';
+  // A declared 0.001 grid contains three decimal places, not raw centroid precision.
+  // Suppress only multiplication noise on that known grid; never round raw values.
+  if (gridStep === 0.001 && Math.abs(number - Math.round(number * 1000) / 1000) < 1e-9) return number.toFixed(3);
+  return String(number);
 }
 
-function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations = [], xRange = null, plotWidthPx = 800) {
+function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations = [], xRange = null, plotWidthPx = 800, gridStep = null) {
   if (!Array.isArray(mzValues) || !Array.isArray(intensities) || mzValues.length !== intensities.length || mzValues.length < 3) {
     return baseAnnotations;
   }
@@ -402,11 +407,9 @@ function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotat
   const minRelativeHeight = span > 500 ? 0.12 : span > 200 ? 0.08 : span > 80 ? 0.05 : 0.03;
   const minPixelSpacing = span > 500 ? 82 : span > 200 ? 62 : span > 80 ? 46 : 30;
   const maxLabels = Math.max(8, Math.min(48, Math.floor(Math.max(360, plotWidthPx) / minPixelSpacing)));
-  const decimals = getMassSpectrumLabelDecimals(span);
   const selectedPositions = (baseAnnotations || [])
-    .map((annotation) => Number(annotation.x))
-    .filter((value) => Number.isFinite(value) && value >= x0 && value <= x1)
-    .map((mz) => ((mz - x0) / span) * plotWidthPx);
+    .filter(annotation => Number.isFinite(Number(annotation.x)) && Number(annotation.x) >= x0 && Number(annotation.x) <= x1)
+    .map(annotation => ({px: ((Number(annotation.x) - x0) / span) * plotWidthPx, width: String(annotation.text || '').length * 5.5}));
 
   const adaptive = [];
   const sorted = candidates
@@ -416,13 +419,14 @@ function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotat
   for (const candidate of sorted) {
     if (adaptive.length >= maxLabels) break;
     const px = ((candidate.mz - x0) / span) * plotWidthPx;
-    if (selectedPositions.some((existingPx) => Math.abs(existingPx - px) < minPixelSpacing)) continue;
-    selectedPositions.push(px);
+    const label = formatSpectrumMz(candidate.mz, gridStep), width = label.length * 5.5;
+    if (selectedPositions.some(existing => Math.abs(existing.px - px) < Math.max(minPixelSpacing, (existing.width + width) / 2 + 8))) continue;
+    selectedPositions.push({px,width});
     const lane = adaptive.length % 3;
     adaptive.push({
       x: candidate.mz,
       y: candidate.intensity,
-      text: candidate.mz.toFixed(decimals),
+      text: label,
       showarrow: false,
       xanchor: 'center',
       yanchor: 'bottom',
@@ -434,7 +438,7 @@ function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotat
   return [...baseAnnotations, ...adaptive];
 }
 
-function bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, baseAnnotations = []) {
+function bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, baseAnnotations = [], gridStep = null) {
   const plot = document.getElementById(divId);
   if (!plot || typeof plot.on !== 'function' || !window.Plotly || typeof window.Plotly.relayout !== 'function') return;
 
@@ -442,7 +446,7 @@ function bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, baseAnnota
     if (plot.__adaptiveMassSpectrumBusy) return;
     const xRange = getMassSpectrumViewRange(plot, mzValues, eventData);
     const plotWidth = Math.max(320, Math.floor(plot.clientWidth || plot.offsetWidth || 800));
-    const annotations = buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations, xRange, plotWidth);
+    const annotations = buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations, xRange, plotWidth, gridStep);
     plot.__adaptiveMassSpectrumBusy = true;
     Promise.resolve(window.Plotly.relayout(plot, { annotations }))
       .catch(() => {})
@@ -1151,6 +1155,8 @@ const charts = {
       x: mzValues, y: intensities,
       type: 'scatter', mode: 'lines', name: options.primaryLabel || 'Spectrum',
       line: { color: options.primaryColor || '#1f77b4', width: getLineWidth() },
+      text: mzValues.map(value => formatSpectrumMz(value, options.mzGridStep)),
+      hovertemplate: 'm/z %{text}<br>Intensity %{y}<extra>%{fullData.name}</extra>',
     }];
     (Array.isArray(options.overlaySpectra) ? options.overlaySpectra : []).forEach((overlay) => {
       if (!overlay || !Array.isArray(overlay.mz) || !Array.isArray(overlay.intensities) || overlay.mz.length === 0) return;
@@ -1160,6 +1166,8 @@ const charts = {
         type: 'scatter',
         mode: 'lines',
         name: overlay.label || 'Overlay',
+        text: overlay.mz.map(value => formatSpectrumMz(value, options.mzGridStep)),
+        hovertemplate: 'm/z %{text}<br>Intensity %{y}<extra>%{fullData.name}</extra>',
         opacity: Number.isFinite(Number(overlay.opacity)) ? Number(overlay.opacity) : 0.35,
         line: {
           color: overlay.color || '#999999',
@@ -1168,6 +1176,13 @@ const charts = {
         },
       });
     });
+    if(options.centroidSticks){
+      for(const trace of traces){
+        const x=[],y=[],text=[];
+        trace.x.forEach((mz,i)=>{x.push(mz,mz,null);y.push(0,trace.y[i],null);text.push(String(mz),String(mz),'');});
+        Object.assign(trace,{x,y,text});
+      }
+    }
     const plotAnnotations = (annotations || []).map(a => ({
       x: a.mz, y: a.intensity,
       text: a.label, showarrow: true, arrowhead: 2, arrowsize: 0.8,
@@ -1215,7 +1230,7 @@ const charts = {
     });
     applyExplicitPlotHeight(divId, plotHeight);
     Plotly.newPlot(divId, traces, layout, PLOT_CONFIG).then(() => {
-      bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, plotAnnotations);
+      bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, plotAnnotations, options.mzGridStep);
     });
   },
 
@@ -1274,11 +1289,11 @@ const charts = {
         type: 'scatter', mode: 'lines',
         line: { color, width: 2.5 },
         showlegend: false,
-        hovertemplate: `Mass: ${c.mass.toFixed(1)} Da<br>Rel. Int: ${relInt.toFixed(1)}%<extra></extra>`,
+        hovertemplate: `Mass: ${c.isotope_aware?String(c.mass):c.mass.toFixed(1)} Da<br>Rel. Int: ${relInt.toFixed(1)}%<extra></extra>`,
       });
 
       // Label above each peak
-      const labelText = c.mass >= 10000 ? c.mass.toFixed(1) : c.mass.toFixed(2);
+      const labelText = c.isotope_aware ? c.mass.toFixed(6) : c.mass >= 10000 ? c.mass.toFixed(1) : c.mass.toFixed(2);
       annotations.push({
         x: mKDa, y: relInt,
         text: labelText,
@@ -1343,6 +1358,25 @@ const charts = {
   },
 
   plotDenseDeconvolutedMassProfile(divId, spectrum, options = {}) {
+    if(Array.isArray(spectrum?.isotope_profile)){
+      const peaks=spectrum.isotope_profile,style=options.style||{},x=[],y=[],text=[];
+      const maximum=Math.max(0,...peaks.map(p=>p.intensity));
+      for(const p of peaks){
+        x.push(p.mass,p.mass,null);y.push(0,maximum>0?p.intensity/maximum*100:0,null);
+        const label=`Derived mass ${p.mass} Da<br>Measured m/z ${p.mz}<br>z=${p.charge} · scan ${p.scan_id}`;
+        text.push(label,label,'');
+      }
+      const height=getContainerHeight(divId,Number(options.height)||340);
+      applyExplicitPlotHeight(divId,height);
+      Plotly.newPlot(divId,[{x,y,text,type:'scatter',mode:'lines',line:{color:'#000000',width:.8},hovertemplate:'%{text}<br>%{y:.2f}%<extra></extra>'}],mergeLayout({
+        title:{text:style.deconv_show_title===false?'':'Measured isotopes',font:{size:14}},
+        xaxis:{title:'Neutral isotope mass (Da)',range:[finiteNumber(style.deconv_x_min_da,1000),finiteNumber(style.deconv_x_max_da,50000)],automargin:true,showgrid:false},
+        yaxis:{title:'Relative intensity (%)',range:[0,105],automargin:true,showgrid:false},showlegend:false,height,
+        margin:{l:64,r:44,t:40,b:66},
+        annotations:peaks.length?[]:[{xref:'paper',yref:'paper',x:.5,y:.5,text:'No supported isotope envelopes',showarrow:false}],
+      }),PLOT_CONFIG);
+      return;
+    }
     const style = options.style || {};
     let massMinDa = finiteNumber(style.deconv_x_min_da ?? options.massMinDa, 1000.0);
     let massMaxDa = finiteNumber(style.deconv_x_max_da ?? options.massMaxDa, 50000.0);
@@ -1444,7 +1478,7 @@ const charts = {
       type: 'bar', marker: { color: '#215CAF' }, name: 'Observed',
       hovertemplate: charges.map((z, i) => {
         const theo = (component.mass + z * PROTON) / z;
-        return `z=${z}<br>m/z obs: ${mzs[i] ? mzs[i].toFixed(2) : '?'}<br>m/z theo: ${theo.toFixed(2)}<br>Int: ${intensities[i] ? intensities[i].toFixed(0) : '?'}`;
+        return `z=${z}<br>m/z obs: ${mzs[i] ? formatSpectrumMz(mzs[i]) : '?'}<br>m/z theo: ${formatSpectrumMz(theo)}<br>Int: ${intensities[i] ? intensities[i].toFixed(0) : '?'}`;
       }),
     }];
     const layout = mergeLayout({
@@ -1511,15 +1545,26 @@ const charts = {
         xaxis: xRef,
         yaxis: yRef,
         line: { color: '#cfcfcf', width: 0.8 },
-        hovertemplate: 'm/z %{x:.2f}<br>Intensity %{y:.3e}<extra></extra>',
+        text: mzPlot.map(value => formatSpectrumMz(value, options.mzGridStep)),
+        hovertemplate: 'm/z %{text}<br>Intensity %{y:.3e}<extra></extra>',
         showlegend: false,
       });
+      if(comp.isotope_aware){
+        const base=traces[traces.length-1],x=[],y=[],text=[];
+        mzPlot.forEach((value,k)=>{x.push(value,value,null);y.push(0,intPlot[k],null);text.push(String(value),String(value),'');});
+        Object.assign(base,{x,y,text});
+        for(const env of comp.envelopes||[]){
+          const ex=[],ey=[],et=[];
+          for(const [value,intensity] of env.envelope){ex.push(value,value,null);ey.push(0,intensity,null);et.push(`m/z ${value} · z=${env.charge} · scan ${env.scan_id}`,`m/z ${value} · z=${env.charge} · scan ${env.scan_id}`,'');}
+          traces.push({x:ex,y:ey,text:et,type:'scatter',mode:'lines',xaxis:xRef,yaxis:yRef,line:{color,width:1},hovertemplate:'%{text}<br>%{y}<extra></extra>',showlegend:false});
+        }
+      }
 
       const ionX = [];
       const ionY = [];
       const ionText = [];
       ionMzs.forEach((mzIon, k) => {
-        const yIon = interpAt(mzPlot, intPlot, mzIon);
+        const yIon = comp.isotope_aware ? Math.max(0,...(comp.envelopes||[]).flatMap(e=>e.envelope.filter(p=>p[0]===mzIon).map(p=>p[1]))) : interpAt(mzPlot, intPlot, mzIon);
         traces.push({
           x: [mzIon, mzIon],
           y: [0, yIon],
@@ -1528,7 +1573,7 @@ const charts = {
           xaxis: xRef,
           yaxis: yRef,
           line: { color, width: 1.6 },
-          hovertemplate: `m/z ${mzIon.toFixed(2)}<extra></extra>`,
+          hovertemplate: `m/z ${formatSpectrumMz(mzIon)}<extra></extra>`,
           showlegend: false,
         });
         ionX.push(mzIon);
@@ -1542,19 +1587,20 @@ const charts = {
           x: ionX,
           y: ionY,
           text: ionText,
+          customdata: ionX.map(value => formatSpectrumMz(value)),
           type: 'scatter',
           mode: 'text',
           xaxis: xRef,
           yaxis: yRef,
           textposition: 'top center',
           textfont: { size: 8, color },
-          hovertemplate: '%{text}<br>m/z %{x:.2f}<extra></extra>',
+          hovertemplate: '%{text}<br>m/z %{customdata}<extra></extra>',
           showlegend: false,
         });
       }
 
       const massVal = Number(comp.mass || 0);
-      const massText = massVal >= 10000 ? massVal.toFixed(1) : massVal.toFixed(2);
+      const massText = comp.isotope_aware ? massVal.toFixed(6) : massVal >= 10000 ? massVal.toFixed(1) : massVal.toFixed(2);
       const chargeStates = Array.isArray(comp.charge_states) ? comp.charge_states.filter(Number.isFinite) : [];
       const chargeText = chargeStates.length > 1
         ? `z=${Math.min(...chargeStates)}-${Math.max(...chargeStates)}`

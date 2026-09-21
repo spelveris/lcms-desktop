@@ -85,7 +85,7 @@ class PeptideExportTests(unittest.TestCase):
         fig=next(spectrum_figures(payload));fig.canvas.draw()
         renderer=fig.canvas.get_renderer()
         positions=[text for text in fig.texts if text.get_text().isdigit()]
-        labels=[text for text in fig.texts if text.get_text().startswith('b')]
+        labels=[text for text in fig.texts if (text.get_gid() or '').startswith('peptide-ion-b-')]
         self.assertEqual(len(positions),70)
         self.assertEqual(len(labels),8)
         for label in labels:
@@ -93,6 +93,54 @@ class PeptideExportTests(unittest.TestCase):
             self.assertTrue(fig.bbox.contains(box.x0,box.y0))
             self.assertTrue(fig.bbox.contains(box.x1,box.y1))
             self.assertFalse(any(box.overlaps(pos.get_window_extent(renderer)) for pos in positions))
+
+    def test_pdf_ladder_matches_app_colours_directions_subscripts_and_superscripts(self):
+        payload=spectrum_payload();payload['row']['modifications']=[{'residue':9,'delta':114.04292747,'kind':'gg'}]
+        pages=list(spectrum_figures(payload))
+        for fig in pages:
+            texts={text.get_gid():text for text in fig.texts if text.get_gid()}
+            lines={line.get_gid():line for line in fig.artists}
+            for ion in payload['row']['fragments']:
+                series=ion['ion'][0];number=int(ion['ion'][1:-1]);bond=ion['bond']
+                label=texts[f'peptide-ion-{series}-{number}-1'];residue=texts[f'peptide-residue-{bond}']
+                self.assertIn(f'_{{{number}}}^{{+1}}',label.get_text())
+                self.assertEqual(label.get_color(),'#3750aa' if series=='b' else '#e52a2a')
+                self.assertEqual(label.get_position()[1]<residue.get_position()[1],series=='b')
+                line=lines[f'peptide-cut-{series}-{bond}'];xs,ys=line.get_data()
+                self.assertEqual(xs[0],xs[1])
+                self.assertEqual(xs[2]<xs[1],series=='b')
+                self.assertEqual(ys[2]<ys[1],series=='b')
+            self.assertEqual(texts['peptide-residue-9'].get_color(),'#c52b2b')
+            self.assertEqual(texts['peptide-modification-9'].get_text(),'*')
+            self.assertFalse(any('Candidate assignments, not validated identifications' in text.get_text() for text in fig.texts))
+
+    def test_blue_ladder_label_boxes_do_not_touch_cut_lines(self):
+        payload=spectrum_payload()
+        payload['row']['fragments'] += [{**ion,'ion':ion['ion'][:-1]+'^2+'} for ion in payload['row']['fragments'] if ion['ion'].startswith('b')]
+        for fig in spectrum_figures(payload):
+            fig.canvas.draw();renderer=fig.canvas.get_renderer()
+            lines={line.get_gid():line for line in fig.artists}
+            for label in fig.texts:
+                if not (label.get_gid() or '').startswith('peptide-ion-b-'): continue
+                bond=label.get_gid().split('-')[3]
+                line=lines[f'peptide-cut-b-{bond}']
+                line_points=line.get_transform().transform(np.column_stack(line.get_data()))
+                self.assertLess(label.get_window_extent(renderer).y1, line_points[:,1].min()-1)
+
+    def test_coverage_modifications_keep_red_residues_and_ambiguous_site_marks(self):
+        chain={'id':'A','sequence':'PEPTIDER','percent':100,'positions':list(range(1,9)),
+               'modification_sites':[{'position':3,'ambiguous':False},{'position':5,'ambiguous':True}]}
+        fig=next(coverage_figures({'chains':[chain]}))
+        texts={text.get_gid():text for text in fig.texts if text.get_gid()}
+        self.assertEqual(texts['coverage-residue-3'].get_color(),'#c52b2b')
+        self.assertEqual(texts['coverage-residue-5'].get_color(),'#c52b2b')
+        self.assertEqual(texts['coverage-residue-4'].get_color(),'#222222')
+        self.assertTrue(any(line.get_gid()=='coverage-site-unresolved-5' for line in fig.artists))
+        for bad in [None,[{'position':0,'ambiguous':False}],[{'position':True,'ambiguous':False}],
+                    [{'position':9,'ambiguous':False}],[{'position':3,'ambiguous':'false'}],
+                    [{'position':3,'ambiguous':False}]*2]:
+            with self.subTest(bad=bad),self.assertRaises(ValueError):
+                list(coverage_figures({'chains':[{**chain,'modification_sites':bad}]}))
 
 
 class FormulaAndSiteTests(unittest.TestCase):
