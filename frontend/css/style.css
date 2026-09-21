@@ -2301,3 +2301,15 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   font-size: 13px;
   font-style: italic;
 }
+.reference-masses-panel {
+  margin: 8px 0 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #d4dce7);
+  border-radius: 6px;
+}
+.reference-masses-panel summary { cursor: pointer; font-size: 13px; }
+.reference-masses-panel summary span { font-weight: normal; color: #748094; margin-left: 8px; }
+.reference-masses-panel[open] summary { margin-bottom: 10px; }
+.reference-masses-panel [hidden] { display: none !important; }
+.reference-masses-detections { overflow-x: auto; }
+.reference-masses-detections td, .reference-masses-detections th { padding: 4px 10px; font-size: 12px; text-align: left; }

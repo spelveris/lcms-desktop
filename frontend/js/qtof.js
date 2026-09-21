@@ -4,6 +4,7 @@ const qtofViewer = { path: '', polarity: 'positive', scans: null, generation: 0 
 function qtofSyncSamples(files, metadata) {
   const eligible = files.filter(file => metadata[file.path]?.qtof?.is_protein_digest === true);
   peptideSyncSamples(eligible);
+  if (typeof referenceSyncSamples === 'function') referenceSyncSamples(files, metadata);
   const select = document.getElementById('qtof-sample-select');
   const previous = select.value;
   select.replaceChildren();

@@ -94,9 +94,45 @@ def digest(chains, missed, modifications):
                     masses = np.array([AA[a] for a in seq])
                     for pos, delta in shifts: masses[pos] += delta
                     peptides[key] = {'sequence': seq, 'residue_masses': masses, 'mass': float(masses.sum()+WATER), 'locations': [],
-                                     'modifications': [{'residue': pos+1, 'delta': delta} for pos, delta in shifts]}
+                                     'modifications': [{'residue': m['position']-start, 'delta': m['delta'],
+                                                        'variable': bool(m.get('variable'))} for m in sorted(local, key=lambda m:m['position'])]}
                 peptides[key]['locations'].append({'chain': chain['id'], 'start': start+1, 'end': end})
     return list(peptides.values()), excluded
+
+
+def digest_with_site_search(chains, missed, fixed, searches):
+    """One variable remnant per peptide; enumerate sites, never assume localization."""
+    peptides, excluded = digest(chains, missed, fixed)
+    if not searches:
+        return peptides, excluded, 0
+    search = searches[0]
+    sites = [(chain, position) for chain in chains if search['chain'] in {'*', chain['id']}
+             for position, aa in enumerate(chain['sequence'], 1)
+             if (search['residues'] == '*' or aa in search['residues'])
+             and not any(m['chain'] == chain['id'] and m['position'] == position for m in fixed)]
+    if not sites:
+        raise ValueError('No eligible unmodified residues for the whole-reference site search')
+    if len(sites) > 400:
+        raise ValueError('Site search exceeds 400 positions; choose one chain or narrower residue types')
+    combined = {peptide_signature(p): p for p in peptides}
+    for chain, position in sites:
+        variant = {**search, 'chain': chain['id'], 'position': position, 'variable': True}
+        candidates, _ = digest([chain], missed, [*fixed, variant])
+        for candidate in candidates:
+            if not any(mod['variable'] for mod in candidate['modifications']):
+                continue
+            key = peptide_signature(candidate)
+            if key not in combined:
+                combined[key] = candidate
+            else:
+                for old, new in zip(combined[key]['modifications'], candidate['modifications']):
+                    old['variable'] = old.get('variable', False) or new.get('variable', False)
+                for location in candidate['locations']:
+                    if location not in combined[key]['locations']:
+                        combined[key]['locations'].append(location)
+            if len(combined) > 20000:
+                raise ValueError('Site search exceeds 20,000 peptide candidates; narrow the search')
+    return list(combined.values()), excluded, len(sites)
 
 
 def fragments(masses, max_charge):
@@ -174,6 +210,9 @@ def match_ms1(channel, peptides, supported, ppm):
                     'precursor_error_ppm': float((scan[index, 0]-predicted[j])/predicted[j]*1e6),
                     'precursor_intensity': float(scan[index, 1]), 'matched_ions': 0, 'matched_bonds': 0,
                     'explained_intensity_pct': None, 'fragments': [], 'ambiguous_scan': len(alternatives) > 1,
+                    'sequence_ambiguous': len({sig[0] for sig in alternatives}) > 1,
+                    'site_ambiguous': len({sig for sig in alternatives if sig[0] == peptide['sequence']}) > 1,
+                    'site_search': any(m.get('variable') for m in peptide['modifications']),
                     'observation_count': 1, 'time_start': meta['time'], 'time_end': meta['time'],
                 }
                 previous = best.get(key)
@@ -182,9 +221,12 @@ def match_ms1(channel, peptides, supported, ppm):
                     count = previous['observation_count'] + (previous['_last_scan'] != meta['scan_id'])
                     first_time, last_time = min(previous['time_start'], meta['time']), max(previous['time_end'], meta['time'])
                     ambiguous = previous['ambiguous_scan'] or hit['ambiguous_scan']
+                    sequence_ambiguous = previous['sequence_ambiguous'] or hit['sequence_ambiguous']
+                    site_ambiguous = previous['site_ambiguous'] or hit['site_ambiguous']
                     if previous['precursor_intensity'] > hit['precursor_intensity']:
                         hit = previous
-                    hit.update(observation_count=count, time_start=first_time, time_end=last_time, ambiguous_scan=ambiguous)
+                    hit.update(observation_count=count, time_start=first_time, time_end=last_time, ambiguous_scan=ambiguous,
+                               sequence_ambiguous=sequence_ambiguous, site_ambiguous=site_ambiguous)
                 hit['_last_scan'] = meta['scan_id']
                 best[key] = hit
                 if len(best) > 20000:
@@ -201,15 +243,32 @@ def analyze(sample, payload):
     if channel is None and survey is None: raise ValueError('No acquired positive-ion MS or MS/MS scans in this run')
     chains = parse_fasta(payload.get('fasta', ''))
     missed = int(payload.get('missed_cleavages', 2))
-    precursor_ppm, fragment_ppm = float(payload.get('precursor_ppm', 10)), float(payload.get('fragment_ppm', 50))
+    precursor_ppm, fragment_ppm = float(payload.get('precursor_ppm', 10)), float(payload.get('fragment_ppm', 20))
     if not 0 <= missed <= 3 or not 1 <= precursor_ppm <= 50 or not 1 <= fragment_ppm <= 100:
         raise ValueError('Use 0–3 missed cleavages, 1–50 precursor ppm and 1–100 fragment ppm')
     modifications = payload.get('modifications', [])
     if not isinstance(modifications, list) or len(modifications) > 100: raise ValueError('Too many modifications')
     if any(not isinstance(mod, dict) for mod in modifications): raise ValueError('Invalid modification definition')
     modifications = [dict(mod) for mod in modifications]
-    seen = set()
+    seen, fixed, searches = set(), [], []
     for mod in modifications:
+        if not isinstance(mod.get('search_all', False), bool):
+            raise ValueError('Site search must be true or false')
+        if mod.get('search_all'):
+            if mod.get('chain') not in {'*', *(c['id'] for c in chains)}:
+                raise ValueError('Select a reference chain for the site search')
+            if mod.get('kind') == 'gg':
+                mod.update(delta=GGISOK_DELTA, block_cleavage=True, residues='K')
+            residues = str(mod.get('residues', 'K')).strip().upper()
+            if not residues or (residues != '*' and set(residues)-AA.keys()):
+                raise ValueError('Use amino-acid letters or * for eligible site-search residues')
+            mod['residues'] = residues
+            delta = mod.get('delta')
+            if delta is None or not np.isfinite(float(delta)) or not 0 < abs(float(delta)) <= 2000:
+                raise ValueError('A site search needs a known nonzero modification mass shift')
+            mod['delta'] = float(delta)
+            searches.append(mod)
+            continue
         chain = next((c for c in chains if c['id'] == mod.get('chain')), None)
         raw_position = mod.get('position', 0)
         pos = int(raw_position); delta = mod.get('delta')
@@ -227,7 +286,10 @@ def analyze(sample, payload):
         if delta is not None:
             mod['delta'] = float(delta)
             if not np.isfinite(mod['delta']) or abs(mod['delta']) > 2000: raise ValueError('Invalid modification mass shift')
-    peptides, excluded = digest(chains, missed, modifications)
+        fixed.append(mod)
+    if len(searches) > 1:
+        raise ValueError('Use one whole-reference modification search at a time; fixed sites may be combined with it')
+    peptides, excluded, searched_sites = digest_with_site_search(chains, missed, fixed, searches)
     if len(peptides) > 20000: raise ValueError('Reference search is too large; use fewer chains')
     masses = np.array([p['mass'] for p in peptides])
     rows = []
@@ -256,6 +318,9 @@ def analyze(sample, payload):
             if signature in signatures: continue
             signatures.add(signature)
             hit['ambiguous_scan'] = len({(h['sequence'], tuple((m['residue'],m['delta']) for m in h['modifications'])) for h in hits}) > 1
+            hit['sequence_ambiguous'] = len({h['sequence'] for h in hits}) > 1
+            hit['site_ambiguous'] = len({peptide_signature(h) for h in hits if h['sequence'] == hit['sequence']}) > 1
+            hit['site_search'] = any(m.get('variable') for m in hit['modifications'])
             rows.append(hit)
     # "MS-only" means there is no fragment-supported assignment for this
     # sequence/modification anywhere in this run, including competing MS/MS hits.
@@ -264,13 +329,22 @@ def analyze(sample, payload):
     rows.sort(key=lambda r:(r['time'],r['scan_id']))
     coverage = []
     for chain in chains:
-        positions = set()
+        positions, ms_positions, ms_only_positions = set(), set(), set()
         for row in rows:
-            if row['ambiguous_scan'] or row['evidence'] != 'msms': continue
+            if row.get('sequence_ambiguous', row['ambiguous_scan']): continue
             for loc in row['locations']:
-                if loc['chain'] == chain['id']: positions.update(range(loc['start'],loc['end']+1))
-        coverage.append({**chain,'positions':sorted(positions),'percent':len(positions)/len(chain['sequence'])*100})
+                if loc['chain'] != chain['id']: continue
+                covered = range(loc['start'],loc['end']+1)
+                ms_positions.update(covered)
+                (positions if row['evidence'] == 'msms' else ms_only_positions).update(covered)
+        coverage.append({**chain,'positions':sorted(positions),'percent':len(positions)/len(chain['sequence'])*100,
+                         'ms_positions':sorted(ms_positions), 'ms_only_positions':sorted(ms_only_positions),
+                         'ms_percent':len(ms_positions)/len(chain['sequence'])*100,
+                         'msms_percent':len(positions)/len(chain['sequence'])*100,
+                         'ms_only_percent':len(ms_only_positions)/len(chain['sequence'])*100})
     return {'coverage': coverage, 'matches': rows, 'candidate_peptides':len(peptides), 'excluded_modified_peptides':excluded,
             'settings':{'enzyme':'Trypsin (not before P)', 'missed_cleavages':missed, 'precursor_ppm':precursor_ppm, 'fragment_ppm':fragment_ppm,
-                        'ms1_peak_limit':500, 'ms1_min_relative_intensity':.01, 'charges':[1,2,3,4,5,6]},
-            'warning':'Exploratory candidates, not validated identifications; no FDR estimate. MS-only matches are tentative mass compatibility, not sequence or isotope-envelope confirmation: top 500 survey peaks above 1% per scan, aggregated across the run with the strongest observation shown. Charge and isotope offset are hypotheses, not independently measured assignments. Shared/repeated peptides map to every compatible location and do not identify an individual chain. I/L cannot be distinguished. MS/MS coverage excludes competing sequence assignments and all MS-only matches. Unknown modifications, cross-links, neutral losses and variable modifications are not searched.'}
+                        'ms1_peak_limit':500, 'ms1_min_relative_intensity':.01, 'charges':[1,2,3,4,5,6],
+                        'searched_modification_sites':searched_sites, 'variable_modifications_per_peptide':1 if searches else 0},
+            'reference_filter':sample.qtof_info.get('reference_filter'),
+            'warning':'Exploratory candidates, not validated identifications; no FDR estimate. MS-only matches are tentative mass compatibility, not sequence or isotope-envelope confirmation: top 500 survey peaks above 1% per scan, aggregated across the run with the strongest observation shown. Charge and isotope offset are hypotheses. Shared/repeated peptides map to every compatible location and do not identify an individual chain. I/L cannot be distinguished. MS coverage combines unique positions from MS-only and MS/MS candidates; MS/MS coverage requires fragments. Both exclude competing sequences, not alternative sites on the same sequence. Optional site search tests one selected variable remnant per peptide, not combinations; competing modification sites remain unresolved, and mass-only matches cannot localize a site. Unknown modification masses, intact cross-links and neutral losses are not searched.'}

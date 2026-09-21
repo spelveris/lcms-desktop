@@ -61,6 +61,7 @@ from data_reader import (
 from search_index import record_transferred_sample, search_shared_index, write_complete_index
 import analysis
 import config as lcms_config
+from reference_masses import filter_sample, normalize_policy, ReferenceSettingsStore
 
 # ---------------------------------------------------------------------------
 # App
@@ -83,6 +84,8 @@ app.add_middleware(
 # In-memory cache of loaded samples  {folder_path: SampleData}
 _sample_cache: dict[str, SampleData] = {}
 _sample_cache_state: dict[str, str] = {}
+_reference_view_cache = {}
+_reference_store = None
 RUN_SETTLE_SECONDS = 120
 WASH_POSITIONS = {91}
 DEFAULT_DECONV_MIN_INPUT_MZ = 100.0
@@ -633,7 +636,7 @@ def _sample_cache_token(run_state: dict) -> str:
     return f"{latest:.6f}|{completion_source}|{cacheable}"
 
 
-def _get_sample(folder_path: str) -> SampleData:
+def _get_raw_sample(folder_path: str) -> SampleData:
     """Load sample with caching."""
     normalized_path = _normalize_filesystem_path(folder_path)
     run_state = _inspect_sample_run_state(normalized_path)
@@ -657,6 +660,70 @@ def _get_sample(folder_path: str) -> SampleData:
         _sample_cache_state[normalized_path] = cache_token
 
     return sample
+
+
+def _reference_settings():
+    global _reference_store
+    if _reference_store is None:
+        _reference_store = ReferenceSettingsStore(_app_user_data_dir() / 'reference-masses.json')
+    return _reference_store
+
+
+def _get_sample(folder_path: str) -> SampleData:
+    """All analysis/export endpoints share one non-destructive reference policy."""
+    sample = _get_raw_sample(folder_path)
+    if getattr(sample, 'qtof_info', None) is None:
+        return sample
+    path = _normalize_filesystem_path(folder_path)
+    try:
+        policy = _reference_settings().get(path)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=f'Cannot read reference settings: {exc}') from exc
+    signature = json.dumps(policy, sort_keys=True)
+    cached = _reference_view_cache.get(path)
+    if cached is not None and cached[0] is sample and cached[1] == signature:
+        return cached[2]
+    view = filter_sample(sample, policy)
+    if len(_reference_view_cache) >= 16:
+        _reference_view_cache.pop(next(iter(_reference_view_cache)))
+    _reference_view_cache[path] = (sample, signature, view)
+    return view
+
+
+@app.get('/api/reference-masses')
+def reference_masses(path: str = Query(...)):
+    sample = _get_sample(path)
+    if getattr(sample, 'qtof_info', None) is None:
+        raise HTTPException(status_code=422, detail='Reference-ion exclusion requires supported QTOF data')
+    return sample.qtof_info['reference_filter']
+
+
+@app.post('/api/reference-masses')
+def set_reference_masses(payload: dict = Body(...)):
+    path = _normalize_filesystem_path(str(payload.get('path', '')))
+    sample = _get_raw_sample(path)
+    if getattr(sample, 'qtof_info', None) is None:
+        raise HTTPException(status_code=422, detail='Reference-ion exclusion requires supported QTOF data')
+    try:
+        policy = normalize_policy(payload.get('policy'))
+        # Verify the new view before saving any preferences.
+        view = filter_sample(sample, policy)
+        _reference_settings().set(path, policy)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reference_view_cache.pop(path, None)
+    return view.qtof_info['reference_filter']
+
+
+@app.post('/api/reference-masses/preview')
+def preview_reference_masses(payload: dict = Body(...)):
+    sample = _get_raw_sample(_normalize_filesystem_path(str(payload.get('path', ''))))
+    if getattr(sample, 'qtof_info', None) is None:
+        raise HTTPException(status_code=422, detail='Reference-ion detection requires supported QTOF data')
+    try:
+        return filter_sample(sample, normalize_policy(payload.get('policy'))).qtof_info['reference_filter']
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _coerce_float(value, default: float) -> float:
@@ -3250,6 +3317,8 @@ def deconvolute(
         "effective_max_charge": effective_max_charge,
         "mw_algorithm": normalized_mw_algorithm,
         "spectrum_source": spectrum_source,
+        "reference_filter": (getattr(sample, 'qtof_info', None) or {}).get('reference_filter'),
+        "background_reference_filter": (getattr(background, 'qtof_info', None) or {}).get('reference_filter'),
     }
 
 
@@ -3324,6 +3393,7 @@ def clear_cache():
     """Clear the sample cache."""
     _sample_cache.clear()
     _sample_cache_state.clear()
+    _reference_view_cache.clear()
     return {"status": "cleared"}
 
 

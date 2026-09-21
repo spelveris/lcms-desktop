@@ -346,6 +346,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initSingleSample();
   initQtofViewer();
   initPeptideMapping();
+  initReferenceMasses();
   initBackgroundSubtraction();
   initProgression();
   initUptakeAssayCC();
@@ -8903,6 +8904,8 @@ function renderReportSummary() {
 function exportSessionJSON() {
   const payload = {
     exported_at: new Date().toISOString(),
+    reference_ion_exclusions: Object.fromEntries(Object.entries(state.loadedSamples)
+      .filter(([,meta])=>meta.qtof?.reference_filter).map(([path,meta])=>[path,meta.qtof.reference_filter])),
     selected_files: state.selectedFiles,
     mz_targets: state.mzTargets,
     analyses: {

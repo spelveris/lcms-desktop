@@ -7,7 +7,7 @@ from zipfile import ZipFile
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lcms_app'))
-from peptide_mapping import AA, PROTON, WATER, parse_fasta, digest, fragments, match_fragments, analyze, bioconfirm_references
+from peptide_mapping import AA, PROTON, WATER, parse_fasta, digest, digest_with_site_search, fragments, match_fragments, analyze, bioconfirm_references
 
 
 class PeptideMappingTests(unittest.TestCase):
@@ -35,6 +35,77 @@ class PeptideMappingTests(unittest.TestCase):
         row=rows[0];self.assertEqual(row['scan_id'],2);self.assertEqual(row['observation_count'],3)
         self.assertEqual((row['time_start'],row['time_end']),(0.,2.))
         self.assertEqual(row['precursor_mz'],scans[1][0,0]);self.assertAlmostEqual(row['precursor_error_ppm'],2.)
+
+    def test_fragment_default_is_20_ppm_but_can_be_widened_explicitly(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        scan=np.array(sorted((mass*(1+30e-6),100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))
+        msms=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':peptide['mass']+PROTON}],scans=[scan])
+        sample=self.make_sample([],msms)
+        result=analyze(sample,{'fasta':'PEPTIDER'})
+        self.assertEqual(result['settings']['fragment_ppm'],20)
+        self.assertEqual(result['matches'],[])
+        self.assertTrue(analyze(sample,{'fasta':'PEPTIDER','fragment_ppm':50})['matches'])
+
+    def test_ms_and_msms_coverage_are_distinct_unique_residue_unions(self):
+        fasta='AAAAAKGGGGGR'
+        peptides=digest(parse_fasta(fasta),0,[])[0]
+        first,second=peptides
+        msms=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':first['mass']+PROTON}],
+            scans=[np.array(sorted((mass,100.) for _,mass,_ in fragments(first['residue_masses'],1)))])
+        sample=self.make_sample([np.array([[second['mass']+PROTON,100.]])]*3,msms)
+        result=analyze(sample,{'fasta':fasta,'missed_cleavages':0})
+        coverage=result['coverage'][0]
+        self.assertEqual(coverage['ms_percent'],100)
+        self.assertEqual(coverage['msms_percent'],50)
+        self.assertEqual(coverage['ms_only_percent'],50)
+        self.assertEqual(len(coverage['ms_positions']),12)
+
+    def test_site_search_finds_gg_on_lysine_without_a_written_position(self):
+        fasta='LIFAGKQLEDGR'
+        fixed={'chain':'A','position':6,'delta':114.04292747,'block_cleavage':True}
+        peptide=digest(parse_fasta(fasta),0,[fixed])[0][0]
+        sample=self.make_sample([np.array([[peptide['mass']+PROTON,100.]])])
+        search={'chain':'A','search_all':True,'kind':'gg','position':1,'delta':0}
+        result=analyze(sample,{'fasta':fasta,'modifications':[search],'missed_cleavages':0})
+        self.assertEqual(result['settings']['searched_modification_sites'],1)
+        hits=[r for r in result['matches'] if any(m.get('variable') for m in r['modifications'])]
+        self.assertEqual(len(hits),1);self.assertEqual(hits[0]['modifications'][0]['residue'],6)
+        self.assertTrue(hits[0]['site_search']);self.assertEqual(search['position'],1)
+
+    def test_mass_only_cannot_localize_competing_sites_but_sequence_coverage_is_counted_once(self):
+        fasta='AAKAAKAAAAR';chains=parse_fasta(fasta)
+        search={'chain':'A','residues':'K','delta':114.04292747,'block_cleavage':True}
+        peptides,_,_=digest_with_site_search(chains,3,[],[search])
+        candidates=[p for p in peptides if p['sequence']==fasta and any(m['variable'] for m in p['modifications'])]
+        self.assertEqual({p['modifications'][0]['residue'] for p in candidates},{3,6})
+        mass=candidates[0]['mass']
+        result=analyze(self.make_sample([np.array([[(mass+2*PROTON)/2,100.]])]),
+            {'fasta':fasta,'missed_cleavages':3,'modifications':[{**search,'kind':'gg','search_all':True}]})
+        hits=[r for r in result['matches'] if r['sequence']==fasta]
+        self.assertEqual(len(hits),2)
+        self.assertTrue(all(r['site_ambiguous'] and r['ambiguous_scan'] and not r['sequence_ambiguous'] for r in hits))
+        self.assertEqual(result['coverage'][0]['ms_percent'],100)
+        self.assertEqual(result['coverage'][0]['msms_percent'],0)
+
+    def test_custom_site_search_uses_selected_residues_all_chains_and_respects_fixed_sites(self):
+        chains=parse_fasta('>one\nAAAAAKSTAAAR\n>two\nAAAAAKSTAAAR')
+        fixed=[{'chain':'A','position':7,'delta':57.,'block_cleavage':False}]
+        search={'chain':'*','residues':'ST','delta':42.010565,'block_cleavage':False}
+        candidates,_,count=digest_with_site_search(chains,1,fixed,[search])
+        self.assertEqual(count,3)
+        for candidate in candidates:
+            for mod in candidate['modifications']:
+                if mod['variable']:self.assertIn(candidate['sequence'][mod['residue']-1],'ST')
+
+    def test_site_search_rejects_unknown_chemistry_invalid_residues_and_combinatorial_requests(self):
+        sample=self.make_sample([])
+        valid={'chain':'A','kind':'gg','search_all':True}
+        for modifications in [[{'chain':'A','search_all':True,'delta':None}],
+                              [{'chain':'A','search_all':True,'delta':42.,'residues':'?'}],
+                              [valid,valid]]:
+            with self.assertRaises(ValueError):analyze(sample,{'fasta':'AAAAAK','modifications':modifications})
+        with self.assertRaisesRegex(ValueError,'400'):
+            analyze(sample,{'fasta':'AK'*401,'modifications':[valid]})
 
     def test_ms1_ppm_noise_filters_and_sequence_ambiguity(self):
         mass=digest(parse_fasta('PEPTIDER'),0,[])[0][0]['mass']

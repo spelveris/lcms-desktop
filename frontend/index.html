@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.55">
+  <link rel="stylesheet" href="css/style.css?v=0.2.56">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -219,6 +219,34 @@
       <button class="tab-btn" data-tab="tab-run-router">Transfer Router</button>
     </nav>
 
+    <details id="reference-masses-panel" class="reference-masses-panel" hidden>
+      <summary>QTOF reference ions <span id="reference-masses-summary"></span></summary>
+      <div class="tab-toolbar">
+        <label>Sample <select id="reference-masses-sample"></select></label>
+        <label>Exclude <select id="reference-masses-mode">
+          <option value="auto">Auto — active acquisition references</option>
+          <option value="922">HP-0921 · 922.009798 (+)</option>
+          <option value="121+922">Purine + HP-0921 · 121 + 922 (+)</option>
+          <option value="custom">Custom reference m/z</option>
+          <option value="off">Off — include all measured ions</option>
+        </select></label>
+        <label>Tolerance ± <input id="reference-masses-ppm" type="number" min="1" max="50" value="20" style="width:60px;"> ppm</label>
+        <label><input id="reference-masses-isotopes" type="checkbox" checked> Also mask +1–+3 isotope windows</label>
+      </div>
+      <div id="reference-masses-custom" class="tab-toolbar" hidden>
+        <label>m/z (comma-separated) <input id="reference-masses-values" placeholder="922.009798" style="width:235px;"></label>
+        <label>Polarity <select id="reference-masses-polarity"><option value="positive">Positive</option><option value="negative">Negative</option></select></label>
+        <label>Reference charge <input id="reference-masses-charge" type="number" min="1" max="6" value="1" style="width:60px;"></label>
+      </div>
+      <div class="tab-toolbar">
+        <button id="reference-masses-detect" type="button" class="btn btn-sm">Check measured references</button>
+        <button id="reference-masses-apply" type="button" class="btn btn-sm">Apply &amp; refresh analyses</button>
+        <span id="reference-masses-status" class="toolbar-note" role="status"></span>
+      </div>
+      <div id="reference-masses-detections" class="reference-masses-detections"></div>
+      <p class="toolbar-note">Selected reference windows are excluded from all QTOF analyses and exports, including reference-precursor MS/MS scans. Applying clears calculated results, not raw files. A coincident analyte in the same window is also excluded. Detection does not apply another mass correction.</p>
+    </details>
+
     <div id="tab-peptides" class="tab-panel hidden">
       <div class="tab-toolbar">
         <label>Digest sample: <select id="peptide-sample-select"></select></label>
@@ -232,11 +260,12 @@
         <label>Saved reference: <select id="peptide-reference-select"></select></label>
         <label>Trypsin missed cleavages: <input id="peptide-missed" type="number" value="2" min="0" max="3" style="width:65px;"></label>
         <label>Precursor ppm: <input id="peptide-precursor-ppm" type="number" value="10" min="1" max="50" style="width:65px;"></label>
-        <label>Fragment ppm: <input id="peptide-fragment-ppm" type="number" value="50" min="1" max="100" style="width:65px;"></label>
+        <label>Fragment ppm: <input id="peptide-fragment-ppm" type="number" value="20" min="1" max="100" style="width:65px;"></label>
       </div>
       <fieldset class="settings-group">
-        <legend>Digest remnants and fixed modifications</legend>
+        <legend>Digest remnants and modification sites</legend>
         <p class="toolbar-note">Choose a chain and residue, then the remnant left after digestion. GGisoK is ε-Gly-Gly lysine (+114.042927 Da relative to lysine) and blocks trypsin at that site. It is a branch on lysine, not a linear GG insertion or an intact link between two chains. Unknown masses exclude affected peptides.</p>
+        <p class="toolbar-note">“Find site across reference” tests eligible positions without a preselected site: lysines for GGisoK, or chosen residue types for a custom mass shift. One variable remnant per peptide; competing sites stay unresolved. Protein-wide positions are listed in the results.</p>
         <div id="peptide-linkages" style="overflow:auto;"></div>
         <button id="btn-peptide-add-linkage" class="btn btn-sm">+ Add remnant / modification</button>
       </fieldset>
@@ -875,6 +904,7 @@
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/peptides.js"></script>
+  <script src="js/reference-masses.js"></script>
   <script src="js/app.js?v=0.2.45"></script>
 </body>
 </html>
