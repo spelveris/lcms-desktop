@@ -54,6 +54,15 @@ class PeptideChromatogramTests(unittest.TestCase):
         channel=QtofChannel(np.array([1.]),np.array([10.]),[np.array([[left,2.],[right,3.]])],[{'time':1.,'scan_id':1}])
         self.assertEqual(precursor_chromatogram(channel,500.,10.)['xic'],[5.])
 
+    def test_biomolecule_envelope_union_does_not_count_overlapping_windows_twice(self):
+        channel=fixture().qtof_channels[0,1]
+        result=precursor_chromatogram(channel,500.,10.,[500.,500.,500.001,501.])
+        self.assertEqual(result['xic'],[1.,805.,0.,904.])
+        self.assertEqual(result['tic'],channel.tic.tolist())
+        for targets in [[],[0],[float('nan')],[True],[1]*65,'500']:
+            with self.subTest(targets=targets),self.assertRaises(ValueError):
+                precursor_chromatogram(channel,None,10.,targets)
+
     def test_endpoint_uses_only_positive_ms1_not_msms_or_other_polarity(self):
         sample=fixture()
         with patch.object(server,'_get_sample',return_value=sample):

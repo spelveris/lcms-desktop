@@ -2355,3 +2355,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 .reference-masses-detections { overflow-x: auto; }
 .reference-masses-detections td, .reference-masses-detections th { padding: 4px 10px; font-size: 12px; text-align: left; }
 .peptide-coverage-underline.evidence-msms.precursor-unconfirmed { border-bottom-style: dotted; }
+#peptide-method-settings > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+#peptide-method-settings input[type="number"] { width: 84px; }
+#peptide-method-settings .tab-toolbar { flex-wrap: wrap; margin-top: 10px; }
+#peptide-method-settings { margin-bottom: 12px; }

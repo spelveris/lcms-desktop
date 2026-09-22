@@ -7,8 +7,16 @@ from zipfile import ZipFile
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lcms_app'))
-from peptide_mapping import AA, PROTON, WATER, IAM_DELTA, preparation_modifications, parse_fasta, digest, digest_with_site_search, fragments, match_fragments, analyze, bioconfirm_references
+from peptide_mapping import AA, PROTON, WATER, IAM_DELTA, preparation_modifications, parse_fasta, digest, digest_with_site_search, fragments, match_fragments, analyze as analyze_method, bioconfirm_references
 from ms1_features import ISOTOPE, expected_envelope, find_features, link_msms
+
+
+def analyze(sample, payload):
+    # Regression fixtures include tiny synthetic envelopes and m/z below 350.
+    # Explicitly retain the previous method for these existing engine checks;
+    # test_peptide_settings exercises the new real-acquisition defaults.
+    return analyze_method(sample, {'fragment_ppm':20, 'ms1_min_relative_percent':5,
+        'method':{'ms1_mz_min':0, 'ms1_mz_max':10000, 'ms1_peak_min':0, 'terminal_truncation':False}, **payload})
 
 
 def feature_scans(peptide, charges=(1,), apex=100., background=0., profile=(0,.2,.7,1,.7,.2,0), shift_ppm=0.):
@@ -211,7 +219,7 @@ class PeptideMappingTests(unittest.TestCase):
         from ms1_features import smoke_test
         self.assertEqual(smoke_test()['status'],'ok')
 
-    def test_fragment_default_is_20_ppm_but_can_be_widened_explicitly(self):
+    def test_legacy_twenty_ppm_method_can_be_widened_explicitly(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
         scan=np.array(sorted((mass*(1+30e-6),100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))
         msms=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':peptide['mass']+PROTON}],scans=[scan])
@@ -293,7 +301,7 @@ class PeptideMappingTests(unittest.TestCase):
         for scan in [np.array([[(mass+PROTON)*(1+30e-6),100.]]),np.array([[mass+PROTON,.5],[200.,100.]])]:
             self.assertEqual(analyze(self.make_sample([scan]),{'fasta':'PEPTIDER'})['matches'],[])
 
-    def test_ms1_default_five_percent_threshold_is_adjustable_and_updates_coverage(self):
+    def test_explicit_five_percent_threshold_is_adjustable_and_updates_coverage(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
         sample=self.make_sample(feature_scans(peptide,apex=4.,background=100.))
         strict=analyze(sample,{'fasta':'PEPTIDER'})

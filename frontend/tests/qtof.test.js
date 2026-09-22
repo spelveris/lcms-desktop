@@ -50,6 +50,8 @@ function domFixture() {
   document.getElementById('peptide-ms1-intensity').value='0';
   const ctx=vm.createContext({console,document,showLoading(){},hideLoading(){},Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
   for(const file of ['qtof.js','peptides.js','reference-masses.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
+  vm.runInContext(`for(const [id,value] of Object.values(PEPTIDE_METHOD_FIELDS))document.getElementById(id).value=String(value);
+    document.getElementById('peptide-terminal-truncation').checked=true;`,ctx);
   return {ctx,nodes,run:code=>vm.runInContext(code,ctx)};
 }
 
@@ -186,6 +188,51 @@ test('chromatogram has a full-width fixed-height canvas and participates in wind
  assert.match(html,/id="peptide-chromatogram-plot"[^>]*data-fixed-plot-height="300"/);
  assert.match(css,/\.peptide-chromatogram-canvas\s*\{[^}]*width: 100%;[^}]*height: 300px/);
  assert.match(app,/function schedulePlotlyResize[\s\S]*?'peptide-chromatogram-plot'/);
+});
+
+test('biomolecule overlay marks only its own interval and labels the apex without altering full-run TIC',()=>{
+ const {run,ctx}=domFixture();ctx.data={...chromatogram,xic:[0,0,8,12,8,20,0]};
+ ctx.row={...candidate,biomolecule:{id:'b1',confirmed:true,time_start:1,time_end:2,apex_time:1.5,charges:[1,2]}};
+ const {traces,layout}=run('peptideChromatogramPlot(data,row)');
+ assert.deepEqual(Array.from(traces[0].y),chromatogram.tic);
+ assert.deepEqual(Array.from(traces[1].y),[0,0,8,12,8,0,0]);
+ assert.equal(layout.annotations[0].x,1.5);assert.equal(layout.annotations[0].y,12);
+ assert.match(layout.yaxis2.title.text,/Biomolecule/);assert.deepEqual(Array.from(layout.xaxis.range),[0,8]);
+});
+
+test('separate elution feature selector never combines spectra by sequence alone',()=>{
+ const {run,ctx,nodes}=domFixture();
+ const bio={id:'b1',confirmed:true,time_start:1,time_end:2,apex_time:1.5,charges:[1,2]};
+ ctx.row={...candidate,biomolecule:bio};
+ ctx.result={matches:[ctx.row,{...candidate,scan_id:10,charge:2,biomolecule:bio},
+  {...candidate,scan_id:11,time:8,biomolecule:{...bio,id:'b2',time_start:7,time_end:9,apex_time:8}}]};
+ run('peptideView.results=result;peptideRenderObservations(row)');
+ assert.equal(nodes.get('peptide-biomolecule-select').children.length,2);
+ assert.equal(nodes.get('peptide-observation-select').children.length,2);
+ assert.match(nodes.get('peptide-biomolecule-select').children[1].textContent,/7.000–9.000/);
+ assert.equal(run('peptideCoverageSpans(result,{id:"A",sequence:"PEPTIDER"}).length'),2);
+});
+
+test('method dropdown has editable defaults, sends method and persists only method choices',async()=>{
+ const {run,ctx,nodes}=domFixture();const stored=new Map();
+ ctx.localStorage={getItem:k=>stored.get(k),setItem:(k,v)=>stored.set(k,v)};
+ run('peptideResetMethod()');
+ assert.equal(nodes.get('peptide-fragment-ppm').value,'50');
+ assert.equal(nodes.get('peptide-mz-min').value,'350');
+ assert.equal(nodes.get('peptide-peak-min').value,'100');
+ assert.equal(nodes.get('peptide-terminal-truncation').checked,true);
+ assert.equal(nodes.get('peptide-default-evidence').value,'msms');
+ let payload;ctx.api.analyzePeptides=async value=>{payload=value;return {matches:[],coverage:[],settings:{}};};
+ nodes.get('peptide-mz-min').value='300';await run('peptideAnalyze()');
+ assert.equal(payload.method.ms1_mz_min,300);assert.equal(payload.method.fragment_peak_limit,0);
+ assert.equal(payload.fragment_ppm,50);assert.equal(payload.method.terminal_truncation,true);
+ run('peptideSaveMethod();initPeptideMapping()');
+ assert.equal(nodes.get('peptide-mz-min').value,'300');
+ assert.ok(!stored.values().next().value.includes('fasta'));
+ nodes.get('peptide-mz-min').value='';assert.throws(()=>run('peptideReadMethod()'),/Enter a value/);
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ assert.match(html,/<details id="peptide-method-settings"/);
+ assert.match(html,/Agilent quality\/identification scores/);
 });
 
 test('b/y assignments preserve exact cuts, direction and explicit +1/+2 charges',()=>{
@@ -410,7 +457,7 @@ test('coverage displays MS and MS/MS separately and no longer shows the removed 
  const panel=run('peptideRenderCoverageChain(result,chain)');
  assert.match(panel.children[0].textContent,/MS 100\.0% · MS\/MS 50\.0%/);
  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../js/peptides.js'),'utf8'),/Angled marks show matched cuts/);
- assert.match(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),/id="peptide-fragment-ppm"[^>]*value="20"/);
+ assert.match(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),/id="peptide-fragment-ppm"[^>]*value="50"/);
 });
 
 test('whole-reference site search disables written position and fixes GGisoK to lysines',()=>{
@@ -716,7 +763,7 @@ test('MS-only thresholds are adjustable, sent to matching, and cleared edits inv
  intensity.value='';payload=null;await run('peptideAnalyze()');
  assert.equal(payload,null);assert.match(nodes.get('peptide-status').textContent,/Enter both MS-only thresholds/);
  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
- assert.match(html,/id="peptide-ms1-relative"[^>]*value="5"/);
+ assert.match(html,/id="peptide-ms1-relative"[^>]*value="0"/);
  assert.match(html,/id="peptide-ms1-intensity"[^>]*value="0"/);
 });
 

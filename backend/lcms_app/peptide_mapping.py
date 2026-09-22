@@ -11,7 +11,8 @@ from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 import numpy as np
 from modification_formula import formula_mass
-from ms1_features import find_features, link_msms
+from ms1_features import find_features, link_msms, group_biomolecules
+from peptide_settings import method_settings
 
 PROTON = 1.007276466621
 WATER = 18.010564684
@@ -24,7 +25,7 @@ IAM_DELTA = 57.021463735
 AA = dict(zip('ACDEFGHIKLMNPQRSTVWY', [71.037113805,103.009184505,115.026943065,129.042593135,147.068413945,57.021463735,137.058911875,113.084063975,128.094963015,113.084063975,131.040484645,114.04292747,97.052763875,128.05857754,156.10111105,87.032028435,101.047678505,99.068413945,186.07931298,163.063328575]))
 
 
-def precursor_chromatogram(channel, target_mz=None, ppm=10.):
+def precursor_chromatogram(channel, target_mz=None, ppm=10., target_mzs=None):
     """Full-run positive MS1 TIC and an unsmoothed selected-isotope XIC.
 
     The caller supplies the reference-filtered survey channel, never MS/MS.
@@ -43,15 +44,31 @@ def precursor_chromatogram(channel, target_mz=None, ppm=10.):
         raise ValueError('Chromatogram tolerance must be greater than 0 and at most 500 ppm')
     result = {'times': times.tolist(), 'tic': tic.tolist(), 'ms_level': 1,
               'polarity': 'positive', 'target_mz': target_mz, 'ppm': ppm}
-    if target_mz is not None:
-        if isinstance(target_mz, bool) or not np.isfinite(target_mz) or target_mz <= 0:
+    if target_mzs is not None:
+        if not isinstance(target_mzs, list) or not 1 <= len(target_mzs) <= 64:
+            raise ValueError('Use 1–64 biomolecule isotope targets')
+        if any(isinstance(mz, bool) or not isinstance(mz, (int,float)) or not np.isfinite(mz) or mz <= 0 for mz in target_mzs):
+            raise ValueError('Choose finite, positive biomolecule isotope targets')
+    if target_mz is not None or target_mzs is not None:
+        if target_mz is not None and (isinstance(target_mz, bool) or not np.isfinite(target_mz) or target_mz <= 0):
             raise ValueError('Choose a finite, positive precursor m/z')
-        half_width = target_mz * ppm * 1e-6
+        targets = sorted(set(target_mzs if target_mzs is not None else [target_mz]))
+        result['target_mzs'] = targets
+        windows = []
+        for mz in targets:
+            lo, hi = mz*(1-ppm*1e-6), mz*(1+ppm*1e-6)
+            if windows and lo <= windows[-1][1]:
+                windows[-1][1] = max(hi, windows[-1][1])
+            else:
+                windows.append([lo,hi])
         intensities = []
         for scan in channel.scans:
-            left = np.searchsorted(scan[:, 0], target_mz-half_width, side='left')
-            right = np.searchsorted(scan[:, 0], target_mz+half_width, side='right')
-            intensities.append(float(scan[left:right, 1].sum()))
+            total = 0.
+            for lo, hi in windows:
+                left = np.searchsorted(scan[:, 0], lo, side='left')
+                right = np.searchsorted(scan[:, 0], hi, side='right')
+                total += float(scan[left:right, 1].sum())
+            intensities.append(total)
         result['xic'] = intensities
     return result
 
@@ -159,7 +176,9 @@ def bioconfirm_references(bundle):
     return references
 
 
-def digest(chains, missed, modifications):
+def digest(chains, missed, modifications, method=None):
+    # Without a method this low-level helper retains its fully tryptic contract.
+    minimum, maximum = (method['peptide_min_length'], method['peptide_max_length']) if method else (5, 70)
     peptides = {}
     excluded = 0
     for chain in chains:
@@ -167,27 +186,35 @@ def digest(chains, missed, modifications):
         mods = {m['position']: m for m in modifications if m['chain'] == chain['id']}
         cuts = [0] + [i+1 for i, aa in enumerate(sequence[:-1]) if aa in 'KR' and sequence[i+1] != 'P'
                       and not mods.get(i+1, {}).get('block_cleavage', False)] + [len(sequence)]
+        intervals = set()
         for ci, start in enumerate(cuts[:-1]):
             for end in cuts[ci+1:ci+missed+2]:
-                if not 5 <= end-start <= 70: continue
-                local = [m for pos, m in mods.items() if start < pos <= end]
-                if any(m['delta'] is None for m in local): excluded += 1; continue
-                seq = sequence[start:end]
-                shifts = tuple((m['position']-start-1, m['delta']) for m in sorted(local, key=lambda m:m['position']))
-                key = (seq, shifts)
-                if key not in peptides:
-                    masses = np.array([AA[a] for a in seq])
-                    for pos, delta in shifts: masses[pos] += delta
-                    peptides[key] = {'sequence': seq, 'residue_masses': masses, 'mass': float(masses.sum()+WATER), 'locations': [],
-                                     'modifications': [{'residue': m['position']-start, 'delta': m['delta'], 'kind': m.get('kind', 'custom'), 'formula': m.get('formula'),
-                                                        'variable': bool(m.get('variable'))} for m in sorted(local, key=lambda m:m['position'])]}
-                peptides[key]['locations'].append({'chain': chain['id'], 'start': start+1, 'end': end})
+                intervals.add((start, end))
+                if method and method['terminal_truncation']:
+                    # Remove residues from one end only; the other end remains
+                    # enzymatic. Never generate a peptide truncated at both ends.
+                    intervals.update((s, end) for s in range(max(start+1, end-maximum), end-minimum+1))
+                    intervals.update((start, e) for e in range(start+minimum, min(end, start+maximum+1)))
+        for start, end in sorted(intervals):
+            if not minimum <= end-start <= maximum: continue
+            local = [m for pos, m in mods.items() if start < pos <= end]
+            if any(m['delta'] is None for m in local): excluded += 1; continue
+            seq = sequence[start:end]
+            shifts = tuple((m['position']-start-1, m['delta']) for m in sorted(local, key=lambda m:m['position']))
+            key = (seq, shifts)
+            if key not in peptides:
+                masses = np.array([AA[a] for a in seq])
+                for pos, delta in shifts: masses[pos] += delta
+                peptides[key] = {'sequence': seq, 'residue_masses': masses, 'mass': float(masses.sum()+WATER), 'locations': [],
+                                 'modifications': [{'residue': m['position']-start, 'delta': m['delta'], 'kind': m.get('kind', 'custom'), 'formula': m.get('formula'),
+                                                    'variable': bool(m.get('variable'))} for m in sorted(local, key=lambda m:m['position'])]}
+            peptides[key]['locations'].append({'chain': chain['id'], 'start': start+1, 'end': end})
     return list(peptides.values()), excluded
 
 
-def digest_with_site_search(chains, missed, fixed, searches):
+def digest_with_site_search(chains, missed, fixed, searches, method=None):
     """One variable remnant per peptide; enumerate sites, never assume localization."""
-    peptides, excluded = digest(chains, missed, fixed)
+    peptides, excluded = digest(chains, missed, fixed, method)
     if not searches:
         return peptides, excluded, 0
     search = searches[0]
@@ -202,7 +229,7 @@ def digest_with_site_search(chains, missed, fixed, searches):
     combined = {peptide_signature(p): p for p in peptides}
     for chain, position in sites:
         variant = {**search, 'chain': chain['id'], 'position': position, 'variable': True}
-        candidates, _ = digest([chain], missed, [*fixed, variant])
+        candidates, _ = digest([chain], missed, [*fixed, variant], method)
         for candidate in candidates:
             if not any(mod['variable'] for mod in candidate['modifications']):
                 continue
@@ -230,11 +257,15 @@ def fragments(masses, max_charge):
     return result
 
 
-def match_fragments(scan, theory, ppm):
+def match_fragments(scan, theory, ppm, method=None):
     if not len(scan): return [], 0.
-    # Keep at most 200 peaks above 1% relative intensity, with no resampling.
-    idx = np.flatnonzero(scan[:,1] >= np.max(scan[:,1]) * .01)
-    idx = idx[np.argsort(scan[idx,1])[-200:]]
+    relative = method['fragment_min_relative_percent']/100 if method else .01
+    absolute = method['fragment_min_intensity'] if method else 0.
+    limit = method['fragment_peak_limit'] if method else 200
+    idx = np.flatnonzero(np.isfinite(scan).all(axis=1) & (scan[:,1] > 0)
+                         & (scan[:,1] >= max(np.max(scan[:,1])*relative, absolute)))
+    if limit:
+        idx = idx[np.argsort(scan[idx,1], kind='stable')[-limit:]]
     candidates = []
     for label, mass, bond in theory:
         errors = np.abs(scan[idx,0]-mass) / mass * 1e6
@@ -261,12 +292,13 @@ def analyze(sample, payload):
     survey = sample.qtof_channels.get((0, 1))
     if channel is None and survey is None: raise ValueError('No acquired positive-ion MS or MS/MS scans in this run')
     chains = parse_fasta(payload.get('fasta', ''))
+    method = method_settings(payload.get('method'))
     missed = int(payload.get('missed_cleavages', 2))
-    precursor_ppm, fragment_ppm = float(payload.get('precursor_ppm', 10)), float(payload.get('fragment_ppm', 20))
+    precursor_ppm, fragment_ppm = float(payload.get('precursor_ppm', 10)), float(payload.get('fragment_ppm', 50))
     if not 0 <= missed <= 3 or not 1 <= precursor_ppm <= 50 or not 1 <= fragment_ppm <= 100:
         raise ValueError('Use 0–3 missed cleavages, 1–50 precursor ppm and 1–100 fragment ppm')
     try:
-        threshold_values = [payload.get('ms1_min_relative_percent', 5), payload.get('ms1_min_intensity', 0)]
+        threshold_values = [payload.get('ms1_min_relative_percent', 0), payload.get('ms1_min_intensity', 0)]
         if any(isinstance(value, bool) for value in threshold_values): raise ValueError()
         ms1_percent, ms1_intensity = map(float, threshold_values)
         if not np.isfinite([ms1_percent, ms1_intensity]).all() or not 0 <= ms1_percent <= 100 or not 0 <= ms1_intensity <= 1e15:
@@ -320,21 +352,21 @@ def analyze(sample, payload):
     if len(searches) > 1:
         raise ValueError('Use one whole-reference modification search at a time; fixed sites may be combined with it')
     fixed, preparation = preparation_modifications(chains, fixed, payload.get('preparation'))
-    peptides, excluded, searched_sites = digest_with_site_search(chains, missed, fixed, searches)
+    peptides, excluded, searched_sites = digest_with_site_search(chains, missed, fixed, searches, method)
     if len(peptides) > 20000: raise ValueError('Reference search is too large; use fewer chains')
     masses = np.array([p['mass'] for p in peptides])
     rows = []
     for meta, scan in (zip(channel.metadata, channel.scans) if channel is not None else []):
         precursor = meta['precursor_mz']
-        if not precursor or not len(scan): continue
+        if not precursor or not len(scan) or not method['ms1_mz_min'] <= precursor <= method['ms1_mz_max']: continue
         hits = []
-        for charge in range(1, 7):
+        for charge in range(method['charge_min'], method['charge_max']+1):
             for isotope in range(3):
                 predicted = (masses + charge*PROTON + isotope*ISOTOPE)/charge
                 errors = (precursor-predicted)/predicted*1e6
                 for pidx in np.flatnonzero(np.abs(errors) <= precursor_ppm):
                     peptide = peptides[pidx]
-                    matches, explained = match_fragments(scan, fragments(peptide['residue_masses'], min(2, charge)), fragment_ppm)
+                    matches, explained = match_fragments(scan, fragments(peptide['residue_masses'], min(2, charge)), fragment_ppm, method)
                     # Unknown-site candidates need a measured fragment carrying
                     # the variable remnant, not just a compatible precursor mass.
                     variable_sites = [m['residue'] for m in peptide['modifications'] if m.get('variable')]
@@ -363,10 +395,16 @@ def analyze(sample, payload):
             hit['site_ambiguous'] = len({peptide_signature(h) for h in hits if h['sequence'] == hit['sequence']}) > 1
             hit['site_search'] = any(m.get('variable') for m in hit['modifications'])
             rows.append(hit)
-    features = find_features(survey, peptides, precursor_ppm, ms1_percent/100, ms1_intensity)
+    features = find_features(survey, peptides, precursor_ppm, ms1_percent/100, ms1_intensity, method)
+    group_biomolecules(features, peptide_signature)
     # A variable-site feature may support a measured MS/MS precursor, but it must
     # never become an MS-only modification-site assignment or coverage line.
     rows.extend(link_msms(features, rows, precursor_ppm, peptide_signature))
+    for row in rows:
+        if 'biomolecule' not in row:
+            # An unconfirmed precursor must not inherit another peak's evidence.
+            row['biomolecule'] = {'id':f'unconfirmed-{row["scan_id"]}-{row["charge"]}',
+                                 'confirmed':False, 'charges':[row['charge']]}
     rows.sort(key=lambda r:(r['time'],r['scan_id']))
     coverage = []
     for chain in chains:
@@ -384,9 +422,9 @@ def analyze(sample, payload):
                          'msms_percent':len(positions)/len(chain['sequence'])*100,
                          'ms_only_percent':len(ms_only_positions)/len(chain['sequence'])*100})
     return {'coverage': coverage, 'matches': rows, 'candidate_peptides':len(peptides), 'excluded_modified_peptides':excluded,
-            'settings':{'enzyme':'Trypsin (not before P)', 'missed_cleavages':missed, 'precursor_ppm':precursor_ppm, 'fragment_ppm':fragment_ppm,
+            'settings':{'method':method, 'enzyme':'Trypsin (not before P)', 'missed_cleavages':missed, 'precursor_ppm':precursor_ppm, 'fragment_ppm':fragment_ppm,
                         'ms1_peak_limit':500, 'ms1_min_relative_intensity':ms1_percent/100,
-                        'ms1_min_relative_percent':ms1_percent, 'ms1_min_intensity':ms1_intensity, 'charges':[1,2,3,4,5,6],
+                        'ms1_min_relative_percent':ms1_percent, 'ms1_min_intensity':ms1_intensity, 'charges':list(range(method['charge_min'],method['charge_max']+1)),
                         'ms1_min_surveys':3, 'ms1_min_isotope_fit':.9, 'ms1_min_coelution':.95,
                         'ms1_min_peak_prominence_fraction':.5, 'ms1_threshold_scope':'feature apex',
                         'searched_modification_sites':searched_sites, 'site_search_evidence':'MS/MS only',

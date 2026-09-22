@@ -139,26 +139,44 @@ cysteines. The long analysis qualifications are available in closed **Analysis d
 the main view displays only short match counts. Custom **Chemical formula** is
 immediately left of its read-only **Calculated shift (Da)**.
 
-The initial mapping implementation is **exploratory**: tryptic peptides of 5–70
+The mapping implementation is **exploratory**: tryptic peptides of 5–70
 residues, 0–3 missed cleavages, precursor charges 1–6 (inferred), isotope offsets
 0–2, and b/y fragments of charges 1–2. Default tolerances are 10 ppm precursor
-and 20 ppm fragments (both remain adjustable). It requires four distinct matched ions, three cleavage
-bonds and 10% of filtered fragment intensity (top 200 peaks above 1%). These
+and 50 ppm fragments (both remain adjustable). One non-tryptic terminus is allowed
+by default: either end of a tryptic peptide may be truncated, not both. Fully
+tryptic-only searching remains available. It requires four distinct matched ions,
+three cleavage bonds and 10% of retained fragment intensity. MS/MS peak-height and
+peak-count filters are disabled by default; optional cutoffs are editable. These
 are review thresholds, not a validated identification score or FDR estimate.
 Ambiguous sequence candidates are excluded from coverage; repeated/shared
 peptides map to all compatible locations and do not establish chain identity.
 I/L are indistinguishable; neutral losses are not searched. Click a candidate to
 inspect its measured, annotated fragment spectrum.
 
-MS1 feature seeding has separate adjustable intensity gates: **5% of the survey
-scan maximum** by default, plus an optional **minimum intensity in counts**
-(default 0, disabled). Both gates must pass at a feature's apex; 0 disables the
+The expandable **Peptide mapping settings** panel saves numerical method choices
+locally (not sequences or research results), with **Reset defaults**. Defaults
+match the supported numerical settings in the supplied BioConfirm method:
+10/50 ppm, 2 missed cleavages, 5–70 residues, 350–2000 MS1 m/z and a 100-count seed
+minimum. Seeds must pass that floor; weaker measured isotope peaks and shoulder
+scans are retained for coherence checks rather than censored into false peaks.
+Additional feature-apex gates for **percent of the survey maximum** and **counts**
+default to 0 (disabled). Both enabled gates must pass at a feature's apex; 0 disables the
 corresponding gate, not the feature evidence checks. The maximum is measured
-after reference-ion filtering. At most the 500 strongest passing peaks per scan
+after reference-ion and m/z-window filtering. At most the 500 strongest passing peaks per scan
 are tested as seeds. Weaker neighbouring scans remain available for isotope and
 chromatographic checks. Counts, isotope fit and consecutive observations are shown
 for the selected feature. These gates do not change MS/MS fragment matching or raw
 data; they can change whether a precursor feature is confirmed.
+
+The initial table filter shows MS/MS candidates; choose **All** to include MS-only
+features. Coverage still reports both evidence types. CID b/y matching, free-thiol
+mass conventions and individual measured spectra are retained. These settings do
+not reproduce Agilent's proprietary quality/identification scores, Agile 2,
+adduct grouping, negative-ion search, averaging/saturation rules or modification
+combinations. CATrupole keeps its explicit +1–+6 search bound and one variable
+remnant per peptide. It retains competing assignments rather than enforcing the
+vendor's maximum-three-matches display or implying equivalent scores. No FDR is
+calculated. Unchecked vendor filters are not silently applied as active settings.
 
 An MS1 mass candidate now requires a **composition-compatible isotope envelope**
 in at least three consecutive surveys at half-height of a bracketed elution peak.
@@ -282,11 +300,13 @@ A sequence matched elsewhere in the run no longer suppresses an unrelated MS1
 feature. Strong MS/MS remains visible when precursor feature evidence is missing.
 
 The peptide selection view includes a full-width, whole-run **black MS1 TIC**
-with a **blue selected-precursor XIC**. Both remain in measured counts on clearly
+with a **blue selected-biomolecule XIC**. Both remain in measured counts on clearly
 labelled separate axes (TIC left, XIC right); neither trace is normalized or
-smoothed. Extraction uses the selected candidate's theoretical precursor m/z
-(measured m/z fallback for older rows), including its isotope assignment, and
-the mapping precursor ppm tolerance. It sums centroid counts inside that window
+smoothed. Confirmed features use the required isotope targets of their grouped
+charge envelopes, with the mapping precursor ppm tolerance. Overlapping windows
+are unioned so a measured centroid is never counted twice. Unconfirmed precursors
+use only their selected theoretical m/z (measured m/z fallback for older rows).
+Extraction sums centroid counts inside those windows
 at each positive MS1 survey, not MS/MS fragment intensities or scans over time.
 The existing reference-ion exclusion applies to both traces. Other peaks in the
 same m/z window are not automatically evidence for the peptide sequence.
@@ -295,9 +315,16 @@ The selected scan's acquisition time is marked separately from its shaded
 **supported MS1 interval**. That interval comes from the existing feature matcher,
 not the entire visible tail, and is absent when precursor support is unconfirmed.
 No extra feature association or confidence upgrade is inferred from the XIC.
-The whole trace remains visible beyond the interval; selections start at the full
-recorded run range. An observations picker groups identical sequence/modification
-candidates for review across recorded times, charges and MS1/MSMS evidence. Each
+The black TIC always starts at the full recorded run range. The blue biomolecule
+overlay is restricted to its supported interval and labels its measured apex.
+Separate elution peaks of the same sequence remain separate selectable features.
+Different charge envelopes group only with identical sequence/modification
+signatures, overlapping support (at least half the shorter interval), apices
+within two survey cadences (capped at 0.1 min), and raw trace cosine >=0.95.
+All members must agree with one another; transitive overlap cannot bridge peaks.
+Unconfirmed precursor spectra do not inherit another peak's evidence.
+The **Elution feature** selector chooses among peaks; the observations picker
+contains only that feature's measured spectra. Each
 choice retains its own measured spectrum, support status, isotope assignment and
 time interval; nothing is averaged, summed across scans or merged into a new
 identification. Existing PDF downloads and coverage calculations are unchanged.

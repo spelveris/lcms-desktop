@@ -2995,13 +2995,14 @@ def peptide_modification_mass(payload: dict = Body(...)):
 
 
 @app.get('/api/peptide-mapping/chromatogram')
-def peptide_chromatogram(path: str = Query(...), target_mz: Optional[float] = Query(None), ppm: float = Query(10.)):
+def peptide_chromatogram(path: str = Query(...), target_mz: Optional[float] = Query(None), ppm: float = Query(10.), target_mzs: Optional[str] = Query(None)):
     """Whole-run MS1 TIC plus an optional selected-precursor XIC, no smoothing."""
     sample = _get_sample(path)
     channel = _qtof_channel(sample, 'positive', 1)
     from peptide_mapping import precursor_chromatogram
     try:
-        return precursor_chromatogram(channel, target_mz, ppm)
+        targets = [float(value) for value in target_mzs.split(',')] if isinstance(target_mzs, str) else None
+        return precursor_chromatogram(channel, target_mz, ppm, targets)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

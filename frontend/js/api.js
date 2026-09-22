@@ -106,8 +106,8 @@ const api = {
     return apiFetch('/api/peptide-mapping/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   },
 
-  getPeptideChromatogram(path, targetMz = null, ppm = 10) {
-    return apiFetch(`/api/peptide-mapping/chromatogram?${qs({ path, target_mz: targetMz, ppm })}`);
+  getPeptideChromatogram(path, targetMz = null, ppm = 10, targetMzs = null) {
+    return apiFetch(`/api/peptide-mapping/chromatogram?${qs({ path, target_mz: targetMz, ppm, target_mzs: targetMzs?.join(',') })}`);
   },
 
   exportPeptidePdf(payload) {

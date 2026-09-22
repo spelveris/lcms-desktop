@@ -104,13 +104,18 @@ def _eligible_precursors(peptide, charge, model, mzs, tolerance):
     return np.flatnonzero(np.isfinite(mzs[:3]) & (abs(mzs[:3]-targets) <= targets*tolerance))
 
 
-def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intensity=0.):
+def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intensity=0., method=None):
     if channel is None or not peptides or len(channel.scans) < MIN_SURVEYS:
         return []
-    models = [expected_envelope(p) for p in peptides]
+    method = method or {'ms1_mz_min':0., 'ms1_mz_max':10000., 'ms1_peak_min':0., 'charge_min':1, 'charge_max':6}
+    # Preselect possible mass/charge candidates before expensive composition
+    # models, especially when one non-tryptic terminus is allowed.
+    models = [expected_envelope(p) if any(method['ms1_mz_min'] <= p['mass']/z+PROTON <= method['ms1_mz_max']
+              for z in range(method['charge_min'],method['charge_max']+1)) else None for p in peptides]
     scans, maxima = [], []
     for scan in channel.scans:
         valid = np.asarray(scan)[np.isfinite(scan).all(axis=1) & (scan[:,0] > 0) & (scan[:,1] > 0)]
+        valid = valid[(valid[:,0] >= method['ms1_mz_min']) & (valid[:,0] <= method['ms1_mz_max'])]
         valid = valid[np.argsort(valid[:,0], kind='stable')]
         scans.append(valid)
         maxima.append(float(valid[:,1].max()) if len(valid) else 0.)
@@ -121,14 +126,14 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
     # Bounded seed search. The user intensity gates apply to a feature's apex;
     # weaker neighbouring scans remain available for its shape/isotope checks.
     hypotheses = [(i,z,k) for i,model in enumerate(models) if model is not None
-                  for z in range(1,7) for k in range(min(3,len(model[0])))]
+                  for z in range(method['charge_min'],method['charge_max']+1) for k in range(min(3,len(model[0])))]
     if not hypotheses:
         return []
     predicted = np.array([(peptides[i]['mass']+models[i][0][k])/z+PROTON for i,z,k in hypotheses])
     order = np.argsort(predicted, kind='stable'); predicted = predicted[order]
     seeds = defaultdict(set)
     for si, scan in enumerate(scans):
-        passing = np.flatnonzero(scan[:,1] >= max(maxima[si]*min_relative_intensity, min_intensity))
+        passing = np.flatnonzero(scan[:,1] >= max(maxima[si]*min_relative_intensity, min_intensity, method['ms1_peak_min']))
         passing = passing[np.argsort(scan[passing,1], kind='stable')[-500:]]
         mzs = scan[passing,0]
         starts = np.searchsorted(predicted, mzs/(1+tolerance), side='left')
@@ -137,7 +142,7 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
         for i,z in keys:
             observed, measured, _, good = _pattern(scan, peptides[i], z, models[i], tolerance)
             eligible = _eligible_precursors(peptides[i],z,models[i],measured,tolerance)
-            if good and len(eligible) and observed[eligible].max() >= max(maxima[si]*min_relative_intensity,min_intensity):
+            if good and len(eligible) and observed[eligible].max() >= max(maxima[si]*min_relative_intensity,min_intensity,method['ms1_peak_min']):
                 seeds[i,z].add(si)
         if len(seeds) > 20000:
             raise ValueError('Too many MS1 feature candidates; narrow the reference or precursor tolerance')
@@ -210,6 +215,8 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
                 'isotope_peaks':[{'mz':float(mzs[k]),'intensity':float(observed[k]),'offset':int(k)} for k in range(len(observed)) if observed[k]>0],
                 '_survey_ids':{channel.metadata[j]['scan_id'] for j in support}, '_cadence':float(np.median(np.diff(times[support]))),
                 '_targets':((peptide['mass']+model[0])/z+PROTON).tolist(),
+                '_trace':trace, '_times':times,
+                '_group_targets':((peptide['mass']+model[0][model[2]])/z+PROTON).tolist(),
             })
             if len(features) > 20000:
                 raise ValueError('Too many MS1 features; narrow the reference')
@@ -224,6 +231,44 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
             feature['site_ambiguous'] = len({tuple((m['residue'],m['delta']) for m in f['modifications']) for f in alternatives if f['sequence']==feature['sequence']}) > 1
             feature['ambiguous_scan'] = feature['sequence_ambiguous'] or feature['site_ambiguous']
     return features
+
+
+def group_biomolecules(features, signature):
+    """Conservative complete-link grouping of coeluting charge envelopes.
+
+    Sequence identity alone never joins peaks. Different charges must have
+    overlapping support, nearby apices and >=0.95 raw trace cosine similarity.
+    Complete-link membership prevents a chain of overlaps joining distinct peaks.
+    """
+    groups = []
+    by_signature = defaultdict(list)
+    def compatible(a, b):
+        if a['charge'] == b['charge']:
+            return False
+        overlap = min(a['time_end'], b['time_end'])-max(a['time_start'], b['time_start'])
+        shorter = min(a['time_end']-a['time_start'], b['time_end']-b['time_start'])
+        if overlap <= 0 or overlap < shorter*.5 or abs(a['time']-b['time']) > min(.1,2*max(a['_cadence'], b['_cadence'])):
+            return False
+        times = a['_times']
+        mask = (times >= min(a['time_start'],b['time_start'])) & (times <= max(a['time_end'],b['time_end']))
+        x, y = a['_trace'][mask], b['_trace'][mask]
+        return float(x@y/max(np.linalg.norm(x)*np.linalg.norm(y),1e-30)) >= .95
+    for feature in sorted(features, key=lambda f:(f['time'], f['charge'], f['feature_id'])):
+        options = by_signature[signature(feature)]
+        group = next((g for g in options if all(compatible(feature, other) for other in g)), None)
+        if group is None:
+            group = []; options.append(group); groups.append(group)
+        group.append(feature)
+    for index, group in enumerate(groups, 1):
+        start, end = min(f['time_start'] for f in group), max(f['time_end'] for f in group)
+        trace = sum(f['_trace'] for f in group)
+        times = group[0]['_times']; mask = (times >= start) & (times <= end)
+        apex = float(times[mask][np.argmax(trace[mask])])
+        info = {'id':f'biomolecule-{index}', 'confirmed':True, 'time_start':start, 'time_end':end, 'apex_time':apex,
+                'charges':sorted(f['charge'] for f in group), 'feature_ids':[f['feature_id'] for f in group],
+                'target_mzs':sorted({mz for f in group for mz in f['_group_targets']})}
+        for feature in group:
+            feature['biomolecule'] = info
 
 
 def link_msms(features, rows, ppm, signature):
@@ -248,6 +293,8 @@ def link_msms(features, rows, ppm, signature):
         row['precursor_link'] = ('recorded parent' if parent is not None else 'mass/charge/RT inferred') if len(candidates)==1 else 'unconfirmed'
         if len(candidates)==1:
             feature = candidates[0]; linked.add(feature['feature_id'])
+            if 'biomolecule' in feature:
+                row['biomolecule'] = feature['biomolecule']
             row['precursor_feature'] = {k:feature[k] for k in ['feature_id','scan_id','time_start','time_end','observation_count','isotope_count','isotope_fit']}
     for feature in features:
         for key in list(feature):
