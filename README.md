@@ -281,6 +281,27 @@ inferred. A recorded but incompatible parent is never replaced by a time guess.
 A sequence matched elsewhere in the run no longer suppresses an unrelated MS1
 feature. Strong MS/MS remains visible when precursor feature evidence is missing.
 
+The peptide selection view includes a full-width, whole-run **black MS1 TIC**
+with a **blue selected-precursor XIC**. Both remain in measured counts on clearly
+labelled separate axes (TIC left, XIC right); neither trace is normalized or
+smoothed. Extraction uses the selected candidate's theoretical precursor m/z
+(measured m/z fallback for older rows), including its isotope assignment, and
+the mapping precursor ppm tolerance. It sums centroid counts inside that window
+at each positive MS1 survey, not MS/MS fragment intensities or scans over time.
+The existing reference-ion exclusion applies to both traces. Other peaks in the
+same m/z window are not automatically evidence for the peptide sequence.
+
+The selected scan's acquisition time is marked separately from its shaded
+**supported MS1 interval**. That interval comes from the existing feature matcher,
+not the entire visible tail, and is absent when precursor support is unconfirmed.
+No extra feature association or confidence upgrade is inferred from the XIC.
+The whole trace remains visible beyond the interval; selections start at the full
+recorded run range. An observations picker groups identical sequence/modification
+candidates for review across recorded times, charges and MS1/MSMS evidence. Each
+choice retains its own measured spectrum, support status, isotope assignment and
+time interval; nothing is averaged, summed across scans or merged into a new
+identification. Existing PDF downloads and coverage calculations are unchanged.
+
 The results table supports sequence/location/modification text filtering,
 evidence, charge and competing-assignment filters, and sortable columns including
 measured and theoretical precursor m/z side by side (five decimal places, full

@@ -1192,6 +1192,7 @@ function schedulePlotlyResize(plotIds = []) {
       'timechange-ms-plot',
       'timechange-ms-offset-plot',
       'peptide-spectrum-plot',
+      'peptide-chromatogram-plot',
     ];
   const includesDeconvBottom = ids.includes('deconv-spectrum-plot') || ids.includes('deconv-mass-plot') || ids.includes('deconv-dense-mass-preview');
   [0, 120, 280].forEach((delayMs) => {

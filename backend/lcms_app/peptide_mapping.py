@@ -24,6 +24,38 @@ IAM_DELTA = 57.021463735
 AA = dict(zip('ACDEFGHIKLMNPQRSTVWY', [71.037113805,103.009184505,115.026943065,129.042593135,147.068413945,57.021463735,137.058911875,113.084063975,128.094963015,113.084063975,131.040484645,114.04292747,97.052763875,128.05857754,156.10111105,87.032028435,101.047678505,99.068413945,186.07931298,163.063328575]))
 
 
+def precursor_chromatogram(channel, target_mz=None, ppm=10.):
+    """Full-run positive MS1 TIC and an unsmoothed selected-isotope XIC.
+
+    The caller supplies the reference-filtered survey channel, never MS/MS.
+    Preserve its recorded TIC; the XIC sums measured centroids in each ppm
+    window, not scans across time or other charge states/isotope peaks.
+    A visible XIC peak alone is not new evidence for a peptide assignment.
+    """
+    if channel is None or not len(channel.scans):
+        raise ValueError('No positive MS1 survey scans for this run')
+    times, tic = np.asarray(channel.times), np.asarray(channel.tic)
+    if (len(times) != len(channel.scans) or len(tic) != len(times)
+            or not np.isfinite(times).all() or not np.isfinite(tic).all()
+            or np.any(np.diff(times) < 0)):
+        raise ValueError('Invalid MS1 chromatogram time axis')
+    if isinstance(ppm, bool) or not np.isfinite(ppm) or not 0 < ppm <= 500:
+        raise ValueError('Chromatogram tolerance must be greater than 0 and at most 500 ppm')
+    result = {'times': times.tolist(), 'tic': tic.tolist(), 'ms_level': 1,
+              'polarity': 'positive', 'target_mz': target_mz, 'ppm': ppm}
+    if target_mz is not None:
+        if isinstance(target_mz, bool) or not np.isfinite(target_mz) or target_mz <= 0:
+            raise ValueError('Choose a finite, positive precursor m/z')
+        half_width = target_mz * ppm * 1e-6
+        intensities = []
+        for scan in channel.scans:
+            left = np.searchsorted(scan[:, 0], target_mz-half_width, side='left')
+            right = np.searchsorted(scan[:, 0], target_mz+half_width, side='right')
+            intensities.append(float(scan[left:right, 1].sum()))
+        result['xic'] = intensities
+    return result
+
+
 def parse_fasta(text):
     if not isinstance(text, str) or len(text) > 30000:
         raise ValueError('Provide a reference sequence or FASTA, up to 10,000 residues')

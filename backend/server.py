@@ -2994,6 +2994,18 @@ def peptide_modification_mass(payload: dict = Body(...)):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.get('/api/peptide-mapping/chromatogram')
+def peptide_chromatogram(path: str = Query(...), target_mz: Optional[float] = Query(None), ppm: float = Query(10.)):
+    """Whole-run MS1 TIC plus an optional selected-precursor XIC, no smoothing."""
+    sample = _get_sample(path)
+    channel = _qtof_channel(sample, 'positive', 1)
+    from peptide_mapping import precursor_chromatogram
+    try:
+        return precursor_chromatogram(channel, target_mz, ppm)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/api/peptide-mapping/export-pdf")
 def peptide_export_pdf(payload: dict = Body(...)):
     plot_runtime.get('plotting')  # Same initialized fonts as Deconvolution; no startup penalty.

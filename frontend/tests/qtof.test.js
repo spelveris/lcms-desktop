@@ -75,6 +75,119 @@ const candidate={sequence:'PEPTIDER',modifications:[],locations:[{chain:'A',star
  {ion:'y5^2+',bond:3,observed_mz:300.2,theoretical_mz:300.2,error_ppm:0,intensity:80}]};
 function descendants(node){return [node,...node.children.flatMap(descendants)];}
 
+const chromatogram={times:[0,.5,1,1.5,2,3,8],tic:[100,300,400,500,400,200,100],xic:[0,0,8,12,8,0,0],target_mz:955.46559,ppm:10};
+
+test('mapping shows the whole TIC before any peptide is selected',async()=>{
+ const {run,ctx,nodes}=domFixture();const requests=[],renders=[];
+ ctx.api.getPeptideChromatogram=async(...args)=>{requests.push(args);return chromatogram;};
+ ctx.Plotly.react=async(id,data)=>renders.push(data);
+ run('peptideView.path="sample"');await run('peptideLoadChromatogram()');
+ assert.deepEqual(requests,[['sample',null,10]]);assert.equal(renders[0].length,1);
+ assert.equal(nodes.get('peptide-chromatogram').hidden,false);
+ assert.match(nodes.get('peptide-chromatogram-status').textContent,/Whole-run TIC/);
+});
+
+test('whole-run TIC stays black with a blue raw-count precursor overlay for both evidence types',()=>{
+ const {run,ctx}=domFixture();ctx.data=chromatogram;
+ const original=JSON.stringify(ctx.data);
+ for(const evidence of ['ms1','msms']){
+  ctx.row={...candidate,evidence,ms1_supported:true,time_start:1,time_end:2,precursor_feature:{time_start:1,time_end:2}};
+  const {traces,layout}=run('peptideChromatogramPlot(data,row)');
+  assert.equal(traces[0].line.color,'#000000');assert.equal(traces[1].line.color,'#215caf');
+  assert.deepEqual(Array.from(traces[0].y),chromatogram.tic);assert.deepEqual(Array.from(traces[1].y),chromatogram.xic);
+  assert.equal(traces[1].yaxis,'y2');assert.equal(layout.yaxis2.side,'right');
+  assert.match(layout.yaxis.title.text,/TIC.*counts/);assert.match(layout.yaxis2.title.text,/Precursor XIC.*counts/);
+  assert.deepEqual(Array.from(layout.xaxis.range),[0,8]);assert.equal(layout.xaxis.autorange,false);
+  assert.equal(layout.shapes.find(s=>s.type==='rect').x0,1);assert.equal(layout.shapes.find(s=>s.type==='rect').x1,2);
+  assert.equal(layout.shapes.find(s=>s.type==='line').x0,1.5);
+ }
+ assert.equal(JSON.stringify(ctx.data),original);
+ const overview=run('peptideChromatogramPlot(data)');assert.equal(overview.traces.length,1);assert.equal(overview.layout.shapes.length,0);
+ ctx.row={...candidate,ms1_supported:false,precursor_feature:{time_start:1,time_end:2}};
+ assert.equal(run('peptideChromatogramPlot(data,row).layout.shapes.filter(s=>s.type==="rect").length'),0);
+});
+
+test('peptide selection requests matching isotope m/z and ppm but keeps the measured spectrum separate',async()=>{
+ const {run,ctx,nodes}=domFixture();const renders=[],requests=[];
+ ctx.row={...candidate,ms1_supported:true,precursor_link:'recorded parent',precursor_feature:{time_start:1,time_end:2,observation_count:7}};
+ ctx.Plotly.react=async(id,data,layout)=>renders.push({id,data,layout});
+ ctx.api.getPeptideChromatogram=async(...args)=>{requests.push(args);return chromatogram;};
+ ctx.api.getQtofSpectrum=async()=>({mz:[324.15539],intensities:[100]});
+ run('peptideView.path="sample";peptideView.results={settings:{precursor_ppm:7},matches:[row]}');
+ await run('peptideShowMatch(row)');
+ assert.deepEqual(requests,[['sample',candidate.theoretical_precursor_mz,7]]);
+ assert.ok(renders.some(r=>r.id==='peptide-chromatogram-plot'&&r.data.length===2));
+ assert.ok(renders.some(r=>r.id==='peptide-spectrum-plot'));
+ assert.match(nodes.get('peptide-chromatogram-status').textContent,/Supported MS1 interval 1.000–2.000 min/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/acquired at 1.5000 min/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/supported interval 1.000–2.000 min/);
+ assert.equal(nodes.get('btn-peptide-spectrum-pdf').disabled,false);
+ assert.deepEqual(Array.from(run('peptideView.selectedSpectrum.mz')),[324.15539]);
+});
+
+test('late chromatogram replies and cleared results cannot replace a newer peptide selection',async()=>{
+ const {run,ctx,nodes}=domFixture();const replies=[],renders=[];
+ ctx.row=candidate;ctx.next={...candidate,scan_id:10,time:3};
+ ctx.Plotly.react=async(id,data)=>renders.push(data);
+ ctx.api.getPeptideChromatogram=()=>new Promise(resolve=>replies.push(resolve));
+ const first=run('peptideLoadChromatogram(row)'),second=run('peptideLoadChromatogram(next)');
+ replies[1](chromatogram);await second;replies[0]({...chromatogram,xic:[999]});await first;
+ assert.equal(renders.length,1);assert.deepEqual(Array.from(renders[0][1].y),chromatogram.xic);
+ assert.match(nodes.get('peptide-chromatogram-status').textContent,/3.0000 min/);
+ const third=run('peptideLoadChromatogram(row)');run('peptideClearResults()');replies[2](chromatogram);await third;
+ assert.equal(nodes.get('peptide-chromatogram').hidden,true);assert.equal(run('peptideView.chromatogram'),null);
+ assert.equal(nodes.get('peptide-chromatogram-status').textContent,'');
+});
+
+test('a failed chromatogram never blocks the measured spectrum, ladder or export',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row=candidate;
+ ctx.api.getPeptideChromatogram=async()=>{throw Error('No MS1 surveys');};
+ ctx.api.getQtofSpectrum=async()=>({mz:[324.15539],intensities:[100]});
+ await run('peptideShowMatch(row)');
+ assert.match(nodes.get('peptide-chromatogram-status').textContent,/No MS1 surveys/);
+ assert.equal(nodes.get('btn-peptide-spectrum-pdf').disabled,false);
+ assert.equal(nodes.get('peptide-ion-sequence').hidden,false);
+});
+
+test('slow Plotly renders are serialized and stale paintings are cleared before the next overlay',async()=>{
+ const {run,ctx}=domFixture();let finish,started,purges=0;const rendered=[];
+ const begun=new Promise(resolve=>{started=resolve;});ctx.data=chromatogram;ctx.row=candidate;
+ ctx.Plotly.purge=()=>purges++;
+ ctx.Plotly.react=async(id,data)=>{rendered.push(data.length);if(rendered.length===1){started();await new Promise(resolve=>{finish=resolve;});}};
+ const first=run('peptideView.chromatogramRequest=1;peptideDrawChromatogram(data,null,1)');await begun;
+ const next=run('peptideView.chromatogramRequest=2;peptideDrawChromatogram(data,row,2)');
+ assert.deepEqual(rendered,[1]);finish();await Promise.all([first,next]);
+ assert.deepEqual(rendered,[1,2]);assert.equal(purges,1);
+});
+
+test('observation picker groups matching sequence and modifications without merging times, charges or evidence',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row=candidate;
+ ctx.result={matches:[candidate,{...candidate,scan_id:10,time:2,charge:2},
+  {...candidate,scan_id:11,time:3,evidence:'ms1',fragments:[],time_start:2.9,time_end:3.1},
+  {...candidate,scan_id:12,time:4,modifications:[{residue:3,delta:42}]},
+  {...candidate,scan_id:13,time:5,sequence:'DIFFERENT'}]};
+ const before=JSON.stringify(ctx.result);
+ run('peptideView.results=result;peptideRenderObservations(row)');
+ const select=nodes.get('peptide-observation-select');assert.equal(select.children.length,3);
+ assert.equal(select.value,'0');assert.equal(select.disabled,false);
+ assert.match(select.children[1].textContent,/2.0000 min · MS\/MS · \+2 · scan 10/);
+ assert.match(select.children[2].textContent,/MS1 interval 2.900–3.100/);
+ ctx.api.getPeptideChromatogram=async()=>chromatogram;
+ ctx.api.getQtofSpectrum=async(path,scan)=>{assert.equal(scan,10);return {mz:[1],intensities:[2]};};
+ select.value='1';await select.onchange();assert.equal(run('peptideView.selectedMatch.scan_id'),10);
+ assert.equal(JSON.stringify(ctx.result),before);
+});
+
+test('chromatogram has a full-width fixed-height canvas and participates in window resizing',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
+ const app=fs.readFileSync(path.join(__dirname,'../js/app.js'),'utf8');
+ assert.match(html,/id="peptide-chromatogram" hidden/);
+ assert.match(html,/id="peptide-chromatogram-plot"[^>]*data-fixed-plot-height="300"/);
+ assert.match(css,/\.peptide-chromatogram-canvas\s*\{[^}]*width: 100%;[^}]*height: 300px/);
+ assert.match(app,/function schedulePlotlyResize[\s\S]*?'peptide-chromatogram-plot'/);
+});
+
 test('b/y assignments preserve exact cuts, direction and explicit +1/+2 charges',()=>{
  const {run,ctx}=domFixture();ctx.row=candidate;
  assert.equal(run('peptideIonLabel(peptideIonAssignment(row,row.fragments[0]))'),'b3 +1');

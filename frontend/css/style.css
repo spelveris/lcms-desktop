@@ -60,6 +60,13 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-spectrum-card { min-width: 0; }
 /* The outer card owns padding/borders; the Plotly canvas keeps its full height. */
 .peptide-spectrum-canvas { width: 100%; max-width: 100%; min-width: 0; height: 430px; min-height: 430px; padding: 0; border: 0; }
+#peptide-chromatogram { width: 100%; min-width: 0; margin-top: 12px; }
+#peptide-chromatogram[hidden] { display: none; }
+.peptide-chromatogram-card { min-width: 0; }
+.peptide-chromatogram-canvas { width: 100%; max-width: 100%; min-width: 0; height: 300px; min-height: 300px; padding: 0; border: 0; }
+.peptide-observations { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.peptide-observations[hidden] { display: none; }
+.peptide-observations select { min-width: 0; max-width: 100%; flex: 1; }
 .peptide-linkage-evidence { border-left: 2px solid #e52a2a; padding: 6px 10px; margin-top: 8px; }
 .peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
 #peptide-linkages label[hidden] { display: none; }
