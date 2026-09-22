@@ -69,7 +69,7 @@ test('GGisoK editor resolves an imported B48 modification and locks chemistry co
 });
 
 const candidate={sequence:'PEPTIDER',modifications:[],locations:[{chain:'A',start:1,end:8}],evidence:'msms',
- scan_id:9,time:1.5,charge:1,precursor_mz:955.4676,precursor_error_ppm:2.1,matched_ions:4,
+ scan_id:9,time:1.5,charge:1,precursor_mz:955.4676,theoretical_precursor_mz:955.4676/(1+2.1e-6),precursor_error_ppm:2.1,matched_ions:4,
  explained_intensity_pct:45,isotope_offset:0,ambiguous_scan:false,
  fragments:[{ion:'b3+',bond:3,observed_mz:324.15539,theoretical_mz:324.1554,error_ppm:-.03,intensity:100},
  {ion:'y5^2+',bond:3,observed_mz:300.2,theoretical_mz:300.2,error_ppm:0,intensity:80}]};
@@ -153,12 +153,20 @@ test('table filters include charge +1 and sort precursor m/z numerically, with m
  assert.equal(run('peptideFilteredRows(result).at(-1).scan_id'),10);
 });
 
-test('rendered table contains measured precursor m/z, sortable headers and resettable filters',()=>{
+test('rendered table pairs measured and theoretical precursor m/z with full-precision tooltips',()=>{
  const {run,ctx,nodes}=domFixture();ctx.result={matches:[candidate]};run('peptideRenderTable(result)');
  let all=descendants(nodes.get('peptide-results'));
  assert.ok(all.some(n=>n.textContent==='955.46760'));assert.ok(all.some(n=>n.textContent==='+1'));
- const header=all.find(n=>String(n.textContent).startsWith('Precursor m/z'));
+ assert.ok(all.some(n=>n.textContent===candidate.theoretical_precursor_mz.toFixed(5)));
+ const cells=all.filter(n=>n.classList.contains('peptide-mz-cell'));
+ assert.equal(cells.length,2);assert.equal(cells[0].textContent,'955.46760');
+ assert.equal(cells[1].textContent,'955.46559');
+ assert.match(cells[1].title,new RegExp(String(candidate.theoretical_precursor_mz).replace('.', '\\.')));
+ assert.match(cells[1].title,/charge \+1, isotope M\+0, modifications included/);
+ const header=all.find(n=>String(n.textContent).startsWith('Measured precursor m/z'));
  header.listeners.click();assert.equal(run('peptideView.sort.key'),'precursor_mz');
+ all.find(n=>String(n.textContent).startsWith('Theoretical precursor m/z')).listeners.click();
+ assert.equal(run('peptideView.sort.key'),'theoretical_precursor_mz');
  const search=all.find(n=>n.type==='search');search.value='nonexistent';search.listeners.input();
  assert.ok(descendants(nodes.get('peptide-results')).some(n=>n.textContent==='0 of 1 matches'));
  all.find(n=>n.textContent==='Reset filters').listeners.click();
@@ -169,23 +177,41 @@ test('each table header has an independent filter button next to sorting; numeri
  const {run,ctx,nodes}=domFixture();ctx.result={matches:[candidate,{...candidate,scan_id:10,precursor_mz:1000}]};
  const before=JSON.stringify(ctx.result);run('peptideRenderTable(result)');
  const all=()=>descendants(nodes.get('peptide-results'));
- const filters=all().filter(n=>n.classList.contains('peptide-filter-button'));assert.equal(filters.length,11);
- const filter=filters.find(n=>n.attributes['aria-label']==='Filter Precursor m/z');
+ const filters=all().filter(n=>n.classList.contains('peptide-filter-button'));assert.equal(filters.length,12);
+ const filter=filters.find(n=>n.attributes['aria-label']==='Filter Measured precursor m/z');
  filter.listeners.click();assert.equal(filter.attributes['aria-expanded'],'true');
- const input=all().find(n=>n.attributes['aria-label']==='Precursor m/z: Minimum (inclusive)');
+ const input=all().find(n=>n.attributes['aria-label']==='Measured precursor m/z: Minimum (inclusive)');
  assert.equal(input.focused,true);input.value='980';input.listeners.input();
  assert.ok(all().some(n=>n.textContent==='1 of 2 matches'));assert.equal(filter.attributes['aria-pressed'],'true');
  assert.match(filter.title,/980/);
- all().find(n=>n.classList.contains('peptide-sort-button')&&n.textContent.startsWith('Precursor m/z')).listeners.click();
+ all().find(n=>n.classList.contains('peptide-sort-button')&&n.textContent.startsWith('Measured precursor m/z')).listeners.click();
  assert.equal(run('peptideFilteredRows(result)[0].scan_id'),10);
  all().find(n=>n.textContent==='Done').listeners.click();assert.equal(filter.attributes['aria-expanded'],'false');
- filter.listeners.click();assert.equal(all().find(n=>n.attributes['aria-label']==='Precursor m/z: Minimum (inclusive)').value,'980');
+ filter.listeners.click();assert.equal(all().find(n=>n.attributes['aria-label']==='Measured precursor m/z: Minimum (inclusive)').value,'980');
  all().find(n=>n.textContent==='Clear this filter').listeners.click();assert.equal(run('peptideFilteredRows(result).length'),2);
- filter.listeners.click();all().find(n=>n.attributes['aria-label']==='Precursor m/z: Maximum (inclusive)').value='900';
- all().find(n=>n.attributes['aria-label']==='Precursor m/z: Maximum (inclusive)').listeners.input();
+ filter.listeners.click();all().find(n=>n.attributes['aria-label']==='Measured precursor m/z: Maximum (inclusive)').value='900';
+ all().find(n=>n.attributes['aria-label']==='Measured precursor m/z: Maximum (inclusive)').listeners.input();
  assert.equal(run('peptideFilteredRows(result).length'),0);
  all().find(n=>n.textContent==='Reset filters').listeners.click();assert.equal(run('Object.keys(peptideView.columnFilters).length'),0);
  assert.equal(JSON.stringify(ctx.result),before);
+});
+
+test('theoretical m/z filters and sorts independently, and missing theory is never invented',()=>{
+ const {run,ctx,nodes}=domFixture();ctx.result={matches:[candidate,
+  {...candidate,scan_id:10,evidence:'ms1',theoretical_precursor_mz:1100,precursor_mz:99},
+  {...candidate,scan_id:11,theoretical_precursor_mz:null},
+  {...candidate,scan_id:12,theoretical_precursor_mz:undefined}]};
+ run('peptideView.sort={key:"theoretical_precursor_mz",direction:-1}');
+ assert.deepEqual(Array.from(run('peptideFilteredRows(result).map(r=>r.scan_id)')),[10,9,11,12]);
+ run('peptideRenderTable(result)');
+ const all=()=>descendants(nodes.get('peptide-results'));
+ assert.equal(all().filter(n=>n.classList.contains('peptide-mz-cell')&&n.textContent==='—').length,2);
+ all().find(n=>n.attributes['aria-label']==='Filter Theoretical precursor m/z').listeners.click();
+ const min=all().find(n=>n.attributes['aria-label']==='Theoretical precursor m/z: Minimum (inclusive)');
+ assert.equal(min.type,'number');min.value='1000';min.listeners.input();
+ assert.deepEqual(Array.from(run('peptideFilteredRows(result).map(r=>r.scan_id)')),[10]);
+ run('peptideView.columnFilters.precursor_mz={min:"1000"}');
+ assert.equal(run('peptideFilteredRows(result).length'),0);
 });
 
 test('column filters combine inclusive numeric ranges and text while excluding missing numeric evidence',()=>{
@@ -463,11 +489,13 @@ test('peptide table allocates one panel width, wraps long values and preserves a
  run('peptideRenderTable(result)');
  const all=descendants(nodes.get('peptide-results'));
  const table=all.find(n=>n.tag==='table');assert.ok(table.classList.contains('peptide-results-table'));
- const columns=all.filter(n=>n.tag==='col');assert.equal(columns.length,11);
+ const columns=all.filter(n=>n.tag==='col');assert.equal(columns.length,12);
  assert.equal(columns.reduce((sum,n)=>sum+parseFloat(n.style.width),0),100);
- assert.equal(all.filter(n=>n.tag==='th').length,11);assert.equal(all.filter(n=>n.tag==='td').length,11);
+ assert.equal(all.filter(n=>n.tag==='th').length,12);assert.equal(all.filter(n=>n.tag==='td').length,12);
+ assert.deepEqual(columns.map(n=>n.style.width),['18%','8%','7%','10%','5%','5%','10%','10%','6%','5%','7%','9%']);
  assert.ok(all.some(n=>n.textContent==='K'.repeat(70)+' [45:+114.04292747]'));
- assert.ok(all.some(n=>n.textContent==='955.46760'&&n.title==='955.46760'));
+ assert.ok(all.some(n=>n.textContent==='955.46760'&&n.title==='Measured precursor m/z: 955.4676'));
+ assert.ok(all.some(n=>n.textContent==='z* ↕'&&n.attributes['aria-label']==='Sort by Charge*'));
  const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
  assert.match(css,/table\.data-table\.peptide-results-table\s*\{[^}]*width: 100%;[^}]*table-layout: fixed/);
  assert.match(css,/table\.data-table\.peptide-results-table th, table\.data-table\.peptide-results-table td\s*\{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere/);

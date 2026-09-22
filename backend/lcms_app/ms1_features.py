@@ -198,6 +198,7 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
             features.append({k:v for k,v in peptide.items() if k != 'residue_masses'} | {
                 'evidence':'ms1', 'ms1_supported':True, 'feature_id':f'ms1-{i}-{z}-{meta["scan_id"]}',
                 'scan_id':meta['scan_id'], 'time':meta['time'], 'precursor_mz':precursor, 'charge':z,
+                'theoretical_precursor_mz':float(predicted_mz),
                 'isotope_offset':isotope, 'precursor_error_ppm':float((precursor-predicted_mz)/predicted_mz*1e6),
                 'precursor_intensity':float(observed[isotope]), 'precursor_relative_intensity_pct':float(observed[isotope]/maxima[apex]*100),
                 'matched_ions':0, 'matched_bonds':0, 'explained_intensity_pct':None, 'fragments':[],

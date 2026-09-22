@@ -89,7 +89,8 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-coverage-underline.evidence-ms1:hover, .peptide-coverage-underline.evidence-ms1:focus-visible { outline-color: #5fbd83; }
 .peptide-table-scroll { width: 100%; min-width: 0; max-width: 100%; }
 table.data-table.peptide-results-table { width: 100%; table-layout: fixed; }
-table.data-table.peptide-results-table th, table.data-table.peptide-results-table td { padding: 5px 6px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+table.data-table.peptide-results-table th, table.data-table.peptide-results-table td { padding: 5px 4px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+table.data-table.peptide-results-table .peptide-mz-cell { font-variant-numeric: tabular-nums; }
 table.data-table.peptide-results-table th { letter-spacing: 0; text-transform: none; z-index: 1; }
 .peptide-results-table .peptide-sort-button { min-width: 0; flex: 1; white-space: normal; overflow-wrap: anywhere; }
 .peptide-column-heading { display: flex; align-items: flex-start; gap: 2px; }

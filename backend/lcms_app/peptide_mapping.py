@@ -314,6 +314,7 @@ def analyze(sample, payload):
                     if len(matches) < 4 or bonds < 3 or explained < 10: continue
                     hits.append({k:v for k,v in peptide.items() if k != 'residue_masses'} | {
                         'evidence': 'msms', 'scan_id': meta['scan_id'], 'time': meta['time'], 'precursor_mz': precursor,
+                        'theoretical_precursor_mz': float(predicted[pidx]),
                         'parent_scan_id': meta.get('parent_scan_id'),
                         'charge': charge, 'isotope_offset': isotope, 'precursor_error_ppm': float(errors[pidx]),
                         'matched_ions': len(matches), 'matched_bonds': bonds, 'explained_intensity_pct': explained, 'fragments': matches,

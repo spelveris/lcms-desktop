@@ -234,15 +234,35 @@ function downsampleProfileEnvelope(xValues, yValues, maxPoints = 80000) {
   return { x, y };
 }
 
-// View-only focus around an assigned component. Neighbouring charge aliases
-// occur about M/z away; stay within that spacing without removing any points.
+// View-only focus: end just inside the nearest predicted wrong-charge copies.
+// This predicts bands from the assigned ion ladder; it does not classify or
+// remove signal, and unrelated components can still be present in the view.
 function getDenseProfileFocusRange(component, fullRange = [1000, 50000]) {
   const mass = Number(component?.mass);
   if (!(mass > 0) || !Number.isFinite(mass)) return fullRange.slice();
   const charges = [...(component.charge_states || []), ...(component.ion_charges || [])]
     .map(Number).filter(z => Number.isInteger(z) && z > 0);
-  const halfWidth = charges.length ? 0.4 * mass / Math.max(...charges) : Math.max(25, mass * 0.02);
-  return [Math.max(1, mass - halfWidth), mass + halfWidth];
+  let leftAlias = -Infinity, rightAlias = Infinity;
+  for (const charge of new Set(charges)) {
+    if (charge < 2) continue;
+    // Use the measured/fitted ion centre when supplied. Otherwise predict it
+    // from the component mass and assigned charge, never a hard-coded mass.
+    const index = (component.ion_charges || []).findIndex(z => Number(z) === charge);
+    const ionMz = index >= 0 ? Number(component.ion_mzs?.[index]) : NaN;
+    const neutralPerCharge = Number.isFinite(ionMz) && ionMz > 1.00784 ? ionMz - 1.00784 : mass / charge;
+    const lower = neutralPerCharge * (charge - 1), upper = neutralPerCharge * (charge + 1);
+    if (lower < mass) leftAlias = Math.max(leftAlias, lower);
+    if (upper > mass) rightAlias = Math.min(rightAlias, upper);
+  }
+  if (!Number.isFinite(leftAlias) || !Number.isFinite(rightAlias)) {
+    const halfWidth = Math.max(25, mass * 0.02);
+    return [Math.max(1, mass - halfWidth), mass + halfWidth];
+  }
+  const spread = Math.abs(finiteNumber(component.mass_std, 0));
+  // A small guard before each predicted apex keeps its smoothed shoulders out
+  // of view. The half-gap cap also handles unusually uncertain assignments.
+  const guard = gap => Math.min(gap * 0.5, Math.max(12, gap * 0.05, spread * 4));
+  return [Math.max(1, leftAlias + guard(mass - leftAlias)), rightAlias - guard(rightAlias - mass)];
 }
 
 function denseProfileVisibleMaximum(profile, rangeDa) {
@@ -288,18 +308,50 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
   if (nearest && Number.isFinite(mainMass) && Math.abs(nearest.mass - mainMass) <= Math.max(10, mainMass * 0.0005)) nearest.main = true;
   candidates.sort((a, b) => Number(b.main) - Number(a.main) || b.intensity - a.intensity);
   const annotations = [], occupied = [];
+  const leadersCross = (a, b) => {
+    const cross = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+    const a1 = cross(a.px, a.py, a.cx, a.cy, b.px, b.py), a2 = cross(a.px, a.py, a.cx, a.cy, b.cx, b.cy);
+    const b1 = cross(b.px, b.py, b.cx, b.cy, a.px, a.py), b2 = cross(b.px, b.py, b.cx, b.cy, a.cx, a.cy);
+    return a1 * a2 < 0 && b1 * b2 < 0;
+  };
+  const leaderCrossesBox = (ax, ay, bx, by, box) => {
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 3));
+    for (let i = 1; i < steps; i++) {
+      const px = ax + (bx - ax) * i / steps, py = ay + (by - ay) * i / steps;
+      if (px > box.x0 - 2 && px < box.x1 + 2 && py > box.y0 - 2 && py < box.y1 + 2) return true;
+    }
+    return false;
+  };
+  const crossesCurve = box => {
+    const firstMass = rangeDa[0] + box.x0 / width * (rangeDa[1] - rangeDa[0]);
+    const lastMass = rangeDa[0] + box.x1 / width * (rangeDa[1] - rangeDa[0]);
+    const start = Math.max(0, Math.floor((firstMass - x[0] * 1000) / binDa));
+    const end = Math.min(x.length - 1, Math.ceil((lastMass - x[0] * 1000) / binDa));
+    for (let i = start; i <= end; i++) {
+      const curveY = (yRange[1] - y[i]) / ySpan * height;
+      if (curveY >= box.y0 - 2 && curveY <= box.y1 + 2) return true;
+    }
+    return false;
+  };
   for (const peak of candidates) {
     if (annotations.length >= 12) break;
     const label = `${peak.mass.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} Da`;
     const labelWidth = label.length * 5.6 + 8;
     const px = (peak.mass - rangeDa[0]) / (rangeDa[1] - rangeDa[0]) * width;
     const py = (yRange[1] - peak.intensity) / ySpan * height;
-    const cx = Math.max(labelWidth / 2, Math.min(width - labelWidth / 2, px));
     let box = null;
     for (let lane = 0; lane < 5; lane++) {
       const cy = Math.max(8, py - 13 - lane * 18);
-      const candidate = { x0: cx - labelWidth / 2, x1: cx + labelWidth / 2, y0: cy - 7, y1: cy + 7, cy };
-      if (!occupied.some(b => candidate.x0 < b.x1 + 4 && candidate.x1 > b.x0 - 4 && candidate.y0 < b.y1 + 3 && candidate.y1 > b.y0 - 3)) { box = candidate; break; }
+      for (const factor of [0, 0.65, -0.65, 1.3, -1.3, 1.95, -1.95]) {
+        const shift = labelWidth * factor;
+        const cx = Math.max(labelWidth / 2, Math.min(width - labelWidth / 2, px + shift));
+        const candidate = { x0: cx - labelWidth / 2, x1: cx + labelWidth / 2, y0: cy - 7, y1: cy + 7, cx, cy, px, py };
+        const collision = occupied.some(b =>
+          (candidate.x0 < b.x1 + 4 && candidate.x1 > b.x0 - 4 && candidate.y0 < b.y1 + 3 && candidate.y1 > b.y0 - 3)
+          || leaderCrossesBox(px, py, cx, cy, b) || leaderCrossesBox(b.px, b.py, b.cx, b.cy, candidate) || leadersCross(candidate, b));
+        if (!collision && !crossesCurve(candidate)) { box = candidate; break; }
+      }
+      if (box) break;
     }
     if (!box) continue;
     occupied.push(box);
@@ -307,7 +359,7 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
       x: peak.mass / 1000, y: peak.intensity,
       text: peak.main ? `<b>${label}</b>` : label,
       showarrow: true, arrowhead: 0, arrowwidth: 0.7, arrowcolor: '#777777',
-      ax: cx - px, ay: box.cy - py, xanchor: 'center', yanchor: 'middle',
+      ax: box.cx - px, ay: box.cy - py, xanchor: 'center', yanchor: 'middle',
       font: { size: 10, color: peak.main ? '#215caf' : '#222222' },
       bgcolor: 'rgba(255,255,255,0.85)', borderpad: 1,
       hovertext: 'Profile peak position; a label is not a chemical identification.',

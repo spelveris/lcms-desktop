@@ -37,11 +37,25 @@ test('dense focus uses the selected component and observed charges, not hard-cod
   context.component = { mass: 18791.26, charge_states: [8, 17, 18, 25] };
   const range = run('getDenseProfileFocusRange(component)');
   assert.ok(range[0] > 18000 && range[0] < 18791);
-  assert.ok(range[1] > 18953 && range[1] < 19500);
+  assert.ok(range[1] > 19400 && range[1] < 18791.26 * 26 / 25);
+  assert.ok(range[0] < 18100 && range[0] > 18791.26 * 24 / 25);
   context.component = { mass: 59000, ion_charges: [35, 45, 50] };
-  assert.deepEqual(Array.from(run('getDenseProfileFocusRange(component)')), [58528, 59472]);
+  assert.deepEqual(Array.from(run('getDenseProfileFocusRange(component)')), [57879, 60121]);
   assert.deepEqual(Array.from(run('getDenseProfileFocusRange(null,[500,80000])')), [500,80000]);
   assert.ok(run('getDenseProfileFocusRange({mass:10000,charge_states:[0,NaN,-3]})[0]') > 0);
+});
+
+test('focus stops before measured ion-ladder aliases on each side, including asymmetric centres', () => {
+  const {run,context}=fixture();
+  context.component={mass:20000,mass_std:.4,charge_states:[10,20],ion_charges:[10,20],ion_mzs:[2001.00784,1001.50784]};
+  const range=Array.from(run('getDenseProfileFocusRange(component)'));
+  const left=1000.5*19,right=1000.5*21;
+  assert.ok(range[0]>left&&range[0]<left+60);
+  assert.ok(range[1]<right&&range[1]>right-60);
+  assert.ok(range[0]<20000&&range[1]>20000);
+  context.component.mass_std=10000;
+  const uncertain=Array.from(run('getDenseProfileFocusRange(component)'));
+  assert.ok(uncertain[0]<20000&&uncertain[1]>20000);
 });
 
 test('dense style keeps full calculation limits and only changes the view', () => {
@@ -116,6 +130,44 @@ test('small profile ripples are not all labelled; empty/flat profiles are safe',
   assert.equal(run('buildDenseProfileAnnotations(profile,[18450,19150]).length'),4);
   assert.equal(run('buildDenseProfileAnnotations({massKDa:[],relativeIntensity:[]},[0,1]).length'),0);
   assert.equal(run('buildDenseProfileAnnotations({massKDa:[1,2,3],relativeIntensity:[4,4,4]},[1000,3000]).length'),0);
+});
+
+test('Da label boxes do not hide neighbouring peak curves in the wider alias-bounded view', () => {
+  const {run,context}=fixture();context.profile=denseFixture();
+  const labels=run('buildDenseProfileAnnotations(profile,[18078,19506],{mainMass:18791.26,width:692,height:234})');
+  assert.equal(labels.length,4);
+  for (const label of labels) {
+    const text=label.text.replace(/<[^>]+>/g,''),w=text.length*5.6+8;
+    const cx=(label.x*1000-18078)/1428*692+label.ax,cy=(130-label.y)/130*234+label.ay;
+    for (let i=0;i<context.profile.massKDa.length;i++) {
+      const px=(context.profile.massKDa[i]*1000-18078)/1428*692;
+      const py=(130-context.profile.relativeIntensity[i])/130*234;
+      assert.ok(!(px>=cx-w/2&&px<=cx+w/2&&py>=cy-7&&py<=cy+7),'label must not cover curve');
+    }
+  }
+});
+
+test('dense peak leaders avoid other label boxes and do not cross one another', () => {
+  const {run,context}=fixture();context.profile=denseFixture();
+  for (const width of [300,692]) {
+    const labels=run(`buildDenseProfileAnnotations(profile,[18078,19506],{mainMass:18791.26,width:${width},height:234})`);
+    assert.equal(labels.length,4);
+    const placed=Array.from(labels,label=>{
+      const text=label.text.replace(/<[^>]+>/g,''),w=text.length*5.6+8;
+      const x=(label.x*1000-18078)/1428*width,y=(130-label.y)/130*234,cx=x+label.ax,cy=y+label.ay;
+      return {x,y,cx,cy,left:cx-w/2,right:cx+w/2,top:cy-7,bottom:cy+7};
+    });
+    const side=(a,b,x,y)=>(b.cx-a.x)*(y-a.y)-(b.cy-a.y)*(x-a.x);
+    for(let i=0;i<placed.length;i++)for(let j=0;j<placed.length;j++){
+      if(i===j)continue;
+      const a=placed[i],b=placed[j];
+      for(let k=1;k<200;k++){
+        const x=a.x+(a.cx-a.x)*k/200,y=a.y+(a.cy-a.y)*k/200;
+        assert.ok(!(x>b.left&&x<b.right&&y>b.top&&y<b.bottom),'arrow crosses another label');
+      }
+      assert.ok(!(side(a,a,b.x,b.y)*side(a,a,b.cx,b.cy)<0&&side(b,b,a.x,a.y)*side(b,b,a.cx,a.cy)<0),'arrows cross');
+    }
+  }
 });
 
 test('focused dense rendering preserves the complete trace, normalization and smoothing', () => {

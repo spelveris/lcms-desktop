@@ -423,10 +423,13 @@ async function peptideExportPdf(kind) {
 }
 
 const PEPTIDE_COLUMNS = [
-  ['sequence','Peptide / modifications',21], ['locations','Locations',8], ['modification_sites','Protein modification sites',12], ['evidence','Evidence',8],
-  ['time','Time (min)',7], ['charge','Charge*',5], ['precursor_mz','Precursor m/z',9],
-  ['precursor_error_ppm','Precursor ppm',7], ['matched_ions','Matched ions',6],
-  ['explained_intensity_pct','Explained intensity',8], ['ambiguous_scan','Review',9],
+  // Budget for typical peptide lengths, three-digit locations and ten-character
+  // m/z values, with more room for the evidence description. Long text wraps.
+  ['sequence','Peptide / modifications',18], ['locations','Locations',8], ['modification_sites','Protein modification sites',7], ['evidence','Evidence',10],
+  ['time','Time (min)',5], ['charge','Charge*',5,'z*'], ['precursor_mz','Measured precursor m/z',10],
+  ['theoretical_precursor_mz','Theoretical precursor m/z',10],
+  ['precursor_error_ppm','Precursor ppm',6], ['matched_ions','Matched ions',5,'Ions'],
+  ['explained_intensity_pct','Explained intensity',7], ['ambiguous_scan','Review',9],
 ];
 
 function peptideLocationText(row) { return row.locations.map(l=>`${l.chain}:${l.start}–${l.end}`).join(', '); }
@@ -437,7 +440,8 @@ function peptideEvidenceText(row) { return row.evidence === 'ms1' ? 'MS1 feature
 function peptideReviewText(row) {
   return (row.sequence_ambiguous ?? row.ambiguous_scan) ? 'Competing sequence' : row.site_ambiguous ? 'Site unresolved' : 'No competing sequence';
 }
-const PEPTIDE_NUMERIC_COLUMNS = new Set(['time','charge','precursor_mz','precursor_error_ppm','matched_ions','explained_intensity_pct']);
+const PEPTIDE_NUMERIC_COLUMNS = new Set(['time','charge','precursor_mz','theoretical_precursor_mz','precursor_error_ppm','matched_ions','explained_intensity_pct']);
+function peptidePrecursorMzText(value) { return Number.isFinite(value) ? value.toFixed(5) : '—'; }
 function peptideColumnValue(row, key) {
   if (key === 'sequence') return `${row.sequence} ${(row.modifications || []).map(m=>`${m.residue}:${m.delta}`).join(' ')}`;
   if (key === 'locations') return peptideLocationText(row);
@@ -540,10 +544,13 @@ function peptideRenderTable(result) {
   }
   const header = table.createTHead().insertRow();
   const headers=[];
-  for (const [key,label] of PEPTIDE_COLUMNS) {
+  for (const [key,label,,shortLabel] of PEPTIDE_COLUMNS) {
     const th=document.createElement('th');th.scope='col';
     const button=document.createElement('button');button.type='button';button.className='peptide-sort-button';
+    button.setAttribute('aria-label',`Sort by ${label}`);button.title=label;
     if(key==='precursor_mz')button.title='Recorded MS/MS precursor m/z, or measured MS1 peak m/z for tentative MS-only matches';
+    if(key==='theoretical_precursor_mz')button.title='Expected precursor m/z for this peptide, modifications, inferred charge and assigned isotope offset; the value used to calculate precursor ppm';
+    if(key==='charge')button.title='Inferred precursor charge (z), including +1';
     button.addEventListener('click',()=>{peptideView.sort={key,direction:peptideView.sort.key===key ? -peptideView.sort.direction : 1};updateRows();});
     const controls=document.createElement('div');controls.className='peptide-column-heading';controls.appendChild(button);
     const filterButton=document.createElement('button');filterButton.type='button';filterButton.className='peptide-filter-button';
@@ -551,16 +558,16 @@ function peptideRenderTable(result) {
     const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');icon.setAttribute('viewBox','0 0 16 16');icon.setAttribute('aria-hidden','true');
     const funnel=document.createElementNS('http://www.w3.org/2000/svg','path');funnel.setAttribute('d','M2 3h12L9.5 8v5l-3-1V8Z');icon.appendChild(funnel);filterButton.appendChild(icon);
     filterButton.addEventListener('click',()=>editFilter(key,label));controls.appendChild(filterButton);
-    th.appendChild(controls);header.appendChild(th);headers.push({th,button,filterButton,key,label});
+    th.appendChild(controls);header.appendChild(th);headers.push({th,button,filterButton,key,label,shortLabel});
   }
   const body = table.createTBody();
   const empty=document.createElement('p');container.appendChild(empty);
   function updateRows() {
     const visible=peptideFilteredRows(result);body.replaceChildren();count.textContent=`${visible.length} of ${result.matches.length} matches`;
-    for(const {th,button,filterButton,key,label} of headers) {
+    for(const {th,button,filterButton,key,label,shortLabel} of headers) {
       const selected=peptideView.sort.key===key;
       th.setAttribute('aria-sort',selected ? (peptideView.sort.direction===1 ? 'ascending' : 'descending') : 'none');
-      button.textContent=label+(selected ? (peptideView.sort.direction===1 ? ' ↑' : ' ↓') : ' ↕');
+      button.textContent=(shortLabel || label)+(selected ? (peptideView.sort.direction===1 ? ' ↑' : ' ↓') : ' ↕');
       const filter=peptideView.columnFilters[key],active=peptideColumnFilterActive(filter);
       filterButton.classList.toggle('is-active',Boolean(active));filterButton.setAttribute('aria-pressed',String(Boolean(active)));
       filterButton.title=`Filter ${label}`+(active ? `: ${PEPTIDE_NUMERIC_COLUMNS.has(key) ? `${filter.min || '−∞'} to ${filter.max || '∞'}` : filter.text}` : '');
@@ -568,8 +575,15 @@ function peptideRenderTable(result) {
     visible.forEach(row => {
     const tr = body.insertRow();
     const mods = row.modifications.map(m=>`${m.residue}:${m.delta > 0 ? '+' : ''}${m.delta}`).join(', ');
-    const values = [row.sequence + (mods ? ` [${mods}]` : ''), peptideLocationText(row), peptideModificationSiteText(row), peptideEvidenceText(row), row.time.toFixed(3), `+${row.charge}`, row.precursor_mz.toFixed(5), row.precursor_error_ppm.toFixed(2), row.evidence==='ms1' ? '—' : row.matched_ions, row.explained_intensity_pct == null ? '—' : `${row.explained_intensity_pct.toFixed(1)}%`];
-    values.forEach(value => { const cell = tr.insertCell(); cell.textContent = value; cell.title = String(value); });
+    const values = [row.sequence + (mods ? ` [${mods}]` : ''), peptideLocationText(row), peptideModificationSiteText(row), peptideEvidenceText(row), row.time.toFixed(3), `+${row.charge}`, peptidePrecursorMzText(row.precursor_mz), peptidePrecursorMzText(row.theoretical_precursor_mz), row.precursor_error_ppm.toFixed(2), row.evidence==='ms1' ? '—' : row.matched_ions, row.explained_intensity_pct == null ? '—' : `${row.explained_intensity_pct.toFixed(1)}%`];
+    values.forEach((value,index) => {
+      const cell = tr.insertCell(), key=PEPTIDE_COLUMNS[index][0];cell.textContent=value;cell.title=String(value);
+      if(key==='precursor_mz' || key==='theoretical_precursor_mz') {
+        cell.className='peptide-mz-cell';
+        cell.title=Number.isFinite(row[key]) ? `${PEPTIDE_COLUMNS[index][1]}: ${row[key]}` : 'Not available';
+        if(key==='theoretical_precursor_mz' && Number.isFinite(row[key]))cell.title+=` (charge +${row.charge}, isotope M+${row.isotope_offset ?? 0}, modifications included)`;
+      }
+    });
     const button = document.createElement('button'); button.type='button';button.className = 'btn btn-sm'; button.textContent = (row.evidence==='ms1' ? 'View MS peak' : 'View fragments')+((row.sequence_ambiguous ?? row.ambiguous_scan) ? ' · competing sequence' : row.site_ambiguous ? ' · site unresolved' : '');
     button.addEventListener('click',()=>peptideShowMatch(row)); tr.insertCell().appendChild(button);
     });

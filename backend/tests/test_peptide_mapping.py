@@ -8,7 +8,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lcms_app'))
 from peptide_mapping import AA, PROTON, WATER, IAM_DELTA, preparation_modifications, parse_fasta, digest, digest_with_site_search, fragments, match_fragments, analyze, bioconfirm_references
-from ms1_features import expected_envelope, find_features, link_msms
+from ms1_features import ISOTOPE, expected_envelope, find_features, link_msms
 
 
 def feature_scans(peptide, charges=(1,), apex=100., background=0., profile=(0,.2,.7,1,.7,.2,0), shift_ppm=0.):
@@ -26,6 +26,11 @@ def feature_scans(peptide, charges=(1,), apex=100., background=0., profile=(0,.2
 
 
 class PeptideMappingTests(unittest.TestCase):
+    def assert_precursor_target(self, row, expected):
+        self.assertAlmostEqual(row['theoretical_precursor_mz'], expected, places=10)
+        self.assertAlmostEqual(row['precursor_error_ppm'],
+            (row['precursor_mz']-row['theoretical_precursor_mz'])/row['theoretical_precursor_mz']*1e6, places=8)
+
     def test_iam_and_reduction_use_free_cysteine_masses_once(self):
         chains=parse_fasta('AACCAAR')
         base=digest(chains,0,[])[0][0]
@@ -39,6 +44,8 @@ class PeptideMappingTests(unittest.TestCase):
         scans=feature_scans(peptide)
         result=analyze(self.make_sample(scans),{'fasta':'AACCAAR','preparation':{'iam':True}})
         self.assertTrue(result['matches']);self.assertTrue(result['settings']['preparation']['iam'])
+        for row in result['matches']:
+            self.assert_precursor_target(row,(peptide['mass']+expected_envelope(peptide)[0][row['isotope_offset']])/row['charge']+PROTON)
         self.assertFalse(analyze(self.make_sample(scans),{'fasta':'AACCAAR'})['matches'])
 
     def test_unreduced_linked_peptides_excluded_not_given_invented_linear_masses(self):
@@ -66,6 +73,8 @@ class PeptideMappingTests(unittest.TestCase):
         self.assertTrue(all(r['evidence']=='ms1' and not r['fragments'] for r in result['matches']))
         self.assertTrue(all(r['explained_intensity_pct'] is None for r in result['matches']))
         self.assertEqual(result['coverage'][0]['percent'],0)
+        for row in result['matches']:
+            self.assert_precursor_target(row,(peptide['mass']+expected_envelope(peptide)[0][row['isotope_offset']])/row['charge']+PROTON)
 
     def test_ms1_repeated_scans_keep_strongest_exact_observation_and_rt_span(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
@@ -77,6 +86,7 @@ class PeptideMappingTests(unittest.TestCase):
         self.assertEqual(row['core_observation_count'],3)
         self.assertEqual((row['time_start'],row['time_end']),(.01,.05))
         self.assertEqual(row['precursor_mz'],scans[3][0,0]);self.assertAlmostEqual(row['precursor_error_ppm'],2.)
+        self.assert_precursor_target(row,mz)
 
     def test_single_scan_or_isolated_mz_never_makes_ms1_coverage_even_at_zero_cutoffs(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
@@ -194,6 +204,7 @@ class PeptideMappingTests(unittest.TestCase):
         rows=analyze(self.make_sample(scans),{'fasta':'PEPTIDER','precursor_ppm':10})['matches']
         self.assertEqual(len(rows),1);self.assertEqual(rows[0]['isotope_offset'],1)
         self.assertLessEqual(abs(rows[0]['precursor_error_ppm']),10)
+        self.assert_precursor_target(rows[0],peptide['mass']+expected_envelope(peptide)[0][1]+PROTON)
         self.assertEqual(analyze(self.make_sample(feature_scans(peptide,shift_ppm=12.)),{'fasta':'PEPTIDER','precursor_ppm':10})['matches'],[])
 
     def test_packaged_feature_smoke_contract(self):
@@ -341,8 +352,27 @@ class PeptideMappingTests(unittest.TestCase):
         result=analyze(self.make_sample([np.array([[mz,100.]])],channel),{'fasta':'PEPTIDER'})
         self.assertEqual(len(result['matches']),1);row=result['matches'][0]
         self.assertEqual(row['evidence'],'msms');self.assertEqual(row['charge'],1)
+        self.assert_precursor_target(row,mz)
         self.assertTrue(all('^2+' not in f['ion'] for f in row['fragments']))
         self.assertEqual(result['coverage'][0]['percent'],100.)
+
+    def test_msms_theoretical_precursor_includes_modifications_charge_and_assigned_isotope(self):
+        fasta='LIFAGKQLEDGR'
+        mod={'chain':'A','position':6,'kind':'gg','delta':114.04292747,'formula':'C4H6N2O2','block_cleavage':True}
+        peptide=digest(parse_fasta(fasta),0,[mod])[0][0]
+        for z in (1,2,4):
+            for isotope in (0,1,2):
+                with self.subTest(charge=z,isotope=isotope):
+                    theory=(peptide['mass']+z*PROTON+isotope*ISOTOPE)/z
+                    measured=theory*(1-3.5e-6)
+                    scan=np.array(sorted((mass,100.) for _,mass,_ in fragments(peptide['residue_masses'],min(2,z))))
+                    channel=SimpleNamespace(metadata=[{'scan_id':99,'time':1.,'precursor_mz':measured}],scans=[scan])
+                    rows=analyze(self.make_sample([],channel),{'fasta':fasta,'modifications':[mod],'missed_cleavages':0})['matches']
+                    self.assertEqual(len(rows),1);row=rows[0]
+                    self.assertEqual((row['charge'],row['isotope_offset']),(z,isotope))
+                    self.assertEqual(row['precursor_mz'],measured)
+                    self.assert_precursor_target(row,theory)
+                    self.assertAlmostEqual(row['precursor_error_ppm'],-3.5)
 
     def test_ms1_ggisok_mass_and_unresolved_modification_exclusion(self):
         fasta='LIFAGKQLEDGR';mod={'chain':'A','position':6,'delta':114.04292747,'formula':'C4H6N2O2','block_cleavage':True}
@@ -350,6 +380,8 @@ class PeptideMappingTests(unittest.TestCase):
         sample=self.make_sample(feature_scans(peptide))
         result=analyze(sample,{'fasta':fasta,'modifications':[{**mod,'kind':'gg'}],'missed_cleavages':0})
         self.assertEqual(len(result['matches']),1);self.assertEqual(result['matches'][0]['modifications'][0]['residue'],6)
+        row=result['matches'][0]
+        self.assert_precursor_target(row,(peptide['mass']+expected_envelope(peptide)[0][row['isotope_offset']])/row['charge']+PROTON)
         result=analyze(sample,{'fasta':fasta,'modifications':[{**mod,'delta':None}],'missed_cleavages':0})
         self.assertEqual(result['matches'],[]);self.assertEqual(result['excluded_modified_peptides'],1)
 

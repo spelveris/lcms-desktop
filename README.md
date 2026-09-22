@@ -39,9 +39,13 @@ In the default charge-envelope workflow, the dense third-row mass view is an all
 does not add isotope resolution or change that algorithm.
 The on-screen dense profile initially focuses on the strongest displayed component.
 Click another coloured mass bar or result-table row to focus that component;
-**Full range** restores the configured overview. The initial half-width is 40%
-of the selected mass divided by its highest assigned charge (or 2% of mass,
-at least 25 Da, when charges are unavailable). This is a reversible viewing
+**Full range** restores the configured overview. View edges are just inside the
+nearest predicted one-charge-too-low/high copies of the selected ion ladder.
+A guard of 5% of the alias spacing (at least 12 Da, or four times the reported
+mass spread) keeps some room before the predicted artifact shoulders. Measured
+ion centres are used when available; otherwise positions follow assigned mass
+and charges. Missing/multiply-charged-unavailable assignments use 2% of mass,
+at least 25 Da. This is a reversible viewing
 heuristic, not artifact removal or a guarantee that every visible peak is real.
 Prominent local maxima receive adaptive, collision-spaced labels in **Da** with
 one decimal place; the selected component's nearby apex is emphasized. Labels
@@ -279,9 +283,17 @@ feature. Strong MS/MS remains visible when precursor feature evidence is missing
 
 The results table supports sequence/location/modification text filtering,
 evidence, charge and competing-assignment filters, and sortable columns including
-precursor m/z (five decimal places) and the separate signed precursor ppm error.
-Precursor m/z is the recorded MS/MS precursor, or the exact measured survey peak
-for an MS-only hypothesis. Charge is inferred from mass, including +1; its
+measured and theoretical precursor m/z side by side (five decimal places, full
+stored precision in their tooltips), plus the signed precursor ppm error. Both
+m/z columns have independent numeric sorting and range filters. Measured m/z is
+the recorded MS/MS precursor, or the exact measured survey peak for an MS-only
+hypothesis. The theoretical value is the actual matching target, including
+modifications, inferred charge and assigned isotope offset, not necessarily the
+monoisotopic peak. Thus it agrees with the ppm calculation; MS1 elemental-envelope
+centroids and MS/MS nominal isotope offsets retain their existing definitions.
+Default widths reserve equal room for the two values and more space for evidence,
+while keeping all columns within one panel width and wrapping long text.
+Charge is inferred from mass, including +1; its
 presence in the search is not a guarantee of a +1 result in every run.
 
 ### QTOF reference-ion exclusion
