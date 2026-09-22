@@ -37,6 +37,18 @@ centroids and inferred ion centroids are not rounded for their hover readouts.
 In the default charge-envelope workflow, the dense third-row mass view is an all-charge projection with 0.1 Da bins and
 2 Da Gaussian smoothing, not isotope-resolved deconvolution. The 0.001 m/z grid
 does not add isotope resolution or change that algorithm.
+The on-screen dense profile initially focuses on the strongest displayed component.
+Click another coloured mass bar or result-table row to focus that component;
+**Full range** restores the configured overview. The initial half-width is 40%
+of the selected mass divided by its highest assigned charge (or 2% of mass,
+at least 25 Da, when charges are unavailable). This is a reversible viewing
+heuristic, not artifact removal or a guarantee that every visible peak is real.
+Prominent local maxima receive adaptive, collision-spaced labels in **Da** with
+one decimal place; the selected component's nearby apex is emphasized. Labels
+are calculated from the full profile before display downsampling and are not
+chemical identifications. Focus changes axis limits only: profile samples,
+normalization, bins, smoothing and analysis results are unchanged. Existing PDF
+downloads remain unchanged; these display labels and focus are on-screen only.
 When smoothing is applied, QTOF peak intensities are expressed on the previous
 0.01 m/z reference-bin scale, so a ten-times-finer grid does not silently lower
 the existing noise threshold by tenfold. Raw summed counts are not rescaled.

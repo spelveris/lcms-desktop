@@ -61,6 +61,7 @@ const state = {
   deconvTimeRange: null,
   deconvIonSelectionObjectUrl: null,
   deconvDenseProfileRenderId: 0,
+  deconvDenseViewMode: 'focus',
   deconvAutoRunSignature: '',
   deconvAutoRunInFlight: false,
   deconvWindowEditTimer: null,
@@ -6908,6 +6909,8 @@ function initDeconvolution() {
   document.getElementById('deconv-spectrum-view')?.addEventListener('change', () => {
     if(state.deconvResults)renderDeconvResults(state.deconvResults);
   });
+  document.getElementById('btn-dense-focus')?.addEventListener('click', () => setDenseProfileView('focus'));
+  document.getElementById('btn-dense-full-range')?.addEventListener('click', () => setDenseProfileView('full'));
   document.getElementById('btn-refresh-deconv')?.addEventListener('click', refreshCurrentDeconvolutionSample);
   document.getElementById('deconv-start').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
   document.getElementById('deconv-end').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
@@ -7223,6 +7226,8 @@ async function runDeconvolution(options = {}) {
       topN: DECONV_DISPLAY_TOP_N,
     });
     state.deconvSamplePath = samplePath;
+    state.deconvSelectedComponentIndex = 0;
+    state.deconvDenseViewMode = 'focus';
     const resultRange = Array.isArray(data.time_range) ? data.time_range : null;
     state.deconvTimeRange = [
       Number.isFinite(params.start_time) ? params.start_time : (resultRange ? resultRange[0] : null),
@@ -7338,6 +7343,8 @@ function renderDeconvResults(data) {
   resultsDiv.classList.remove('hidden');
   syncDeconvBottomLayout();
   const isotopeAware=data.workflow?.id==='qtof-isotope-aware';
+  const denseViewControls = document.getElementById('dense-profile-view-controls');
+  if (denseViewControls) denseViewControls.hidden = isotopeAware;
   const viewWrap=document.getElementById('deconv-spectrum-view-wrap');
   if(viewWrap)viewWrap.hidden=data.workflow?.id!=='qtof-envelope';
   const view=document.getElementById('deconv-spectrum-view');
@@ -7403,7 +7410,10 @@ function renderDeconvResults(data) {
 
   // Deconvoluted masses stem plot (vertical lines like Streamlit)
   if (components.length > 0) {
-    charts.plotDeconvMasses('deconv-mass-plot', components);
+    charts.plotDeconvMasses('deconv-mass-plot', components, { onSelect: index => {
+      selectDeconvComponent(index);
+      showIonDetail(components[index]);
+    } });
   } else {
     document.getElementById('deconv-mass-plot').innerHTML = '<p class="placeholder-msg">No masses deconvoluted</p>';
   }
@@ -7447,7 +7457,7 @@ function renderDeconvResults(data) {
     tableContainer.querySelectorAll('.deconv-row').forEach(row => {
       row.addEventListener('click', () => {
         const idx = parseInt(row.dataset.idx);
-        state.deconvSelectedComponentIndex = Number.isInteger(idx) ? idx : 0;
+        selectDeconvComponent(Number.isInteger(idx) ? idx : 0);
         showIonDetail(components[idx]);
       });
     });
@@ -7479,7 +7489,7 @@ function buildCurrentDeconvStyle() {
   };
 }
 
-function applyDenseDeconvProfileStyle(style = {}) {
+function applyDenseDeconvProfileStyle(style = {}, { includeView = true } = {}) {
   const params = getCurrentDeconvolutionParameters();
   style.deconv_export_variant = 'dense-profile';
   style.deconv_profile_bin_da = 0.10;
@@ -7487,8 +7497,29 @@ function applyDenseDeconvProfileStyle(style = {}) {
   style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
   style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
   style.deconv_profile_use_monoisotopic = params.monoisotopic === true;
+  const component = getSelectedDeconvComponent();
+  style.deconv_profile_selected_mass = component?.mass;
+  if (includeView && state.deconvDenseViewMode !== 'full' && state.deconvResults?.workflow?.id !== 'qtof-isotope-aware' && component) {
+    const range = getDenseProfileFocusRange(component, [style.deconv_x_min_da, style.deconv_x_max_da]);
+    style.deconv_profile_view_min_da = range[0];
+    style.deconv_profile_view_max_da = range[1];
+    // Keep the full calculation domain; extend it only for a selected mass
+    // beyond the user's general plotting limits. Focusing itself crops no data.
+    style.deconv_x_min_da = Math.min(style.deconv_x_min_da ?? 1000, range[0]);
+    style.deconv_x_max_da = Math.max(style.deconv_x_max_da ?? 50000, range[1]);
+  }
   style.show_grid = false;
   return style;
+}
+
+function setDenseProfileView(mode) {
+  state.deconvDenseViewMode = mode === 'full' ? 'full' : 'focus';
+  renderDeconvDenseMassPreview();
+}
+
+function selectDeconvComponent(index) {
+  state.deconvSelectedComponentIndex = index;
+  setDenseProfileView('focus');
 }
 
 function getSelectedDeconvComponent() {
@@ -7520,6 +7551,12 @@ function resetDeconvDenseMassProfile(message = 'Run deconvolution to render the 
 function renderDeconvDenseMassPreview() {
   const container = document.getElementById('deconv-dense-mass-preview');
   if (!container) return;
+  for (const [id, mode] of [['btn-dense-focus', 'focus'], ['btn-dense-full-range', 'full']]) {
+    const button = document.getElementById(id);
+    button?.classList.toggle('btn-primary', state.deconvDenseViewMode === mode);
+    button?.setAttribute('aria-pressed', String(state.deconvDenseViewMode === mode));
+    if (button) button.disabled = mode === 'focus' && !getSelectedDeconvComponent();
+  }
 
   const samplePath = state.deconvSamplePath;
   const spectrum = state.deconvResults?.spectrum || null;
@@ -7727,7 +7764,8 @@ async function exportDeconvMasses(format) {
     style.deconv_selected_component = getSelectedDeconvComponent();
   }
   if (isDensePdf) {
-    applyDenseDeconvProfileStyle(style);
+    // Preserve existing downloads; these new labels/focus are on-screen only.
+    applyDenseDeconvProfileStyle(style, { includeView: false });
   }
 
   const exportLabel = isDensePdf

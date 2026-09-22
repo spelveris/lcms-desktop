@@ -64,7 +64,7 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
 #peptide-linkages label[hidden] { display: none; }
 .peptide-preparation { flex-wrap: wrap; }
-#expert-params[hidden], #deconv-isotope-workflow[hidden], #deconv-method-wrap[hidden], #deconv-spectrum-view-wrap[hidden] { display: none; }
+#expert-params[hidden], #deconv-isotope-workflow[hidden], #deconv-method-wrap[hidden], #deconv-spectrum-view-wrap[hidden], #dense-profile-view-controls[hidden] { display: none; }
 .peptide-preparation label[hidden], #peptide-analysis-details[hidden] { display: none; }
 #peptide-analysis-details { margin: 6px 0; }
 #peptide-analysis-details summary { cursor: pointer; }

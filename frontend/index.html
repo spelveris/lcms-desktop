@@ -604,6 +604,10 @@
         </div>
         <div class="two-col deconv-dense-row">
           <div class="deconv-plot-card deconv-dense-preview-card">
+            <div id="dense-profile-view-controls" class="deconv-mass-download-row" aria-label="Mass profile view">
+              <button id="btn-dense-focus" class="btn btn-sm btn-primary" type="button" aria-pressed="true" title="Zoom around the selected deconvoluted mass; no signal is removed">Focus selected mass</button>
+              <button id="btn-dense-full-range" class="btn btn-sm" type="button" aria-pressed="false" title="Show the complete configured mass range">Full range</button>
+            </div>
             <div id="deconv-dense-mass-preview" class="deconv-dense-preview deconv-plot-inner">
               <p class="placeholder-msg">Run deconvolution to render the dense mass profile.</p>
             </div>

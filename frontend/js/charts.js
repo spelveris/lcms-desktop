@@ -234,6 +234,116 @@ function downsampleProfileEnvelope(xValues, yValues, maxPoints = 80000) {
   return { x, y };
 }
 
+// View-only focus around an assigned component. Neighbouring charge aliases
+// occur about M/z away; stay within that spacing without removing any points.
+function getDenseProfileFocusRange(component, fullRange = [1000, 50000]) {
+  const mass = Number(component?.mass);
+  if (!(mass > 0) || !Number.isFinite(mass)) return fullRange.slice();
+  const charges = [...(component.charge_states || []), ...(component.ion_charges || [])]
+    .map(Number).filter(z => Number.isInteger(z) && z > 0);
+  const halfWidth = charges.length ? 0.4 * mass / Math.max(...charges) : Math.max(25, mass * 0.02);
+  return [Math.max(1, mass - halfWidth), mass + halfWidth];
+}
+
+function denseProfileVisibleMaximum(profile, rangeDa) {
+  let maximum = 0;
+  for (let i = 0; i < profile.massKDa.length; i++) {
+    const mass = profile.massKDa[i] * 1000;
+    if (mass >= rangeDa[0] && mass <= rangeDa[1]) maximum = Math.max(maximum, profile.relativeIntensity[i]);
+  }
+  return maximum;
+}
+
+function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
+  const x = profile.massKDa || [], y = profile.relativeIntensity || [];
+  if (x.length < 3 || x.length !== y.length || !(rangeDa[1] > rangeDa[0])) return [];
+  const maximum = denseProfileVisibleMaximum(profile, rangeDa);
+  if (!(maximum > 0)) return [];
+  const width = Math.max(120, finiteNumber(options.width, 700));
+  const height = Math.max(80, finiteNumber(options.height, 234));
+  const yRange = options.yRange || [0, maximum * 1.3];
+  const ySpan = yRange[1] - yRange[0];
+  if (!(ySpan > 0)) return [];
+  const binDa = (x[1] - x[0]) * 1000;
+  const radius = Math.max(1, Math.ceil(8 / Math.max(0.01, binDa)));
+  const candidates = [];
+  for (let i = 1; i < x.length - 1; i++) {
+    const mass = x[i] * 1000, intensity = y[i];
+    if (mass < rangeDa[0] || mass > rangeDa[1] || intensity < maximum * 0.04 || intensity < yRange[0] || intensity > yRange[1]) continue;
+    if (!(intensity > y[i - 1] && intensity >= y[i + 1])) continue;
+    let left = intensity, right = intensity;
+    for (let j = i - 1; j >= Math.max(0, i - radius); j--) {
+      if (y[j] > intensity) break;
+      left = Math.min(left, y[j]);
+    }
+    for (let j = i + 1; j <= Math.min(y.length - 1, i + radius); j++) {
+      if (y[j] > intensity) break;
+      right = Math.min(right, y[j]);
+    }
+    if (intensity - Math.max(left, right) < maximum * 0.02) continue;
+    candidates.push({ mass, intensity, main: false });
+  }
+  const mainMass = Number(options.mainMass);
+  const nearest = candidates.reduce((best, c) => !best || Math.abs(c.mass - mainMass) < Math.abs(best.mass - mainMass) ? c : best, null);
+  if (nearest && Number.isFinite(mainMass) && Math.abs(nearest.mass - mainMass) <= Math.max(10, mainMass * 0.0005)) nearest.main = true;
+  candidates.sort((a, b) => Number(b.main) - Number(a.main) || b.intensity - a.intensity);
+  const annotations = [], occupied = [];
+  for (const peak of candidates) {
+    if (annotations.length >= 12) break;
+    const label = `${peak.mass.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} Da`;
+    const labelWidth = label.length * 5.6 + 8;
+    const px = (peak.mass - rangeDa[0]) / (rangeDa[1] - rangeDa[0]) * width;
+    const py = (yRange[1] - peak.intensity) / ySpan * height;
+    const cx = Math.max(labelWidth / 2, Math.min(width - labelWidth / 2, px));
+    let box = null;
+    for (let lane = 0; lane < 5; lane++) {
+      const cy = Math.max(8, py - 13 - lane * 18);
+      const candidate = { x0: cx - labelWidth / 2, x1: cx + labelWidth / 2, y0: cy - 7, y1: cy + 7, cy };
+      if (!occupied.some(b => candidate.x0 < b.x1 + 4 && candidate.x1 > b.x0 - 4 && candidate.y0 < b.y1 + 3 && candidate.y1 > b.y0 - 3)) { box = candidate; break; }
+    }
+    if (!box) continue;
+    occupied.push(box);
+    annotations.push({
+      x: peak.mass / 1000, y: peak.intensity,
+      text: peak.main ? `<b>${label}</b>` : label,
+      showarrow: true, arrowhead: 0, arrowwidth: 0.7, arrowcolor: '#777777',
+      ax: cx - px, ay: box.cy - py, xanchor: 'center', yanchor: 'middle',
+      font: { size: 10, color: peak.main ? '#215caf' : '#222222' },
+      bgcolor: 'rgba(255,255,255,0.85)', borderpad: 1,
+      hovertext: 'Profile peak position; a label is not a chemical identification.',
+    });
+  }
+  return annotations;
+}
+
+function bindDenseProfileLabels(divId, profile, initialRangeDa, mainMass) {
+  const plot = document.getElementById(divId);
+  if (!plot?.on || !window.Plotly?.relayout) return;
+  if (plot.__denseLabelHandler && plot.removeListener) plot.removeListener('plotly_relayout', plot.__denseLabelHandler);
+  let busy = false;
+  const apply = (event = {}) => {
+    if (busy) return;
+    const changesX = Object.keys(event).some(key => key.startsWith('xaxis.range') || key === 'xaxis.autorange');
+    const changesY = Object.keys(event).some(key => key.startsWith('yaxis.range') || key === 'yaxis.autorange');
+    if (Object.keys(event).length && !changesX && !changesY && !('width' in event) && !('height' in event)) return;
+    const xr = event['xaxis.autorange'] ? initialRangeDa.map(v => v / 1000)
+      : event['xaxis.range'] || [event['xaxis.range[0]'] ?? plot.layout?.xaxis?.range?.[0], event['xaxis.range[1]'] ?? plot.layout?.xaxis?.range?.[1]];
+    const range = xr.every(Number.isFinite) ? xr.map(v => v * 1000) : initialRangeDa;
+    const maximum = denseProfileVisibleMaximum(profile, range);
+    const yr = (changesX && !changesY) || event['yaxis.autorange']
+      ? [0, (maximum || 100) * 1.3]
+      : event['yaxis.range'] || [event['yaxis.range[0]'] ?? plot.layout?.yaxis?.range?.[0] ?? 0, event['yaxis.range[1]'] ?? plot.layout?.yaxis?.range?.[1] ?? 130];
+    const annotations = buildDenseProfileAnnotations(profile, range, {
+      width: Math.max(120, (plot.clientWidth || 800) - 108), height: Math.max(80, (plot.clientHeight || 340) - 106), mainMass, yRange: yr,
+    });
+    busy = true;
+    Promise.resolve(window.Plotly.relayout(plot, { annotations, 'xaxis.range': range.map(v => v / 1000), 'xaxis.autorange': false, 'yaxis.range': yr, 'yaxis.autorange': false }))
+      .catch(() => {}).finally(() => { busy = false; });
+  };
+  plot.__denseLabelHandler = apply;
+  plot.on('plotly_relayout', apply);
+}
+
 function clonePlotConfig(extra = {}) {
   const base = { ...PLOT_CONFIG };
   if (Array.isArray(PLOT_CONFIG.modeBarButtonsToRemove)) {
@@ -1354,7 +1464,17 @@ const charts = {
         color: '#000000',
       };
     }
-    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG).then(() => {
+      const plot = document.getElementById(divId);
+      if (!plot?.on || typeof options.onSelect !== 'function') return;
+      if (plot.__deconvSelectHandler && plot.removeListener) plot.removeListener('plotly_click', plot.__deconvSelectHandler);
+      const handler = event => {
+        const index = event?.points?.[0]?.curveNumber;
+        if (Number.isInteger(index) && index >= 0 && index < components.length) options.onSelect(index);
+      };
+      plot.__deconvSelectHandler = handler;
+      plot.on('plotly_click', handler);
+    });
   },
 
   plotDenseDeconvolutedMassProfile(divId, spectrum, options = {}) {
@@ -1399,12 +1519,16 @@ const charts = {
     );
 
     const plotHeight = getContainerHeight(divId, Number(options.height) || 340);
+    const requestedView = [Number(style.deconv_profile_view_min_da), Number(style.deconv_profile_view_max_da)];
+    const viewRangeDa = requestedView.every(Number.isFinite) && requestedView[1] > requestedView[0] ? requestedView : [massMinDa, massMaxDa];
+    const visibleMax = denseProfileVisibleMaximum(profile, viewRangeDa);
+    const yRange = [0, (visibleMax || 100) * 1.3];
     const showTitle = style.deconv_show_title !== false;
     const layout = mergeLayout({
       title: { text: showTitle ? (options.title || 'Deconvoluted Masses') : '', font: { size: 14 } },
       xaxis: {
         title: 'Mass (kDa)',
-        range: [massMinDa / 1000.0, massMaxDa / 1000.0],
+        range: viewRangeDa.map(v => v / 1000),
         showgrid: false,
         showline: true,
         linecolor: '#000000',
@@ -1416,7 +1540,7 @@ const charts = {
       },
       yaxis: {
         title: 'Relative Intensity (%)',
-        range: [0, 100],
+        range: yRange,
         showgrid: false,
         showline: true,
         linecolor: '#000000',
@@ -1430,6 +1554,10 @@ const charts = {
       height: plotHeight,
       margin: { l: 64, r: 44, t: showTitle ? 40 : 18, b: 66 },
       dragmode: 'zoom',
+      annotations: buildDenseProfileAnnotations(profile, viewRangeDa, {
+        mainMass: style.deconv_profile_selected_mass,
+        width: Math.max(120, (document.getElementById(divId)?.clientWidth || 800) - 108), height: plotHeight - 106, yRange,
+      }),
     });
     layout.xaxis.showgrid = false;
     layout.yaxis.showgrid = false;
@@ -1459,11 +1587,14 @@ const charts = {
         color: '#000000',
         width: Math.max(0.5, finiteNumber(style.line_width, getLineWidth())),
       },
-      hovertemplate: 'Mass: %{x:.4f} kDa<br>Relative Intensity: %{y:.2f}%<extra></extra>',
+      customdata: Array.from(displayed.x, mass => mass * 1000),
+      hovertemplate: 'Mass: %{customdata:.1f} Da<br>Relative Intensity: %{y:.2f}%<extra></extra>',
       showlegend: false,
     };
 
-    Plotly.newPlot(divId, [trace], layout, PLOT_CONFIG);
+    Plotly.newPlot(divId, [trace], layout, PLOT_CONFIG).then(() => {
+      bindDenseProfileLabels(divId, profile, viewRangeDa, style.deconv_profile_selected_mass);
+    });
   },
 
   plotIonDetail(divId, component) {

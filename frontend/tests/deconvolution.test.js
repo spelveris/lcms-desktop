@@ -20,6 +20,134 @@ function fixture() {
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
 
+function denseFixture(shift = 0) {
+  const masses = [18791.2, 18845.1, 18898.9, 18952.8].map(m => m + shift);
+  const heights = [100, 23, 10, 5.7];
+  const massKDa = [], relativeIntensity = [];
+  for (let i = 0; i < 7000; i++) {
+    const mass = 18450 + shift + i * 0.1;
+    massKDa.push(mass / 1000);
+    relativeIntensity.push(masses.reduce((sum, peak, j) => sum + heights[j] * Math.exp(-0.5 * ((mass - peak) / 2) ** 2), 0));
+  }
+  return { massKDa, relativeIntensity };
+}
+
+test('dense focus uses the selected component and observed charges, not hard-coded masses', () => {
+  const { run, context } = fixture();
+  context.component = { mass: 18791.26, charge_states: [8, 17, 18, 25] };
+  const range = run('getDenseProfileFocusRange(component)');
+  assert.ok(range[0] > 18000 && range[0] < 18791);
+  assert.ok(range[1] > 18953 && range[1] < 19500);
+  context.component = { mass: 59000, ion_charges: [35, 45, 50] };
+  assert.deepEqual(Array.from(run('getDenseProfileFocusRange(component)')), [58528, 59472]);
+  assert.deepEqual(Array.from(run('getDenseProfileFocusRange(null,[500,80000])')), [500,80000]);
+  assert.ok(run('getDenseProfileFocusRange({mass:10000,charge_states:[0,NaN,-3]})[0]') > 0);
+});
+
+test('dense style keeps full calculation limits and only changes the view', () => {
+  const { run, context } = fixture();
+  context.components = [{mass:18791.26,intensity:100,charge_states:[17,18,25]}];
+  run('state.deconvResults={workflow:{id:"qtof-envelope"},components}; state.deconvDisplayComponents=components');
+  const focus = run('applyDenseDeconvProfileStyle({deconv_x_min_da:1000,deconv_x_max_da:50000})');
+  assert.equal(focus.deconv_x_min_da,1000);assert.equal(focus.deconv_x_max_da,50000);
+  assert.equal(focus.deconv_profile_smooth_sigma_da,2);assert.equal(focus.deconv_profile_bin_da,.1);
+  assert.ok(focus.deconv_profile_view_max_da>18953);
+  run('state.deconvDenseViewMode="full"');
+  const full=run('applyDenseDeconvProfileStyle({deconv_x_min_da:1000,deconv_x_max_da:50000})');
+  assert.equal(full.deconv_profile_view_min_da,undefined);
+  assert.equal(full.deconv_x_min_da,focus.deconv_x_min_da);assert.equal(full.deconv_x_max_da,focus.deconv_x_max_da);
+  run('state.deconvDenseViewMode="focus"');
+  const exported=run('applyDenseDeconvProfileStyle({deconv_x_min_da:1000,deconv_x_max_da:50000},{includeView:false})');
+  assert.equal(exported.deconv_profile_view_min_da,undefined);assert.equal(exported.deconv_profile_view_max_da,undefined);
+  assert.equal(exported.deconv_x_min_da,1000);assert.equal(exported.deconv_x_max_da,50000);
+});
+
+test('selecting another coloured-result component focuses that mass and full range is reversible', () => {
+  const {run,context}=fixture();context.renders=0;
+  run('renderDeconvDenseMassPreview=()=>{renders++};state.deconvDenseViewMode="full";selectDeconvComponent(2)');
+  assert.equal(run('state.deconvSelectedComponentIndex'),2);assert.equal(run('state.deconvDenseViewMode'),'focus');
+  run('setDenseProfileView("full")');assert.equal(run('state.deconvDenseViewMode'),'full');
+  run('setDenseProfileView("focus")');assert.equal(run('state.deconvDenseViewMode'),'focus');assert.equal(context.renders,3);
+});
+
+test('clicking a coloured mass bar selects its component once, including after redraw', () => {
+  const {run,context,elements}=fixture();const handlers=new Map(),selected=[];
+  context.selected=selected;
+  elements.set('mass',{on:(event,fn)=>handlers.set(event,fn),removeListener:(event,fn)=>{if(handlers.get(event)===fn)handlers.delete(event)}});
+  context.Plotly.newPlot=()=>({then:fn=>fn()});
+  const code='charts.plotDeconvMasses("mass",[{mass:10000,intensity:100},{mass:12000,intensity:30}],{onSelect:index=>selected.push(index)})';
+  run(code);run(code);assert.equal(handlers.size,1);
+  handlers.get('plotly_click')({points:[{curveNumber:1}]});
+  handlers.get('plotly_click')({points:[{curveNumber:5}]});
+  assert.deepEqual(selected,[1]);
+});
+
+test('dense profile labels include main and nearby satellites in Da without changing the profile', () => {
+  const {run,context}=fixture();context.profile=denseFixture();
+  const before=JSON.stringify(context.profile);
+  const labels=run('buildDenseProfileAnnotations(profile,[18450,19150],{mainMass:18791.26,width:550,height:234})');
+  assert.deepEqual(Array.from(labels,l=>l.text),['<b>18,791.2 Da</b>','18,845.1 Da','18,898.9 Da','18,952.8 Da']);
+  assert.equal(JSON.stringify(context.profile),before);
+  assert.ok(labels.every(l=>!l.text.includes('kDa')));
+  context.profile=denseFixture(1000);
+  const shifted=run('buildDenseProfileAnnotations(profile,[19450,20150],{mainMass:19791.26})');
+  assert.match(shifted[0].text,/19,791.2 Da/);
+});
+
+test('dense labels remain within the view and do not collide in a narrow panel', () => {
+  const {run,context}=fixture();context.profile=denseFixture();
+  const width=300,height=234,yMax=130;
+  const labels=run(`buildDenseProfileAnnotations(profile,[18450,19150],{mainMass:18791.26,width:${width},height:${height}})`);
+  assert.equal(labels.length,4);
+  const boxes=Array.from(labels,l=>{
+    const text=l.text.replace(/<[^>]+>/g,''),w=text.length*5.6+8;
+    const x=(l.x*1000-18450)/700*width+l.ax,y=(yMax-l.y)/yMax*height+l.ay;
+    return {x0:x-w/2,x1:x+w/2,y0:y-7,y1:y+7};
+  });
+  for(let i=0;i<boxes.length;i++){
+    const a=boxes[i];assert.ok(a.x0>=-1e-6&&a.x1<=width+1e-6&&a.y0>=0&&a.y1<=height);
+    for(const b of boxes.slice(i+1))assert.ok(a.x1<=b.x0||b.x1<=a.x0||a.y1<=b.y0||b.y1<=a.y0);
+  }
+});
+
+test('small profile ripples are not all labelled; empty/flat profiles are safe', () => {
+  const {run,context}=fixture();context.profile=denseFixture();
+  context.profile.relativeIntensity=context.profile.relativeIntensity.map((v,i)=>v+0.2*(1+Math.sin(i)));
+  assert.equal(run('buildDenseProfileAnnotations(profile,[18450,19150]).length'),4);
+  assert.equal(run('buildDenseProfileAnnotations({massKDa:[],relativeIntensity:[]},[0,1]).length'),0);
+  assert.equal(run('buildDenseProfileAnnotations({massKDa:[1,2,3],relativeIntensity:[4,4,4]},[1000,3000]).length'),0);
+});
+
+test('focused dense rendering preserves the complete trace, normalization and smoothing', () => {
+  const {run,context,plots}=fixture();
+  context.spectrum={mz:[1001,1051,1101],intensities:[100,25,10]};
+  run('charts.plotDenseDeconvolutedMassProfile("full",spectrum,{style:{deconv_x_min_da:9000,deconv_x_max_da:12000,deconv_profile_min_charge:10,deconv_profile_max_charge:10}})');
+  run('charts.plotDenseDeconvolutedMassProfile("focused",spectrum,{style:{deconv_x_min_da:9000,deconv_x_max_da:12000,deconv_profile_min_charge:10,deconv_profile_max_charge:10,deconv_profile_view_min_da:9900,deconv_profile_view_max_da:11200,deconv_profile_selected_mass:10000}})');
+  const full=plots.get('full'),focus=plots.get('focused');
+  assert.deepEqual(Array.from(focus.data[0].x),Array.from(full.data[0].x));
+  assert.deepEqual(Array.from(focus.data[0].y),Array.from(full.data[0].y));
+  assert.deepEqual(Array.from(focus.layout.xaxis.range),[9.9,11.2]);
+  assert.match(focus.data[0].hovertemplate,/Da/);assert.doesNotMatch(focus.data[0].hovertemplate,/kDa/);
+  assert.ok(focus.layout.annotations.length>=3);
+});
+
+test('dense label binding responds to zoom and resize without relayout loops or duplicate listeners', async()=>{
+  const {run,context,elements}=fixture();context.profile=denseFixture();
+  const listeners=new Map(),updates=[];
+  const plot={layout:{xaxis:{range:[18.45,19.15]},yaxis:{range:[0,130]}},clientWidth:658,clientHeight:340,
+    on:(name,fn)=>listeners.set(name,fn),removeListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name)}};
+  elements.set('dense',plot);
+  context.window.Plotly={relayout:(_plot,value)=>{updates.push(value);return Promise.resolve()}};
+  run('bindDenseProfileLabels("dense",profile,[18450,19150],18791.26);bindDenseProfileLabels("dense",profile,[18450,19150],18791.26)');
+  assert.equal(listeners.size,1);
+  listeners.get('plotly_relayout')({'annotations':[]});assert.equal(updates.length,0);
+  listeners.get('plotly_relayout')({'xaxis.range[0]':18.83,'xaxis.range[1]':18.97});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(updates.length,1);assert.ok(updates[0].annotations.every(a=>a.x>=18.83&&a.x<=18.97));
+  assert.ok(updates[0]['yaxis.range'][1]<35);
+  listeners.get('plotly_relayout')({width:400});await new Promise(resolve=>setTimeout(resolve,0));assert.equal(updates.length,2);
+});
+
 test('intact metadata enables an explicit option but keeps the previous calculation as default',()=>{
  const {run,elements}=fixture();
  elements.set('deconv-isotope-workflow',{});elements.set('expert-params',{});
