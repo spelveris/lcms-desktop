@@ -22,7 +22,7 @@ class MethodTests(unittest.TestCase):
         self.assertEqual(result['settings']['fragment_ppm'],50)
         self.assertEqual(result['settings']['precursor_ppm'],10)
         self.assertEqual(result['settings']['missed_cleavages'],2)
-        self.assertEqual(result['settings']['ms1_min_relative_percent'],0)
+        self.assertEqual(result['settings']['ms1_min_relative_percent'],5)
         self.assertTrue(result['matches'])
         self.assertEqual(analyze(sample,{'fasta':'PEPTIDER','fragment_ppm':20})['matches'],[])
 
@@ -36,6 +36,15 @@ class MethodTests(unittest.TestCase):
         all_charges=analyze(sample,{'fasta':'PEPTIDER','method':{'ms1_peak_min':50,'ms1_mz_min':0}})
         self.assertEqual({r['charge'] for r in all_charges['matches']},{1,2,3})
         for old,new in zip(before,sample.qtof_channels[0,1].scans):np.testing.assert_array_equal(old,new)
+
+    def test_default_ms1_apex_gate_excludes_weak_envelopes_but_zero_remains_explicit_opt_in(self):
+        peptide=digest(parse_fasta('PDQQR'),0,[])[0][0]
+        sample=self.make_sample(feature_scans(peptide,apex=1078.14,background=173452))
+        payload={'fasta':'PDQQR','method':{'ms1_mz_min':0,'terminal_truncation':False}}
+        self.assertEqual(analyze(sample,payload)['matches'],[])
+        relaxed=analyze(sample,{**payload,'ms1_min_relative_percent':0})
+        self.assertTrue(relaxed['matches'])
+        self.assertLess(relaxed['matches'][0]['precursor_relative_intensity_pct'],1)
 
     def test_one_terminal_truncation_not_both_and_editable_lengths(self):
         chains=parse_fasta('PEPTIDER')

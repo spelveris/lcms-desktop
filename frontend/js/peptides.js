@@ -1,5 +1,6 @@
 const peptideView = { generation: 0, references: [], results: null, path: '', modifications: [],
   analyzing: false, selectedMatch: null, selectedSpectrum: null, chromatogram: null, chromatogramRequest: 0,
+  chromatogramEpoch: 0, chromatogramDrawnEpoch: null, coverageRows: [], coverageExpanded: false,
   filters: { text: '', evidence: '', charge: '', review: '' }, columnFilters: {}, sort: { key: 'time', direction: 1 } };
 const PEPTIDE_ION_COLORS = { b: '#3750aa', y: '#e52a2a' };
 let peptideCoverageObserver;
@@ -42,7 +43,7 @@ const PEPTIDE_METHOD_FIELDS = {
   fragment_peak_limit:['peptide-fragment-limit',0],
 };
 const PEPTIDE_BASIC_DEFAULTS = {'peptide-missed':2,'peptide-precursor-ppm':10,'peptide-fragment-ppm':50,
-  'peptide-ms1-relative':0,'peptide-ms1-intensity':0};
+  'peptide-ms1-relative':5,'peptide-ms1-intensity':0};
 function peptideReadMethod() {
   const method={terminal_truncation:document.getElementById('peptide-terminal-truncation').checked};
   for(const [key,[id]] of Object.entries(PEPTIDE_METHOD_FIELDS)){
@@ -57,7 +58,7 @@ function peptideSaveMethod() {
     const values=Object.fromEntries([...Object.values(PEPTIDE_METHOD_FIELDS).map(([id])=>id),...Object.keys(PEPTIDE_BASIC_DEFAULTS),'peptide-default-evidence']
       .map(id=>[id,document.getElementById(id).value]));
     values['peptide-terminal-truncation']=document.getElementById('peptide-terminal-truncation').checked;
-    localStorage.setItem('catrupole-peptide-method-v1',JSON.stringify(values));
+    localStorage.setItem('catrupole-peptide-method-v2',JSON.stringify(values));
   } catch(_) { /* The method still works when storage is unavailable. */ }
 }
 function peptideResetMethod() {
@@ -223,8 +224,9 @@ function peptideCoverageSpans(result, chain) {
       const modifications = (row.modifications || []).map(mod => [mod.residue, mod.delta]).sort((a,b) => a[0]-b[0]);
       const evidence = row.evidence || 'msms';
       const key = JSON.stringify([location.start, location.end, modifications, evidence, row.ms1_supported !== false, row.biomolecule?.id]);
-      if (!spans.has(key)) spans.set(key, { start: location.start, end: location.end, row, evidence, scanIds: new Set() });
+      if (!spans.has(key)) spans.set(key, { start: location.start, end: location.end, row, evidence, rows: [], scanIds: new Set() });
       spans.get(key).scanIds.add(row.scan_id);
+      if(!spans.get(key).rows.includes(row))spans.get(key).rows.push(row);
     }
   }
   const sorted = [...spans.values()].sort((a,b) => a.start-b.start || a.end-b.end);
@@ -236,6 +238,33 @@ function peptideCoverageSpans(result, chain) {
     span.spectrumCount = span.scanIds.size; delete span.scanIds;
   }
   return sorted;
+}
+
+function peptideRepresentativeOrder(a,b) {
+  return Number(a.evidence==='ms1')-Number(b.evidence==='ms1')
+    || Number(a.ms1_supported===false)-Number(b.ms1_supported===false)
+    || (b.matched_ions || 0)-(a.matched_ions || 0)
+    || a.time-b.time || a.scan_id-b.scan_id;
+}
+
+function peptideCoverageSummarySpans(result,chain) {
+  const spans=peptideCoverageSpans(result,chain), evidence=Array(chain.sequence.length).fill(null);
+  for(const span of spans)for(let i=span.start-1;i<span.end;i++){
+    if(span.evidence!=='ms1' || !evidence[i])evidence[i]=span.evidence==='ms1'?'ms1':'msms';
+  }
+  const summary=[];
+  for(let i=0;i<evidence.length;){
+    if(!evidence[i]){i++;continue;}
+    const start=i+1,kind=evidence[i];
+    while(i<evidence.length && evidence[i]===kind)i++;
+    // This is a residue-coverage union, not one merged peptide/retention-time
+    // feature. Keep every underlying observation available in the picker.
+    const rows=[...new Set(spans.filter(span=>span.start<=i && span.end>=start).flatMap(span=>span.rows))]
+      .sort(peptideRepresentativeOrder);
+    summary.push({start,end:i,evidence:kind,lane:0,rows,row:rows[0],
+      spectrumCount:new Set(rows.map(row=>row.scan_id)).size});
+  }
+  return summary;
 }
 
 function peptideCoverageBlockSpans(spans, start, end) {
@@ -289,7 +318,8 @@ function peptideRenderCoverageChain(result, chain, columns = 50) {
   title.textContent = `Chain ${chain.id} · ${chain.name} · Coverage: MS ${(chain.ms_percent ?? chain.percent).toFixed(1)}% · MS/MS ${(chain.msms_percent ?? chain.percent).toFixed(1)}%`;
   title.title = 'MS: isotope/retention-time feature-supported coverage. MS/MS: fragment-supported coverage, including candidates whose precursor feature remains unconfirmed. Unique residues are counted once; competing sequences are excluded. The percentages are independent, not additive.';
   section.appendChild(title);
-  const spans = peptideCoverageSpans(result, chain), positions = new Set(chain.positions);
+  const spans = peptideView.coverageExpanded ? peptideCoverageSpans(result, chain) : peptideCoverageSummarySpans(result, chain);
+  const positions = new Set(chain.positions);
   const modificationSites = peptideCoverageModifications(result, chain);
   const scroll = document.createElement('div'); scroll.className = 'peptide-coverage-scroll'; section.appendChild(scroll);
   for (let offset = 0; offset < chain.sequence.length; offset += columns) {
@@ -312,12 +342,15 @@ function peptideRenderCoverageChain(result, chain, columns = 50) {
     for (const span of peptideCoverageBlockSpans(spans, offset+1, end)) {
       const start = Math.max(span.start, offset+1), stop = Math.min(span.end, end);
       const line = document.createElement('button'); line.type = 'button';
-      line.className = `peptide-coverage-underline evidence-${span.evidence}` + (span.row.ms1_supported === false ? ' precursor-unconfirmed' : '') + (span.start < start ? ' continues-left' : '') + (span.end > stop ? ' continues-right' : '');
+      line.className = `peptide-coverage-underline evidence-${span.evidence}` + (peptideView.coverageExpanded && span.row.ms1_supported===false ? ' precursor-unconfirmed' : '') + (span.start < start ? ' continues-left' : '') + (span.end > stop ? ' continues-right' : '');
       line.style.gridColumn = `${start-offset} / span ${stop-start+1}`; line.style.gridRow = String(span.lane+2);
-      line.title = `${span.row.sequence} · ${chain.id}:${span.start}–${span.end} · ${span.evidence === 'ms1' ? 'MS1 feature-supported mass candidate' : span.row.ms1_supported === false ? 'MS/MS candidate; precursor feature unconfirmed' : 'MS/MS linked to MS1 feature'} · ${span.spectrumCount} observations · open representative scan ${span.row.scan_id}; other observations selectable below`;
-      const mods = (span.row.modifications || []).map(mod => `${span.row.sequence[mod.residue-1]}${mod.residue}: ${mod.delta >= 0 ? '+' : ''}${Number(mod.delta).toFixed(6)} Da`);
-      if (mods.length) line.title += ` · ${mods.join('; ')}`;
-      line.setAttribute('aria-label', line.title); line.addEventListener('click', () => peptideShowMatch(span.row)); grid.appendChild(line);
+      line.title = `${chain.id}:${span.start}–${span.end} · ${span.evidence === 'ms1' ? 'MS1 feature-supported mass candidate coverage' : 'MS/MS-supported coverage'} · ${span.spectrumCount} observations · choose covered peptides and separate elution features below`;
+      if(peptideView.coverageExpanded){
+        const mods=(span.row.modifications || []).map(mod=>`${span.row.sequence[mod.residue-1]}${mod.residue}: ${mod.delta>=0?'+':''}${Number(mod.delta).toFixed(6)} Da`);
+        line.title=`${span.row.sequence} · ${line.title}`+(mods.length?` · ${mods.join('; ')}`:'')+(span.row.ms1_supported===false?' · precursor feature unconfirmed':'');
+      }
+      const groupedRows=peptideView.coverageExpanded?[]:span.rows.filter(row=>(row.locations || []).some(location=>location.chain===chain.id && location.start<=stop && location.end>=start));
+      line.setAttribute('aria-label', line.title); line.addEventListener('click', () => peptideShowMatch(groupedRows[0] || span.row,groupedRows)); grid.appendChild(line);
     }
     block.appendChild(grid); scroll.appendChild(block);
   }
@@ -371,11 +404,17 @@ function peptideRenderLinkages() {
 function peptideClearResults() {
   peptideView.generation += 1;
   peptideView.chromatogramRequest += 1;
+  peptideView.chromatogramEpoch += 1;
+  peptideView.chromatogramDrawnEpoch = null;
   peptideView.chromatogram = null;
   document.getElementById('peptide-chromatogram').hidden=true;
+  document.getElementById('peptide-chromatogram').setAttribute('aria-busy','false');
   document.getElementById('peptide-chromatogram-status').textContent='';
   document.getElementById('peptide-observations').hidden=true;
   document.getElementById('peptide-observation-select').replaceChildren();
+  peptideView.coverageRows=[];
+  document.getElementById('peptide-covered-peptides').hidden=true;
+  document.getElementById('peptide-covered-peptide-select').replaceChildren();
   qtofClearPlot('peptide-chromatogram-plot');
   peptideView.results = null;
   document.getElementById('peptide-analysis-details').hidden=true;
@@ -440,6 +479,15 @@ function peptideRenderCoverage(result, width = document.getElementById('peptide-
   const coverage = document.getElementById('peptide-coverage'); coverage.replaceChildren();
   const columns = peptideCoverageColumns(width);
   peptideView.coverageColumns = columns;
+  if(result.coverage.length){
+    const toolbar=document.createElement('div');toolbar.className='peptide-export-toolbar';
+    const toggle=document.createElement('button');toggle.type='button';toggle.className='btn btn-sm';
+    toggle.textContent=peptideView.coverageExpanded?'Compress coverage':'Expand coverage';
+    toggle.setAttribute('aria-expanded',String(peptideView.coverageExpanded));
+    toggle.title=peptideView.coverageExpanded?'Show each covered residue once':'Show separate peptide, modification and elution-feature evidence';
+    toggle.addEventListener('click',()=>{peptideView.coverageExpanded=!peptideView.coverageExpanded;peptideRenderCoverage(result);});
+    toolbar.appendChild(toggle);coverage.appendChild(toolbar);
+  }
   for (const chain of result.coverage) {
     coverage.appendChild(peptideRenderCoverageChain(result, chain, columns));
   }
@@ -472,9 +520,27 @@ function peptideElutionRange(row) {
   return Number.isFinite(start) && Number.isFinite(end) && end>=start ? [start,end] : null;
 }
 
+function peptideObservationKey(row) {
+  return JSON.stringify([row.sequence,(row.modifications || []).map(m=>[m.residue,m.delta]).sort((a,b)=>a[0]-b[0]||a[1]-b[1])]);
+}
+
 function peptideRenderObservations(row) {
-  const key=r=>JSON.stringify([r.sequence,(r.modifications || []).map(m=>[m.residue,m.delta]).sort((a,b)=>a[0]-b[0]||a[1]-b[1])]);
+  const key=peptideObservationKey;
   const signature=key(row);
+  const covered=new Map();
+  for(const item of peptideView.coverageRows){
+    const previous=covered.get(key(item));
+    if(!previous || peptideRepresentativeOrder(item,previous)<0)covered.set(key(item),item);
+  }
+  const peptideSelect=document.getElementById('peptide-covered-peptide-select');peptideSelect.replaceChildren();
+  for(const [value,item] of covered){
+    const option=document.createElement('option');option.value=value;
+    const mods=(item.modifications || []).map(m=>`${item.sequence[m.residue-1]}${m.residue} ${m.delta>=0?'+':''}${m.delta} Da`);
+    option.textContent=item.sequence+(mods.length?` [${mods.join(', ')}]`:'');peptideSelect.appendChild(option);
+  }
+  peptideSelect.value=signature;
+  peptideSelect.onchange=()=>peptideShowMatch(covered.get(peptideSelect.value),peptideView.coverageRows);
+  document.getElementById('peptide-covered-peptides').hidden=covered.size<2;
   const samePeptide=(peptideView.results?.matches || [row]).filter(r=>key(r)===signature);
   const rows=samePeptide.filter(r=>!row.biomolecule || r.biomolecule?.id===row.biomolecule.id);
   if(!rows.includes(row))rows.push(row);
@@ -490,7 +556,7 @@ function peptideRenderObservations(row) {
     featureSelect.appendChild(option);
   }
   featureSelect.value=row.biomolecule?.id || 'legacy';featureSelect.disabled=features.size<2;
-  featureSelect.onchange=()=>peptideShowMatch(features.get(featureSelect.value));
+  featureSelect.onchange=()=>peptideShowMatch(features.get(featureSelect.value),peptideView.coverageRows);
   const select=document.getElementById('peptide-observation-select');select.replaceChildren();
   rows.forEach((item,index)=>{
     const option=document.createElement('option'),interval=peptideElutionRange(item);
@@ -500,7 +566,7 @@ function peptideRenderObservations(row) {
     select.appendChild(option);
   });
   select.value=String(rows.indexOf(row));select.disabled=rows.length<2;
-  select.onchange=()=>peptideShowMatch(rows[Number(select.value)]);
+  select.onchange=()=>peptideShowMatch(rows[Number(select.value)],peptideView.coverageRows);
   document.getElementById('peptide-observation-label').textContent=`Measured spectra in this feature (${rows.length})`;
   document.getElementById('peptide-observations').hidden=false;
 }
@@ -513,7 +579,7 @@ function peptideChromatogramPlot(data,row=null) {
   const bio=row?.biomolecule?.confirmed ? row.biomolecule : null;
   // Never paint a separate retention-time peak as the selected biomolecule.
   const overlay=hasXic && bio ? data.xic.map((value,i)=>data.times[i]>=bio.time_start && data.times[i]<=bio.time_end ? value : 0) : data.xic;
-  if(hasXic)traces.push({x:data.times,y:overlay,type:'scatter',mode:'lines',yaxis:'y2',
+  traces.push({x:hasXic?data.times:[],y:hasXic?overlay:[],type:'scatter',mode:'lines',yaxis:'y2',visible:hasXic,
     name:bio?'Selected biomolecule (right axis)':'Selected precursor XIC (right axis)',line:{color:blue,width:1.8},
     fill:bio?'tozeroy':'none',fillcolor:'rgba(33,92,175,0.18)',
     hovertemplate:'%{x:.4f} min<br>Precursor %{y:.5g} counts<extra></extra>'});
@@ -526,12 +592,13 @@ function peptideChromatogramPlot(data,row=null) {
   if(hasXic && Number.isFinite(row.time)){start=Math.min(start,row.time);end=Math.max(end,row.time);}
   if(start===end){start-=.01;end+=.01;}
   const layout={...WEBAPP_LAYOUT,height:300,showlegend:true,hovermode:'x unified',shapes,
-    margin:{l:76,r:hasXic?86:24,t:36,b:64},legend:{orientation:'h',x:0,y:1.12,font:{size:11}},
+    // Reserve the overlay axis from the first paint, including the TIC-only view.
+    margin:{l:76,r:86,t:36,b:64,autoexpand:false},legend:{orientation:'h',x:0,y:1.12,font:{size:11}},
     // Always begin with the whole recorded run, not the selected feature window.
     xaxis:{...WEBAPP_LAYOUT.xaxis,title:{text:'Retention time (min)',standoff:10},range:[start,end],autorange:false,automargin:true,showgrid:false},
     yaxis:{...WEBAPP_LAYOUT.yaxis,title:{text:'TIC (counts)',standoff:8},rangemode:'tozero',autorange:true,automargin:true,showgrid:false}};
-  if(hasXic)layout.yaxis2={...WEBAPP_LAYOUT.yaxis,title:{text:'Precursor XIC (counts)',standoff:8},
-    color:blue,overlaying:'y',side:'right',rangemode:'tozero',autorange:true,automargin:true,showgrid:false,zeroline:false};
+  layout.yaxis2={...WEBAPP_LAYOUT.yaxis,title:{text:'Precursor XIC (counts)',standoff:8},visible:hasXic,
+    color:blue,overlaying:'y',side:'right',rangemode:'tozero',autorange:true,automargin:false,showgrid:false,zeroline:false};
   if(bio && hasXic){
     const peak=overlay.reduce((best,value,i)=>value>overlay[best]?i:best,0);
     layout.annotations=[{x:data.times[peak],y:overlay[peak],xref:'x',yref:'y2',text:`${data.times[peak].toFixed(3)} min<br>Selected biomolecule`,
@@ -542,12 +609,27 @@ function peptideChromatogramPlot(data,row=null) {
 }
 
 function peptideDrawChromatogram(data,row,request) {
+  const epoch=peptideView.chromatogramEpoch;
   // Serialise Plotly work so a slow earlier render cannot overwrite a new click.
   peptideChromatogramDraw=peptideChromatogramDraw.catch(()=>{}).then(async()=>{
-    if(request!==peptideView.chromatogramRequest)return;
+    if(request!==peptideView.chromatogramRequest || epoch!==peptideView.chromatogramEpoch)return;
     const {traces,layout}=peptideChromatogramPlot(data,row);
-    await Plotly.react('peptide-chromatogram-plot',traces,layout,PLOT_CONFIG);
-    if(request!==peptideView.chromatogramRequest)qtofClearPlot('peptide-chromatogram-plot');
+    if(peptideView.chromatogramDrawnEpoch!==epoch){
+      await Plotly.react('peptide-chromatogram-plot',traces,layout,PLOT_CONFIG);
+      if(epoch===peptideView.chromatogramEpoch)peptideView.chromatogramDrawnEpoch=epoch;
+    } else {
+      // Only replace the blue trace and its markers. Never resend the TIC, its
+      // axes or margins: this also preserves the user's time/intensity zoom.
+      const overlay=traces[1];
+      await Plotly.update('peptide-chromatogram-plot',{
+        x:[overlay.x],y:[overlay.y],name:overlay.name,visible:overlay.visible,
+        fill:overlay.fill,fillcolor:overlay.fillcolor,
+      },{shapes:layout.shapes,annotations:layout.annotations || [],
+        'yaxis2.title.text':layout.yaxis2.title.text,'yaxis2.visible':overlay.visible,'yaxis2.autorange':true},[1]);
+    }
+    // A newer fragment should not purge the whole graph. Only an invalidated
+    // run may clear an in-flight drawing; the next run is queued after this one.
+    if(epoch!==peptideView.chromatogramEpoch)qtofClearPlot('peptide-chromatogram-plot');
   });
   return peptideChromatogramDraw;
 }
@@ -557,10 +639,10 @@ async function peptideLoadChromatogram(row=null) {
   const current=()=>request===peptideView.chromatogramRequest;
   const status=document.getElementById('peptide-chromatogram-status');
   document.getElementById('peptide-chromatogram').hidden=false;
+  document.getElementById('peptide-chromatogram').setAttribute('aria-busy','true');
   status.textContent=row?'Loading selected precursor elution…':'Loading whole-run TIC…';
   try {
-    // Drop the previous blue overlay while the new extraction is loading.
-    if(peptideView.chromatogram)void peptideDrawChromatogram(peptideView.chromatogram,null,request).catch(()=>{});
+    // Keep the existing plot intact until the replacement overlay is ready.
     const target=row ? (Number.isFinite(row.theoretical_precursor_mz) ? row.theoretical_precursor_mz : row.precursor_mz) : null;
     const ppm=peptideView.results?.settings?.precursor_ppm ?? 10;
     const bio=row?.biomolecule?.confirmed ? row.biomolecule : null;
@@ -577,7 +659,15 @@ async function peptideLoadChromatogram(row=null) {
       + ` · ${row.evidence==='ms1'?'Selected MS1 apex':'Selected MS/MS scan'} ${row.time.toFixed(4)} min`
       : 'Whole-run TIC · select a peptide to overlay its precursor elution';
     if(bio)status.textContent+=` · Biomolecule ${bio.time_start.toFixed(3)}–${bio.time_end.toFixed(3)} min; isotope envelopes at ${bio.charges.map(z=>`+${z}`).join(', ')}; separate elution peaks stay separate`;
-  } catch(error) { if(current())status.textContent=`Chromatogram unavailable: ${error.message}`; }
+  } catch(error) {
+    if(current()){
+      // Do not leave another peptide's overlay looking like the failed selection.
+      if(peptideView.chromatogram)await peptideDrawChromatogram(peptideView.chromatogram,null,request).catch(()=>{});
+      if(current())status.textContent=`Chromatogram unavailable: ${error.message}`;
+    }
+  } finally {
+    if(current())document.getElementById('peptide-chromatogram').setAttribute('aria-busy','false');
+  }
 }
 
 function peptideSetExportAvailable(kind, available) {
@@ -585,10 +675,18 @@ function peptideSetExportAvailable(kind, available) {
   document.getElementById(`peptide-${kind}-export`).hidden=!available;
 }
 
-function peptideClearSpectrumExport() {
+function peptideClearSpectrumExport(preserveLayout=false) {
   peptideView.selectedMatch=null;peptideView.selectedSpectrum=null;
+  if(preserveLayout){
+    // Collapsing the spectrum below the TIC clamps the tab's scroll position,
+    // making even an unchanged chromatogram appear to jump during loading.
+    document.getElementById('btn-peptide-spectrum-pdf').disabled=true;
+    return;
+  }
   peptideSetExportAvailable('spectrum',false);
   document.getElementById('peptide-spectrum-card').hidden=true;
+  document.getElementById('peptide-spectrum-card').setAttribute('aria-busy','false');
+  document.getElementById('peptide-ion-sequence').inert=false;
 }
 
 async function peptideExportPdf(kind) {
@@ -820,15 +918,16 @@ function peptideSpectrumLayout(maximum) {
     yaxis:{...WEBAPP_LAYOUT.yaxis, title:'Counts',showgrid:false,range:[0,maximum>0?maximum*1.25:1]}};
 }
 
-async function peptideShowMatch(row) {
+async function peptideShowMatch(row,coverageRows=[]) {
   const generation=++peptideView.generation;
+  peptideView.coverageRows=coverageRows;
   peptideRenderObservations(row);
   const chromatogramTask=peptideLoadChromatogram(row);
-  peptideClearSpectrumExport();
-  peptideClearIonSequence();
+  peptideClearSpectrumExport(true);
+  document.getElementById('peptide-spectrum-card').setAttribute('aria-busy','true');
+  document.getElementById('peptide-ion-sequence').inert=true;
   const msOnly=row.evidence==='ms1';
   document.getElementById('peptide-spectrum-status').textContent=msOnly ? 'Loading measured MS survey…' : 'Loading measured fragment spectrum…';
-  qtofClearPlot('peptide-spectrum-plot');
   try {
     const spectrum=await api.getQtofSpectrum(peptideView.path,row.scan_id,'positive');
     if(generation!==peptideView.generation)return;
@@ -839,13 +938,19 @@ async function peptideShowMatch(row) {
     document.getElementById('peptide-spectrum-card').hidden=false;
     await Plotly.react('peptide-spectrum-plot',[qtofStickTrace(spectrum),...overlays],peptideSpectrumLayout(maximum),PLOT_CONFIG);
     if(generation!==peptideView.generation)return;
-    if(!msOnly)peptideRenderIonSequence(row);
+    if(!msOnly)peptideRenderIonSequence(row);else peptideClearIonSequence();
     peptideView.selectedMatch=row;peptideView.selectedSpectrum=spectrum;
     peptideSetExportAvailable('spectrum',spectrum.mz.length>0 && spectrum.mz.length===spectrum.intensities.length);
     document.getElementById('peptide-spectrum-status').textContent=msOnly
       ? `${row.sequence} · MS1 feature apex: scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · +${row.charge}, isotope offset ${row.isotope_offset}. ${Number(row.precursor_intensity).toPrecision(5)} counts${row.precursor_relative_intensity_pct==null?'':` (${row.precursor_relative_intensity_pct.toFixed(2)}% of scan maximum)`}. ${row.isotope_count} required isotope peaks across ${row.observation_count} consecutive surveys (${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min); envelope fit ${(100*row.isotope_fit).toFixed(1)}%. No linked MS/MS: peptide sequence remains a candidate.`
       : `${row.sequence} · measured MS/MS scan ${row.scan_id} · acquired at ${row.time.toFixed(4)} min · precursor m/z ${row.precursor_mz.toFixed(5)}, inferred +${row.charge}. ${row.ms1_supported ? `MS1 feature linked (${row.precursor_link}); ${peptideElutionRange(row) ? `supported interval ${row.precursor_feature.time_start.toFixed(3)}–${row.precursor_feature.time_end.toFixed(3)} min; ` : ''}${row.precursor_feature.observation_count} surveys.` : 'Precursor feature unconfirmed; excluded from MS feature coverage.'} Blue b / red y labels are candidate matches. Precursor isotope offset: ${row.isotope_offset}.`;
-  } catch(error) { if(generation===peptideView.generation){peptideClearSpectrumExport();document.getElementById('peptide-spectrum-status').textContent=error.message;} }
+  } catch(error) { if(generation===peptideView.generation){peptideClearSpectrumExport();peptideClearIonSequence();qtofClearPlot('peptide-spectrum-plot');document.getElementById('peptide-spectrum-status').textContent=error.message;} }
+  finally {
+    if(generation===peptideView.generation){
+      document.getElementById('peptide-spectrum-card').setAttribute('aria-busy','false');
+      document.getElementById('peptide-ion-sequence').inert=false;
+    }
+  }
   await chromatogramTask;
 }
 
@@ -854,7 +959,11 @@ function initPeptideMapping() {
   if (typeof initDatabaseSearch === 'function') initDatabaseSearch();
   const methodIds=[...Object.values(PEPTIDE_METHOD_FIELDS).map(([id])=>id),...Object.keys(PEPTIDE_BASIC_DEFAULTS),'peptide-terminal-truncation','peptide-default-evidence'];
   try {
-    const saved=JSON.parse(localStorage.getItem('catrupole-peptide-method-v1') || '{}');
+    const current=localStorage.getItem('catrupole-peptide-method-v2');
+    const saved=JSON.parse(current || localStorage.getItem('catrupole-peptide-method-v1') || '{}');
+    // Upgrade the former disabled default once; retain customized nonzero
+    // thresholds, and still allow an explicit zero saved by this version.
+    if(!current && Number(saved['peptide-ms1-relative'])===0)saved['peptide-ms1-relative']='5';
     for(const id of methodIds)if(Object.hasOwn(saved,id)){
       if(id==='peptide-terminal-truncation')document.getElementById(id).checked=saved[id]===true;
       else if(typeof saved[id]==='string')document.getElementById(id).value=saved[id];

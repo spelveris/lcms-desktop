@@ -159,14 +159,16 @@ match the supported numerical settings in the supplied BioConfirm method:
 10/50 ppm, 2 missed cleavages, 5–70 residues, 350–2000 MS1 m/z and a 100-count seed
 minimum. Seeds must pass that floor; weaker measured isotope peaks and shoulder
 scans are retained for coherence checks rather than censored into false peaks.
-Additional feature-apex gates for **percent of the survey maximum** and **counts**
-default to 0 (disabled). Both enabled gates must pass at a feature's apex; 0 disables the
+Additional feature-apex gates default to **5% of the survey maximum** and **0 counts**
+(absolute-count gate disabled). Both enabled gates must pass at a feature's apex; 0 disables the
 corresponding gate, not the feature evidence checks. The maximum is measured
 after reference-ion and m/z-window filtering. At most the 500 strongest passing peaks per scan
 are tested as seeds. Weaker neighbouring scans remain available for isotope and
 chromatographic checks. Counts, isotope fit and consecutive observations are shown
 for the selected feature. These gates do not change MS/MS fragment matching or raw
 data; they can change whether a precursor feature is confirmed.
+The former saved 0% default is upgraded once to 5%; other saved method choices and
+custom nonzero cutoffs are retained. A newly saved explicit 0% remains available.
 
 The initial table filter shows MS/MS candidates; choose **All** to include MS-only
 features. Coverage still reports both evidence types. CID b/y matching, free-thiol
@@ -286,7 +288,15 @@ at least one matched modification-bearing fragment; dotted red underlines mark
 unresolved alternative sites. MS-only hypotheses do not colour modification sites.
 Shared peptides still cannot identify a particular chain. Map PDFs preserve these
 residue colours and ambiguity marks.
-Protein coverage underlines show matched peptide spans, separate overlapping
+Protein coverage starts **compressed**: each covered residue appears once, with
+**blue solid** for MS/MS support and **green dashed** for MS1-only mass-candidate
+support where MS/MS is absent. **Expand coverage** above the sequence restores
+the individual peptide/modification/elution-feature lines. Neither mode changes
+coverage percentages or combines spectra. Clicking a compressed region offers
+its covered peptide choices, with separate elution features and observations
+still accessible. PDF exports retain their existing detailed coverage layout.
+
+Expanded underlines show matched peptide spans, separate overlapping
 peptides into rows, and combine repeated observations: **blue solid** means
 MS/MS linked to a compatible local MS1 feature; **green dashed** means an MS1
 feature-supported peptide-mass candidate. **Blue dotted** retains fragment-supported
@@ -320,6 +330,9 @@ Extraction sums centroid counts inside those windows
 at each positive MS1 survey, not MS/MS fragment intensities or scans over time.
 The existing reference-ion exclusion applies to both traces. Other peaks in the
 same m/z window are not automatically evidence for the peptide sequence.
+Selecting another fragment replaces only the blue overlay and its markers; the
+black TIC, primary axes, zoom and plot margins stay in place. The previous view
+remains during loading, with spectrum export disabled until the new scan is ready.
 
 The selected scan's acquisition time is marked separately from its shaded
 **supported MS1 interval**. That interval comes from the existing feature matcher,

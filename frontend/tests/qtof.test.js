@@ -62,7 +62,7 @@ function domFixture() {
   document.getElementById('peptide-ms1-intensity').value='0';
   document.getElementById('peptide-variable-max').value='4';
   document.getElementById('peptide-reduction').value='reduced';
-  const ctx=vm.createContext({console,document,showLoading(){},hideLoading(){},Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
+  const ctx=vm.createContext({console,document,showLoading(){},hideLoading(){},Plotly:{purge(){},async react(){},async update(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
   for(const file of ['qtof.js','peptides.js','reference-masses.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
   vm.runInContext(`for(const [id,value] of Object.values(PEPTIDE_METHOD_FIELDS))document.getElementById(id).value=String(value);
     document.getElementById('peptide-terminal-truncation').checked=true;`,ctx);
@@ -158,7 +158,7 @@ test('mapping shows the whole TIC before any peptide is selected',async()=>{
  ctx.api.getPeptideChromatogram=async(...args)=>{requests.push(args);return chromatogram;};
  ctx.Plotly.react=async(id,data)=>renders.push(data);
  run('peptideView.path="sample"');await run('peptideLoadChromatogram()');
- assert.deepEqual(requests,[['sample',null,10]]);assert.equal(renders[0].length,1);
+ assert.deepEqual(requests,[['sample',null,10]]);assert.equal(renders[0].length,2);assert.equal(renders[0][1].visible,false);
  assert.equal(nodes.get('peptide-chromatogram').hidden,false);
  assert.match(nodes.get('peptide-chromatogram-status').textContent,/Whole-run TIC/);
 });
@@ -178,7 +178,8 @@ test('whole-run TIC stays black with a blue raw-count precursor overlay for both
   assert.equal(layout.shapes.find(s=>s.type==='line').x0,1.5);
  }
  assert.equal(JSON.stringify(ctx.data),original);
- const overview=run('peptideChromatogramPlot(data)');assert.equal(overview.traces.length,1);assert.equal(overview.layout.shapes.length,0);
+ const overview=run('peptideChromatogramPlot(data)');assert.equal(overview.traces[1].visible,false);assert.equal(overview.layout.shapes.length,0);
+ assert.equal(overview.layout.margin.r,run('peptideChromatogramPlot(data,row).layout.margin.r'));
  ctx.row={...candidate,ms1_supported:false,precursor_feature:{time_start:1,time_end:2}};
  assert.equal(run('peptideChromatogramPlot(data,row).layout.shapes.filter(s=>s.type==="rect").length'),0);
 });
@@ -225,15 +226,63 @@ test('a failed chromatogram never blocks the measured spectrum, ladder or export
  assert.equal(nodes.get('peptide-ion-sequence').hidden,false);
 });
 
-test('slow Plotly renders are serialized and stale paintings are cleared before the next overlay',async()=>{
- const {run,ctx}=domFixture();let finish,started,purges=0;const rendered=[];
+test('slow Plotly renders are serialized without purging the TIC for a newer overlay',async()=>{
+ const {run,ctx}=domFixture();let finish,started,purges=0;const rendered=[],updates=[];
  const begun=new Promise(resolve=>{started=resolve;});ctx.data=chromatogram;ctx.row=candidate;
  ctx.Plotly.purge=()=>purges++;
  ctx.Plotly.react=async(id,data)=>{rendered.push(data.length);if(rendered.length===1){started();await new Promise(resolve=>{finish=resolve;});}};
+ ctx.Plotly.update=async(id,data,layout,indices)=>updates.push({data,layout,indices});
  const first=run('peptideView.chromatogramRequest=1;peptideDrawChromatogram(data,null,1)');await begun;
  const next=run('peptideView.chromatogramRequest=2;peptideDrawChromatogram(data,row,2)');
- assert.deepEqual(rendered,[1]);finish();await Promise.all([first,next]);
- assert.deepEqual(rendered,[1,2]);assert.equal(purges,1);
+ assert.deepEqual(rendered,[2]);finish();await Promise.all([first,next]);
+ assert.deepEqual(rendered,[2]);assert.equal(purges,0);assert.equal(updates.length,1);
+ assert.deepEqual(Array.from(updates[0].indices),[1]);
+});
+
+test('changing peptides leaves the TIC and zoom untouched while replacing only the blue overlay',async()=>{
+ const {run,ctx,nodes}=domFixture();const paints=[],updates=[],replies=[];let purges=0;
+ ctx.row=candidate;ctx.next={...candidate,scan_id:10,time:3};
+ ctx.Plotly.react=async(id,data,layout)=>paints.push({id,data,layout});
+ ctx.Plotly.update=async(id,data,layout,indices)=>updates.push({id,data,layout,indices});
+ ctx.Plotly.purge=()=>purges++;
+ ctx.api.getPeptideChromatogram=()=>new Promise(resolve=>replies.push(resolve));
+ let pending=run('peptideLoadChromatogram(row)');replies.shift()(chromatogram);await pending;
+ pending=run('peptideLoadChromatogram(next)');await Promise.resolve();
+ assert.equal(paints.length,1);assert.equal(updates.length,0);assert.equal(purges,0);
+ assert.equal(nodes.get('peptide-chromatogram').attributes['aria-busy'],'true');
+ replies.shift()({...chromatogram,tic:[999],xic:[0,0,0,0,1,2,0]});await pending;
+ assert.equal(paints.length,1);assert.equal(updates.length,1);assert.equal(purges,0);
+ const update=updates[0];assert.deepEqual(Array.from(update.indices),[1]);
+ assert.deepEqual(Array.from(update.data.y[0]),[0,0,0,0,1,2,0]);
+ assert.ok(Object.keys(update.layout).every(key=>!/^xaxis|^yaxis\.|^margin/.test(key)));
+ assert.deepEqual(Array.from(paints[0].data[0].y),chromatogram.tic);
+ assert.equal(nodes.get('peptide-chromatogram').attributes['aria-busy'],'false');
+});
+
+test('failed replacement clears only the outdated overlay, not the TIC',async()=>{
+ const {run,ctx,nodes}=domFixture();const updates=[];let paints=0;
+ ctx.row=candidate;ctx.api.getPeptideChromatogram=async()=>chromatogram;
+ ctx.Plotly.react=async()=>paints++;
+ ctx.Plotly.update=async(id,data,layout,indices)=>updates.push({data,layout,indices});
+ await run('peptideLoadChromatogram(row)');
+ ctx.api.getPeptideChromatogram=async()=>{throw Error('Extraction failed');};
+ await run('peptideLoadChromatogram(row)');
+ assert.equal(paints,1);assert.equal(updates.length,1);assert.equal(updates[0].data.visible,false);
+ assert.deepEqual(Array.from(updates[0].indices),[1]);assert.equal(updates[0].layout.annotations.length,0);
+ assert.match(nodes.get('peptide-chromatogram-status').textContent,/Extraction failed/);
+});
+
+test('changing the run during a slow initial paint clears stale data before the new run',async()=>{
+ const {run,ctx}=domFixture();ctx.data=chromatogram;let finish,started,paints=0,purges=0;
+ const begun=new Promise(resolve=>{started=resolve;});
+ ctx.Plotly.purge=()=>purges++;
+ ctx.Plotly.react=async()=>{if(++paints===1){started();await new Promise(resolve=>{finish=resolve;});}};
+ const first=run('peptideView.chromatogramRequest=1;peptideDrawChromatogram(data,null,1)');await begun;
+ run('peptideClearResults()');
+ const next=run('peptideDrawChromatogram(data,null,peptideView.chromatogramRequest)');
+ finish();await Promise.all([first,next]);assert.equal(paints,2);
+ assert.equal(run('peptideView.chromatogramDrawnEpoch'),run('peptideView.chromatogramEpoch'));
+ assert.ok(purges>=1);
 });
 
 test('observation picker groups matching sequence and modifications without merging times, charges or evidence',async()=>{
@@ -355,6 +404,7 @@ test('fragment spectrum labels exact observed masses and uses matching b/y colou
 
 test('coverage deduplicates repeated scans, separates overlapping evidence, excludes competing candidates',()=>{
  const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDERPEPTIDER',positions:[],percent:0};
+ run('peptideView.coverageExpanded=true');
  ctx.result={matches:[candidate,{...candidate,scan_id:10},
   {...candidate,evidence:'ms1',locations:[{chain:'A',start:9,end:16}]},
   {...candidate,sequence:'TIDERPEP',locations:[{chain:'A',start:4,end:11}]},
@@ -373,6 +423,55 @@ test('coverage continuation at 50 residues has no false endpoint',()=>{
  const all=descendants(run('peptideRenderCoverageChain(result,chain)'));
  assert.equal(all.filter(n=>n.classList.contains('continues-right')).length,1);
  assert.equal(all.filter(n=>n.classList.contains('continues-left')).length,1);
+});
+
+test('compressed coverage shows each residue once and prefers blue MS/MS over green MS-only',()=>{
+ const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDERPEPTIDER',positions:[],percent:0};
+ ctx.result={matches:[candidate,{...candidate,scan_id:10},
+  {...candidate,evidence:'ms1',scan_id:11,locations:[{chain:'A',start:9,end:16}]},
+  {...candidate,scan_id:12,sequence:'TIDERPEP',locations:[{chain:'A',start:4,end:11}]},
+  {...candidate,sequence_ambiguous:true,locations:[{chain:'A',start:9,end:16}]}]};
+ const original=JSON.stringify(ctx.result);
+ const spans=run('peptideCoverageSummarySpans(result,chain)');
+ assert.deepEqual(Array.from(spans,s=>[s.start,s.end,s.evidence,s.lane]),[[1,11,'msms',0],[12,16,'ms1',0]]);
+ assert.equal(spans[0].rows.length,4);assert.equal(spans[1].rows[0].scan_id,11);
+ const lines=descendants(run('peptideRenderCoverageChain(result,chain)')).filter(n=>n.tag==='button');
+ assert.equal(lines.length,2);assert.ok(lines.every(line=>line.style.gridRow==='2'));
+ assert.equal(JSON.stringify(ctx.result),original);
+});
+
+test('coverage toggle defaults to compressed and expands evidence without reloading plots or changing results',()=>{
+ const {run,ctx,nodes}=domFixture();
+ ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDER',positions:[1,2,3],percent:37.5};
+ ctx.result={coverage:[ctx.chain],matches:[candidate,{...candidate,evidence:'ms1',scan_id:10}]};
+ const original=JSON.stringify(ctx.result);run('peptideView.results=result;peptideRenderCoverage(result,800)');
+ const all=()=>descendants(nodes.get('peptide-coverage'));
+ assert.equal(all().filter(n=>n.classList.contains('peptide-coverage-underline')).length,1);
+ const title=all().find(n=>String(n.textContent).includes('Coverage:')).textContent;
+ all().find(n=>n.textContent==='Expand coverage').listeners.click();
+ assert.equal(all().filter(n=>n.classList.contains('peptide-coverage-underline')).length,2);
+ assert.equal(all().find(n=>String(n.textContent).includes('Coverage:')).textContent,title);
+ assert.equal(run('peptideView.chromatogramRequest'),0);
+ all().find(n=>n.textContent==='Compress coverage').listeners.click();
+ assert.equal(all().filter(n=>n.classList.contains('peptide-coverage-underline')).length,1);
+ assert.equal(JSON.stringify(ctx.result),original);
+});
+
+test('compressed coverage keeps peptide choices and distinct elution features available',async()=>{
+ const {run,ctx,nodes}=domFixture();const bio={id:'early',confirmed:true,time_start:1,time_end:2,apex_time:1.5,charges:[1]};
+ ctx.row={...candidate,biomolecule:bio};
+ ctx.result={matches:[ctx.row,{...ctx.row,scan_id:10,time:8,biomolecule:{...bio,id:'late',time_start:7,time_end:9,apex_time:8}},
+  {...candidate,scan_id:11,sequence:'TIDER',locations:[{chain:'A',start:4,end:8}]}]};
+ ctx.api.getPeptideChromatogram=async()=>chromatogram;ctx.api.getQtofSpectrum=async()=>({mz:[100],intensities:[1]});
+ run('peptideView.results=result');await run('peptideShowMatch(row,result.matches)');
+ assert.equal(nodes.get('peptide-covered-peptides').hidden,false);
+ assert.equal(nodes.get('peptide-covered-peptide-select').children.length,2);
+ assert.equal(nodes.get('peptide-biomolecule-select').children.length,2);
+ assert.equal(nodes.get('peptide-observation-select').children.length,1);
+ const select=nodes.get('peptide-biomolecule-select');select.value='late';await select.onchange();
+ assert.equal(run('peptideView.selectedMatch.scan_id'),10);
+ assert.equal(nodes.get('peptide-covered-peptide-select').children.length,2);
+ await run('peptideShowMatch(row)');assert.equal(nodes.get('peptide-covered-peptides').hidden,true);
 });
 
 test('table filters include charge +1 and sort precursor m/z numerically, with missing values last',()=>{
@@ -634,6 +733,7 @@ test('compact coverage uses half-height clickable evidence lanes and preserves l
 
 test('wrapped coverage repacks sparse later lines without changing peptide locations or click targets',()=>{
  const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Example',sequence:'A'.repeat(100),positions:[],percent:0};
+ run('peptideView.coverageExpanded=true');
  ctx.result={matches:[[1,40],[2,41],[3,70]].map(([start,end],i)=>({...candidate,scan_id:i+1,
    sequence:'A'.repeat(end-start+1),locations:[{chain:'A',start,end}]}))};
  let selected;ctx.capture=row=>{selected=row;};run('peptideShowMatch=capture');
@@ -670,8 +770,9 @@ test('compact wrapped lanes preserve every evidence target without overlap or em
  }
 });
 
-test('compact MS-only and MS/MS lines keep distinct accessible buttons and select their own spectrum',()=>{
+test('expanded MS-only and MS/MS lines keep distinct accessible buttons and select their own spectrum',()=>{
  const {run,ctx}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDER',positions:[],percent:0};
+ run('peptideView.coverageExpanded=true');
  ctx.result={matches:[candidate,{...candidate,scan_id:10,evidence:'ms1'}]};
  let selected;ctx.capture=row=>{selected=row;};run('peptideShowMatch=capture');
  const panel=run('peptideRenderCoverageChain(result,chain)');
@@ -696,6 +797,7 @@ test('removing the imported-reference comment does not alter reference or modifi
 
 test('unconfirmed MS/MS precursor is distinct from a linked solid blue line',async()=>{
  const {run,ctx,nodes}=domFixture();ctx.chain={id:'A',name:'Reference',sequence:'PEPTIDER',positions:[],percent:0};
+ run('peptideView.coverageExpanded=true');
  ctx.row={...candidate,ms1_supported:false,precursor_link:'unconfirmed'};
  ctx.result={matches:[ctx.row,{...candidate,scan_id:10,ms1_supported:true}]};
  const panel=run('peptideRenderCoverageChain(result,chain)');
@@ -865,8 +967,39 @@ test('MS-only thresholds are adjustable, sent to matching, and cleared edits inv
  intensity.value='';payload=null;await run('peptideAnalyze()');
  assert.equal(payload,null);assert.match(nodes.get('peptide-status').textContent,/Enter both MS-only thresholds/);
  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
- assert.match(html,/id="peptide-ms1-relative"[^>]*value="0"/);
+ assert.match(html,/id="peptide-ms1-relative"[^>]*value="5"/);
  assert.match(html,/id="peptide-ms1-intensity"[^>]*value="0"/);
+});
+
+test('5% MS-only default upgrades the former zero without discarding other method settings',()=>{
+ for(const [version,value,expected] of [['v1','0','5'],['v1','8','8'],['v2','0','0']]){
+  const {run,ctx,nodes}=domFixture();
+  const saved=new Map([[`catrupole-peptide-method-${version}`,JSON.stringify({'peptide-ms1-relative':value,'peptide-fragment-ppm':'23'})]]);
+  ctx.localStorage={getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)};
+  run('initPeptideMapping()');assert.equal(nodes.get('peptide-ms1-relative').value,expected);
+  assert.equal(nodes.get('peptide-fragment-ppm').value,'23');
+  run('peptideSaveMethod()');assert.equal(JSON.parse(saved.get('catrupole-peptide-method-v2'))['peptide-ms1-relative'],expected);
+  run('peptideResetMethod()');assert.equal(nodes.get('peptide-ms1-relative').value,'5');
+ }
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ assert.ok(!html.includes('Combinations are searched. Unknown sites require discriminating MS/MS cuts;'));
+});
+
+test('switching fragments keeps the spectrum frame in place but disables stale exports while loading',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row=candidate;
+ ctx.api.getQtofSpectrum=async()=>({mz:[324.15539],intensities:[100]});
+ await run('peptideShowMatch(row)');let finish;
+ ctx.api.getQtofSpectrum=()=>new Promise(resolve=>{finish=resolve});
+ const pending=run('peptideShowMatch(row)');
+ assert.equal(nodes.get('peptide-spectrum-card').hidden,false);
+ assert.equal(nodes.get('peptide-spectrum-export').hidden,false);
+ assert.equal(nodes.get('peptide-ion-sequence').hidden,false);
+ assert.equal(nodes.get('peptide-ion-sequence').inert,true);
+ assert.equal(nodes.get('btn-peptide-spectrum-pdf').disabled,true);
+ assert.equal(run('peptideView.selectedSpectrum'),null);
+ finish({mz:[324.15539],intensities:[100]});await pending;
+ assert.equal(nodes.get('peptide-ion-sequence').inert,false);
+ assert.equal(nodes.get('btn-peptide-spectrum-pdf').disabled,false);
 });
 
 test('sample preparation is sent to calculations and edits invalidate results',async()=>{
@@ -926,6 +1059,7 @@ test('applying reference filtering preserves MS-only threshold choices across it
 
 test('both blue and green coverage clicks reserve room for the full horizontal m/z title',async()=>{
  const {run,ctx}=domFixture();const renders=[];
+ run('peptideView.coverageExpanded=true');
  ctx.WEBAPP_LAYOUT.margin={l:60,r:20,t:40,b:50};
  ctx.WEBAPP_LAYOUT.xaxis={automargin:true,color:'#000000'};
  const original=JSON.stringify(ctx.WEBAPP_LAYOUT);

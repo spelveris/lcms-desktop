@@ -288,7 +288,6 @@
           <label title="For partial or uncertain alkylation; cannot be combined with fixed IAM."><input id="peptide-variable-iam" type="checkbox"> Variable IAM (Cys)</label>
           <label>Maximum variable modifications per peptide <input id="peptide-variable-max" type="number" value="4" min="1" max="4" style="width:65px;"></label>
         </div>
-        <p class="toolbar-note">Combinations are searched. Unknown sites require discriminating MS/MS cuts; MS alone does not localize them. Preparation and chemistry choices stay with the selected sample during this session.</p>
         <fieldset id="peptide-remnant-settings" class="settings-group peptide-reference-only">
           <legend>Digest remnants and modification sites</legend>
           <div id="peptide-linkages" style="overflow:auto;"></div>
@@ -324,7 +323,7 @@
         <label>Precursor charge <input id="peptide-charge-min" type="number" value="1" min="1" max="6">–<input id="peptide-charge-max" type="number" value="6" min="1" max="6"></label>
       </div>
       <div class="tab-toolbar">
-        <label title="Additional feature-apex gates. Isotope and chromatographic checks are always required.">MS1 apex minimum (% of scan maximum): <input id="peptide-ms1-relative" type="number" value="0" min="0" max="100" step="0.1" style="width:75px;"></label>
+        <label title="Additional feature-apex gates. Isotope and chromatographic checks are always required.">MS1 apex minimum (% of scan maximum): <input id="peptide-ms1-relative" type="number" value="5" min="0" max="100" step="0.1" style="width:75px;"></label>
         <label>MS1 apex minimum (counts): <input id="peptide-ms1-intensity" type="number" value="0" min="0" max="1000000000000000" step="any" style="width:105px;"></label>
       </div>
       <div class="tab-toolbar">
@@ -358,15 +357,16 @@
       <div id="peptide-coverage"></div>
       <div id="peptide-results"></div>
       <section id="peptide-chromatogram" hidden aria-label="Whole-run TIC and selected peptide elution">
+        <div class="plot-container peptide-chromatogram-card">
+          <div id="peptide-chromatogram-plot" class="peptide-chromatogram-canvas" data-fixed-plot-height="300"></div>
+        </div>
+        <div id="peptide-covered-peptides" class="peptide-observations" hidden><label for="peptide-covered-peptide-select">Covered peptide</label><select id="peptide-covered-peptide-select"></select></div>
         <div class="peptide-observations"><label for="peptide-biomolecule-select">Elution feature</label><select id="peptide-biomolecule-select"></select></div>
         <div id="peptide-observations" class="peptide-observations" hidden>
           <label for="peptide-observation-select" id="peptide-observation-label">Observations of this peptide</label>
           <select id="peptide-observation-select" aria-label="Selected peptide observation"></select>
         </div>
         <p id="peptide-chromatogram-status" class="toolbar-note" role="status"></p>
-        <div class="plot-container peptide-chromatogram-card">
-          <div id="peptide-chromatogram-plot" class="peptide-chromatogram-canvas" data-fixed-plot-height="300"></div>
-        </div>
       </section>
       <div id="peptide-spectrum-export" class="peptide-export-toolbar" hidden>
         <button id="btn-peptide-spectrum-pdf" class="btn btn-sm" type="button" disabled>Download spectrum PDF</button>

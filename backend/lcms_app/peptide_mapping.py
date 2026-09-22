@@ -299,7 +299,7 @@ def analyze(sample, payload):
     if not 0 <= missed <= 3 or not 1 <= precursor_ppm <= 50 or not 1 <= fragment_ppm <= 100:
         raise ValueError('Use 0–3 missed cleavages, 1–50 precursor ppm and 1–100 fragment ppm')
     try:
-        threshold_values = [payload.get('ms1_min_relative_percent', 0), payload.get('ms1_min_intensity', 0)]
+        threshold_values = [payload.get('ms1_min_relative_percent', 5), payload.get('ms1_min_intensity', 0)]
         if any(isinstance(value, bool) for value in threshold_values): raise ValueError()
         ms1_percent, ms1_intensity = map(float, threshold_values)
         if not np.isfinite([ms1_percent, ms1_intensity]).all() or not 0 <= ms1_percent <= 100 or not 0 <= ms1_intensity <= 1e15:
