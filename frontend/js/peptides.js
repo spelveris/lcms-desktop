@@ -4,6 +4,36 @@ const peptideView = { generation: 0, references: [], results: null, path: '', mo
 const PEPTIDE_ION_COLORS = { b: '#3750aa', y: '#e52a2a' };
 let peptideCoverageObserver;
 let peptideChromatogramDraw = Promise.resolve();
+const peptidePreparationByPath = new Map();
+let peptidePreparationPath = '';
+const PEPTIDE_CHEMISTRY_CHECKBOXES = ['peptide-iam','peptide-variable-iam','peptide-variable-oxidation','peptide-variable-deamidation'];
+function peptideChemistryDraft() {
+  return {checks:Object.fromEntries(PEPTIDE_CHEMISTRY_CHECKBOXES.map(id=>[id,document.getElementById(id).checked])),
+    reduced:document.getElementById('peptide-reduction').value,
+    disulfides:document.getElementById('peptide-disulfides').value,
+    maximum:document.getElementById('peptide-variable-max').value};
+}
+function peptideRestoreChemistry(draft = {}) {
+  for(const id of PEPTIDE_CHEMISTRY_CHECKBOXES)document.getElementById(id).checked=draft.checks?.[id]===true;
+  document.getElementById('peptide-reduction').value=draft.reduced || 'reduced';
+  document.getElementById('peptide-disulfides').value=draft.disulfides || '';
+  document.getElementById('peptide-variable-max').value=draft.maximum || '4';
+  document.getElementById('peptide-disulfides-label').hidden=document.getElementById('peptide-reduction').value!=='unreduced';
+}
+function peptideSelectPreparation(path) {
+  if(path===peptidePreparationPath)return;
+  if(peptidePreparationPath)peptidePreparationByPath.set(peptidePreparationPath,peptideChemistryDraft());
+  peptideRestoreChemistry(peptidePreparationByPath.get(path));
+  peptidePreparationPath=path;
+}
+function peptideReadVariableModifications() {
+  const maximum=document.getElementById('peptide-variable-max').value;
+  if(!String(maximum).trim()||!Number.isInteger(Number(maximum))||Number(maximum)<1||Number(maximum)>4)throw Error('Use 1–4 variable modifications per peptide.');
+  if(document.getElementById('peptide-iam').checked&&document.getElementById('peptide-variable-iam').checked)throw Error('Choose fixed or variable IAM, not both.');
+  return {oxidation:document.getElementById('peptide-variable-oxidation').checked,
+    deamidation:document.getElementById('peptide-variable-deamidation').checked,
+    iam:document.getElementById('peptide-variable-iam').checked,max_per_peptide:Number(maximum)};
+}
 const PEPTIDE_METHOD_FIELDS = {
   ms1_mz_min:['peptide-mz-min',350], ms1_mz_max:['peptide-mz-max',2000], ms1_peak_min:['peptide-peak-min',100],
   peptide_min_length:['peptide-min-length',5], peptide_max_length:['peptide-max-length',70],
@@ -245,7 +275,7 @@ function peptideCoverageModifications(result, chain) {
         const position = location.start + mod.residue - 1;
         if (!sites.has(position)) sites.set(position, { position, ambiguous: true, labels: new Set() });
         const site = sites.get(position);
-        site.ambiguous = site.ambiguous && row.site_ambiguous === true;
+        site.ambiguous = site.ambiguous && (mod.variable ? mod.localized !== true : row.site_ambiguous === true);
         site.labels.add(`${chain.id}:${row.sequence[mod.residue-1]}${position} · ${mod.kind === 'gg' ? 'GGisoK · ' : ''}${mod.delta >= 0 ? '+' : ''}${mod.delta} Da`);
       }
     }
@@ -367,6 +397,7 @@ function peptideSyncSamples(files) {
   }
   if (files.some(f => f.path === previous)) select.value = previous;
   if (previous && select.value !== previous) peptideClearResults();
+  peptideSelectPreparation(select.value);
   const tab = document.querySelector('[data-tab="tab-peptides"]');
   tab.classList.toggle('hidden', !files.length);
   if (!files.length && tab.classList.contains('active')) document.querySelector('[data-tab="tab-single"]').click();
@@ -760,7 +791,8 @@ async function peptideAnalyze() {
     const intensity=document.getElementById('peptide-ms1-intensity').value;
     if(!String(relative).trim()||!String(intensity).trim())throw new Error('Enter both MS-only thresholds; use 0 to disable a cutoff.');
     const result=await api.analyzePeptides({ path, method:peptideReadMethod(), fasta:document.getElementById('peptide-fasta').value, modifications:peptideView.modifications, missed_cleavages:Number(document.getElementById('peptide-missed').value), precursor_ppm:Number(document.getElementById('peptide-precursor-ppm').value), fragment_ppm:Number(document.getElementById('peptide-fragment-ppm').value), ms1_min_relative_percent:Number(relative), ms1_min_intensity:Number(intensity),
-      preparation:{reduced:document.getElementById('peptide-reduction').value!=='unreduced',iam:document.getElementById('peptide-iam').checked,disulfides:document.getElementById('peptide-disulfides').value} });
+      preparation:{reduced:document.getElementById('peptide-reduction').value!=='unreduced',iam:document.getElementById('peptide-iam').checked,disulfides:document.getElementById('peptide-disulfides').value},
+      variable_modifications:peptideReadVariableModifications() });
     if (generation !== peptideView.generation) return;
     Object.assign(peptideView,{results:result,path});
     peptideView.filters.evidence=document.getElementById('peptide-default-evidence').value;
@@ -819,7 +851,9 @@ function initPeptideMapping() {
   } catch(_) { /* Keep the screenshot-aligned defaults. */ }
   for(const id of methodIds)document.getElementById(id).addEventListener('input',()=>{peptideClearResults();peptideSaveMethod();});
   document.getElementById('btn-peptide-method-reset').addEventListener('click',peptideResetMethod);
-  for(const id of ['peptide-reduction','peptide-iam','peptide-disulfides'])document.getElementById(id).addEventListener('input',()=>{
+  for(const id of ['peptide-reduction','peptide-disulfides','peptide-variable-max',...PEPTIDE_CHEMISTRY_CHECKBOXES])document.getElementById(id).addEventListener('input',()=>{
+    if(id==='peptide-iam'&&document.getElementById(id).checked)document.getElementById('peptide-variable-iam').checked=false;
+    if(id==='peptide-variable-iam'&&document.getElementById(id).checked)document.getElementById('peptide-iam').checked=false;
     peptideClearResults();document.getElementById('peptide-disulfides-label').hidden=document.getElementById('peptide-reduction').value!=='unreduced';
   });
   peptideInitCoverageResize();
@@ -828,7 +862,7 @@ function initPeptideMapping() {
   document.getElementById('btn-peptide-import').addEventListener('click',peptideImport);
   document.getElementById('btn-peptide-analyze').addEventListener('click',peptideAnalyze);
   document.getElementById('peptide-reference-select').addEventListener('change',e=>peptideUseReference(Number(e.target.value)));
-  document.getElementById('peptide-sample-select').addEventListener('change',()=>{ peptideClearResults(); peptideView.references=[];document.getElementById('peptide-reference-select').replaceChildren();document.getElementById('peptide-import-status').textContent='Reference retained; verify it belongs to the newly selected sample before analysis.'; });
+  document.getElementById('peptide-sample-select').addEventListener('change',()=>{ peptideSelectPreparation(document.getElementById('peptide-sample-select').value);peptideClearResults(); peptideView.references=[];document.getElementById('peptide-reference-select').replaceChildren();document.getElementById('peptide-import-status').textContent='Reference retained; verify it belongs to the newly selected sample before analysis. Preparation and variable chemistry follow this sample.'; });
   document.getElementById('btn-peptide-add-linkage').addEventListener('click',()=>{peptideView.modifications.push({chain:'A',position:1,delta:null,kind:'custom',block_cleavage:false});peptideClearResults();peptideRenderLinkages();});
   for(const id of ['peptide-fasta','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm','peptide-ms1-relative','peptide-ms1-intensity'])document.getElementById(id).addEventListener('input',peptideClearResults);
   document.getElementById('peptide-fasta').addEventListener('change',peptideRenderLinkages);

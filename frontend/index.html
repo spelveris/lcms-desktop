@@ -258,9 +258,19 @@
       </label>
       <div class="tab-toolbar peptide-preparation">
         <label>Cysteines <select id="peptide-reduction"><option value="reduced">Reduced / free thiols</option><option value="unreduced">Unreduced disulfides</option></select></label>
-        <label><input id="peptide-iam" type="checkbox"> IAM alkylation (carbamidomethyl Cys)</label>
+        <label title="Only enable for this sample's preparation. Adds carbamidomethyl to every free cysteine."><input id="peptide-iam" type="checkbox"> Fixed IAM alkylation (Cys)</label>
         <label id="peptide-disulfides-label" hidden>Disulfide pairs <input id="peptide-disulfides" type="text" placeholder="A:3-A:18, A:8-A:25" title="Pairs of cysteine positions. Unreduced linked peptides are excluded from this linear-peptide search."></label>
       </div>
+      <details class="settings-group">
+        <summary>Variable modifications · this sample</summary>
+        <div class="tab-toolbar">
+          <label><input id="peptide-variable-oxidation" type="checkbox"> Oxidation (M)</label>
+          <label><input id="peptide-variable-deamidation" type="checkbox"> Deamidation (N/Q)</label>
+          <label title="For partial or uncertain alkylation; cannot be combined with fixed IAM."><input id="peptide-variable-iam" type="checkbox"> Variable IAM (Cys)</label>
+          <label>Maximum variable modifications per peptide <input id="peptide-variable-max" type="number" value="4" min="1" max="4" style="width:65px;"></label>
+        </div>
+        <p class="toolbar-note">Combinations are searched. Unknown sites require discriminating MS/MS cuts; MS alone does not localize them. Preparation and chemistry choices stay with the selected sample during this session.</p>
+      </details>
       <div class="tab-toolbar">
         <label>Saved reference: <select id="peptide-reference-select"></select></label>
       </div>
@@ -290,7 +300,7 @@
         <button id="btn-peptide-method-reset" class="btn btn-sm" type="button">Reset defaults</button>
       </div>
       <p class="toolbar-note">0 disables optional peak cutoffs. Measured spectra remain unchanged. CID b/y ions; protonated positive ions only. Isotope and elution checks stay enabled.</p>
-      <details class="toolbar-note"><summary>Differences from BioConfirm</summary><p>These are matching numerical settings, not the Agilent search engine. Agilent quality/identification scores, Agile 2 integration, Na/K adduct grouping, negative ions, multi-variable modification combinations and scan averaging are not reproduced. CATrupole searches charges +1 to +6 and one variable remnant per peptide, retains competing assignments and individual measured spectra, and does not calculate an identification FDR.</p></details>
+      <details class="toolbar-note"><summary>Differences from BioConfirm</summary><p>These are matching numerical settings, not the Agilent search engine. Agilent quality/identification scores, Agile 2 integration, Na/K adduct grouping, negative ions and scan averaging are not reproduced. CATrupole searches charges +1 to +6, supports up to four variable common modifications combined with one optional site-searched remnant (within the selected total), retains competing assignments and individual measured spectra, and does not calculate an identification FDR.</p></details>
       </details>
       <fieldset class="settings-group">
         <legend>Digest remnants and modification sites</legend>

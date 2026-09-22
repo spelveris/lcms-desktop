@@ -174,12 +174,13 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
             if apex not in seed_scans or properties['prominences'][pi] < trace[apex]*.5:
                 continue
             lo, hi = max(0,int(np.floor(widths[2][pi]))), min(len(scans)-1,int(np.ceil(widths[3][pi])))
-            # Require three consecutive surveys in the same chromatographic peak,
-            # no bridging scan gaps or separate retention-time features.
+            # A narrow DDA peak may have only two surveys above half-height.
+            # Require a two-survey core AND three contiguous supported surveys
+            # after shoulder expansion; never accept a one-scan spike.
             members = [j for j in range(lo,hi+1) if patterns[j][3] and trace[j] >= trace[apex]*.5]
             runs = np.split(np.array(members,dtype=int), np.flatnonzero(np.diff(members)>1)+1)
             run = next((r for r in runs if apex in r), [])
-            if len(run) < MIN_SURVEYS or np.any(np.diff(times[run]) > .15):
+            if len(run) < 2 or np.any(np.diff(times[run]) > .15):
                 continue
             # The isotope traces must rise/fall together, not just occur nearby.
             local = values[lo:hi+1,model[2]]
@@ -195,6 +196,8 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
             while last<properties['right_bases'][pi] and patterns[last+1][3] and trace[last+1]>=trace[apex]*.1 and times[last+1]-times[last]<=.15:
                 last+=1
             support = np.arange(first,last+1)
+            if len(support) < MIN_SURVEYS:
+                continue
             observed, mzs, score, _ = patterns[apex]
             eligible = _eligible_precursors(peptide,z,model,mzs,tolerance)
             isotope = int(eligible[np.argmax(observed[eligible])])

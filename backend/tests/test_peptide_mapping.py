@@ -114,6 +114,16 @@ class PeptideMappingTests(unittest.TestCase):
         self.assertEqual(rows[0]['isotope_count'],2);self.assertEqual(rows[0]['observation_count'],5)
         self.assertTrue(rows[0]['ms1_supported'])
 
+    def test_narrow_peak_requires_two_core_and_three_supported_surveys(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        scans=feature_scans(peptide,profile=(0,.2,1,.7,.2,0))
+        rows=analyze(self.make_sample(scans),{'fasta':'PEPTIDER'})['matches']
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['core_observation_count'],2)
+        self.assertEqual(rows[0]['observation_count'],4)
+        for profile in [(0,0,1,.7,0,0),(0,.2,1,.2,0)]:
+            self.assertFalse(analyze(self.make_sample(feature_scans(peptide,profile=profile)),{'fasta':'PEPTIDER'})['matches'])
+
     def test_composition_model_has_known_mono_and_first_isotope_proportions(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
         offsets,abundance,_=expected_envelope(peptide)

@@ -48,6 +48,8 @@ function domFixture() {
   const document={getElementById(id){if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement(tag){return new Element(tag);},createElementNS(ns,tag){return new Element(tag);}};
   document.getElementById('peptide-ms1-relative').value='5';
   document.getElementById('peptide-ms1-intensity').value='0';
+  document.getElementById('peptide-variable-max').value='4';
+  document.getElementById('peptide-reduction').value='reduced';
   const ctx=vm.createContext({console,document,showLoading(){},hideLoading(){},Plotly:{purge(){},async react(){}},WEBAPP_LAYOUT:{xaxis:{},yaxis:{}},PLOT_CONFIG:{},api:{}});
   for(const file of ['qtof.js','peptides.js','reference-masses.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);
   vm.runInContext(`for(const [id,value] of Object.values(PEPTIDE_METHOD_FIELDS))document.getElementById(id).value=String(value);
@@ -75,6 +77,32 @@ const candidate={sequence:'PEPTIDER',modifications:[],locations:[{chain:'A',star
  explained_intensity_pct:45,isotope_offset:0,ambiguous_scan:false,
  fragments:[{ion:'b3+',bond:3,observed_mz:324.15539,theoretical_mz:324.1554,error_ppm:-.03,intensity:100},
  {ion:'y5^2+',bond:3,observed_mz:300.2,theoretical_mz:300.2,error_ppm:0,intensity:80}]};
+
+test('preparation and variable chemistry are isolated per sample in this session',()=>{
+ const {run,nodes}=domFixture();
+ run("peptideSelectPreparation('OppA')");
+ nodes.get('peptide-iam').checked=true;nodes.get('peptide-variable-oxidation').checked=true;
+ run("peptideSelectPreparation('diUb')");
+ assert.equal(nodes.get('peptide-iam').checked,false);assert.equal(nodes.get('peptide-variable-oxidation').checked,false);
+ nodes.get('peptide-variable-deamidation').checked=true;
+ run("peptideSelectPreparation('OppA')");
+ assert.equal(nodes.get('peptide-iam').checked,true);assert.equal(nodes.get('peptide-variable-oxidation').checked,true);
+ assert.equal(nodes.get('peptide-variable-deamidation').checked,false);
+ assert.deepEqual(JSON.parse(JSON.stringify(run('peptideReadVariableModifications()'))),{oxidation:true,deamidation:false,iam:false,max_per_peptide:4});
+ nodes.get('peptide-variable-iam').checked=true;
+ assert.throws(()=>run('peptideReadVariableModifications()'),/fixed or variable IAM/);
+ nodes.get('peptide-variable-max').value='5';assert.throws(()=>run('peptideReadVariableModifications()'),/1–4/);
+});
+
+test('IAM controls are mutually exclusive and variable chemistry changes invalidate results',()=>{
+ const {run,nodes}=domFixture();run('initPeptideMapping()');
+ nodes.get('peptide-variable-iam').checked=true;nodes.get('peptide-iam').checked=true;
+ nodes.get('peptide-iam').listeners.input();assert.equal(nodes.get('peptide-variable-iam').checked,false);
+ nodes.get('peptide-variable-iam').checked=true;nodes.get('peptide-variable-iam').listeners.input();
+ assert.equal(nodes.get('peptide-iam').checked,false);
+ run('peptideView.results={matches:[]}');
+ nodes.get('peptide-variable-deamidation').listeners.input();assert.equal(run('peptideView.results'),null);
+});
 function descendants(node){return [node,...node.children.flatMap(descendants)];}
 
 const chromatogram={times:[0,.5,1,1.5,2,3,8],tic:[100,300,400,500,400,200,100],xic:[0,0,8,12,8,0,0],target_mz:955.46559,ppm:10};
@@ -790,6 +818,17 @@ test('reference refresh preserves reduction, IAM and disulfide choices',async()=
  await run('referenceApply()');nodes.get('peptide-reduction').value='reduced';nodes.get('peptide-iam').checked=false;nodes.get('peptide-disulfides').value='';run('initReferenceMasses()');
  assert.equal(nodes.get('peptide-reduction').value,'unreduced');assert.equal(nodes.get('peptide-iam').checked,true);assert.equal(nodes.get('peptide-disulfides').value,'A:3-A:18');
  assert.equal(nodes.get('peptide-disulfides-label').hidden,false);
+});
+
+test('reference refresh restores chemistry of a saved sample after the list initially selects another',()=>{
+ const {run,ctx,nodes}=domFixture();
+ run("peptideSelectPreparation('second');document.getElementById('peptide-variable-oxidation').checked=true;peptideSelectPreparation('first')");
+ run("for(const path of ['first','second']){const option=document.createElement('option');option.value=path;document.getElementById('peptide-sample-select').appendChild(option);}referenceView.peptidePath='second'");
+ const select=nodes.get('peptide-sample-select');
+ ctx.files=[{path:'first',name:'First'},{path:'second',name:'Second'}];ctx.metadata={first:{qtof:{}},second:{qtof:{}}};
+ run('referenceSyncSamples(files,metadata)');
+ assert.equal(select.value,'second');assert.equal(nodes.get('peptide-variable-oxidation').checked,true);
+ assert.equal(run('peptidePreparationPath'),'second');
 });
 
 test('MS-only selected spectrum discloses actual passing intensity and relative strength',async()=>{

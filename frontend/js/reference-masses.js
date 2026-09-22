@@ -64,7 +64,7 @@ function referenceSyncSamples(files, metadata) {
   if(referenceView.peptidePath&&document.getElementById('peptide-sample-select').options){
     const peptide=document.getElementById('peptide-sample-select');
     if([...peptide.options].some(option=>option.value===referenceView.peptidePath)){
-      peptide.value=referenceView.peptidePath;referenceView.peptidePath='';
+      peptide.value=referenceView.peptidePath;peptideSelectPreparation(peptide.value);referenceView.peptidePath='';
     }
   }
 }
@@ -91,6 +91,8 @@ async function referenceApply() {
     const draft={path:document.getElementById('peptide-sample-select').value, referencePath:path,
       referenceOpen:document.getElementById('reference-masses-panel').open, modifications:peptideView.modifications,
       iam:document.getElementById('peptide-iam').checked,
+      chemistry:peptideChemistryDraft(),
+      chemistryByPath:[...peptidePreparationByPath.entries()],
       values:Object.fromEntries(REFERENCE_PEPTIDE_INPUTS.map(id=>[id,document.getElementById(id).value]))};
     sessionStorage.setItem(REFERENCE_DRAFT_KEY,JSON.stringify(draft));
     await api.setReferenceMasses(path,policy);
@@ -121,6 +123,9 @@ function initReferenceMasses() {
     if(text){const draft=JSON.parse(text);
       for(const [id,value] of Object.entries(draft.values||{}))if(REFERENCE_PEPTIDE_INPUTS.includes(id))document.getElementById(id).value=value;
       document.getElementById('peptide-iam').checked=draft.iam===true;
+      if(draft.chemistry)peptideRestoreChemistry(draft.chemistry);
+      for(const [path,chemistry] of draft.chemistryByPath || [])peptidePreparationByPath.set(path,chemistry);
+      peptidePreparationPath=draft.path || '';
       document.getElementById('peptide-disulfides-label').hidden=document.getElementById('peptide-reduction').value!=='unreduced';
       peptideView.modifications=Array.isArray(draft.modifications)?draft.modifications:[];
       referenceView.peptidePath=draft.path||'';referenceView.referencePath=draft.referencePath||'';

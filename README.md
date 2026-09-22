@@ -172,14 +172,24 @@ The initial table filter shows MS/MS candidates; choose **All** to include MS-on
 features. Coverage still reports both evidence types. CID b/y matching, free-thiol
 mass conventions and individual measured spectra are retained. These settings do
 not reproduce Agilent's proprietary quality/identification scores, Agile 2,
-adduct grouping, negative-ion search, averaging/saturation rules or modification
-combinations. CATrupole keeps its explicit +1–+6 search bound and one variable
-remnant per peptide. It retains competing assignments rather than enforcing the
+adduct grouping, negative-ion search or averaging/saturation rules. CATrupole keeps
+its explicit +1–+6 search bound. Optional oxidation (M), deamidation (N/Q) and
+variable IAM (C) can be combined, with a limit of 1–4 variable modifications per
+peptide (including any selected variable remnant). These options default off;
+fixed IAM and variable IAM are mutually exclusive. Preparation choices belong to
+each sample in the current session, not to every subsequently loaded sample.
+Precursor-compatible site permutations are retained for MS/MS comparison;
+MS1 alone cannot localize them. Localization requires two modified backbone cuts
+and evidence distinguishing every compatible alternative placement. Search size
+limits fail explicitly rather than silently dropping competing sites.
+It retains competing assignments rather than enforcing the
 vendor's maximum-three-matches display or implying equivalent scores. No FDR is
 calculated. Unchecked vendor filters are not silently applied as active settings.
 
 An MS1 mass candidate now requires a **composition-compatible isotope envelope**
-in at least three consecutive surveys at half-height of a bracketed elution peak.
+across at least three consecutive surveys of a bracketed elution peak, including
+at least two coherent surveys in its half-height core. This admits narrow peaks
+with measured shoulders without accepting a single-survey spike.
 The expected pattern comes from the reference peptide and known net modification
 formulas, using Pyteomics compositions and Brain isotope centroids. Required peaks
 are at least 10% of the expected maximum, with a minimum of two (short +1 peptides
