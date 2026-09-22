@@ -64,6 +64,7 @@ import analysis
 import config as lcms_config
 from reference_masses import filter_sample, normalize_policy, ReferenceSettingsStore
 from protein_databases import ProteinDatabaseStore
+from database_search import DatabaseSearchStore
 
 # ---------------------------------------------------------------------------
 # App
@@ -74,6 +75,8 @@ async def lifespan(_app):
     yield
     if _protein_database_store is not None:
         _protein_database_store.close()
+    if _database_search_store is not None:
+        _database_search_store.close()
 
 
 app = FastAPI(title="LC-MS Desktop API", version=lcms_config.APP_VERSION, lifespan=lifespan)
@@ -92,6 +95,8 @@ _reference_view_cache = {}
 _reference_store = None
 _protein_database_store = None
 _protein_database_lock = Lock()
+_database_search_store = None
+_database_search_lock = Lock()
 RUN_SETTLE_SECONDS = 120
 WASH_POSITIONS = {91}
 DEFAULT_DECONV_MIN_INPUT_MZ = 100.0
@@ -2984,6 +2989,51 @@ def protein_database_status():
     return _protein_databases().snapshot()
 
 
+def _database_search():
+    global _database_search_store
+    with _database_search_lock:
+        if _database_search_store is None:
+            _database_search_store = DatabaseSearchStore(_app_user_data_dir(), _protein_databases(), _get_sample)
+        return _database_search_store
+
+
+@app.get('/api/database-search')
+def database_search_status():
+    return _database_search().status()
+
+
+@app.post('/api/database-search')
+def database_search_start(payload: dict = Body(...)):
+    try:
+        return _database_search().start(payload)
+    except (ValueError, TypeError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/api/database-search/{job_id}/cancel')
+def database_search_cancel(job_id: str):
+    try:
+        return _database_search().cancel(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get('/api/database-search/{job_id}/results')
+def database_search_results(job_id: str):
+    try:
+        return _database_search().results(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get('/api/database-search/{job_id}/spectrum/{scan_id}')
+def database_search_spectrum(job_id: str, scan_id: int):
+    try:
+        return _database_search().spectrum_match(job_id,scan_id)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post('/api/protein-databases/select')
 def protein_database_select(payload: dict = Body(...)):
     try:
@@ -4559,6 +4609,10 @@ def export_report_pdf(payload: dict = Body(...)):
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if '--database-search-self-test' in sys.argv:
+        from database_search_smoke import run
+        print(json.dumps(run()))
+        sys.exit(0)
     if '--database-self-test' in sys.argv:
         from database_download_smoke import run
         print(json.dumps(run()))

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.62">
+  <link rel="stylesheet" href="css/style.css?v=0.2.63">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -204,7 +204,7 @@
   <main id="main-content" class="main-content">
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tab-single">Single Sample</button>
-      <button class="tab-btn hidden" data-tab="tab-qtof">MS Spectra</button>
+      <button class="tab-btn hidden" data-tab="tab-qtof">MS/MS spectra</button>
       <button class="tab-btn" data-tab="tab-background-subtraction">Background Subtraction</button>
       <button class="tab-btn" data-tab="tab-eic-batch">Area Calculation</button>
       <button class="tab-btn" data-tab="tab-deconv">Deconvolution</button>
@@ -250,8 +250,9 @@
 
       <div class="tab-toolbar">
         <label>Digest sample: <select id="peptide-sample-select"></select></label>
-        <button id="btn-peptide-import" class="btn btn-sm">Read BioConfirm reference</button>
-        <label>FASTA file: <input id="peptide-fasta-file" type="file" accept=".fasta,.fa,.faa,.txt"></label>
+        <label>Analysis <select id="peptide-analysis-mode"><option value="reference">Map supplied sequence</option><option value="database">Search downloaded database</option></select></label>
+        <button id="btn-peptide-import" class="btn btn-sm peptide-reference-only">Read BioConfirm reference</button>
+        <label class="peptide-reference-only">FASTA file: <input id="peptide-fasta-file" type="file" accept=".fasta,.fa,.faa,.txt"></label>
       </div>
       <section class="protein-databases" aria-label="Download protein databases">
         <div class="tab-toolbar">
@@ -266,28 +267,21 @@
           <progress id="protein-database-progress" aria-label="Database download progress" max="1" hidden></progress>
           <span id="protein-database-status" role="status" aria-live="polite">Loading saved databases…</span>
         </div>
-        <details class="protein-database-details">
-          <summary>Storage &amp; database information</summary>
-          <p id="protein-database-directory"></p>
-          <p>Downloads stay in CATrupole’s user-data folder across app updates. Human cell-line presets share one human reference database, not cell-line-specific sequences. E. coli uses K-12; yeast uses S288c. These are main representative sequences; extra isoforms and engineered variants are not included.</p>
-          <p>Source: UniProt Consortium · CC BY 4.0. Release version, source URL and checksums are saved with each unchanged FASTA.</p>
-        </details>
-        <p class="protein-database-note">Database downloads only. Mapping below still uses your supplied protein sequence; automatic spectrum-to-database identification is not included yet.</p>
       </section>
       <section class="peptide-setup-panel" aria-label="Peptide mapping setup">
-      <div class="tab-toolbar peptide-reference-row">
+      <div class="tab-toolbar peptide-reference-row peptide-reference-only">
         <label>Saved reference: <select id="peptide-reference-select"></select></label>
       </div>
-      <label class="peptide-sequence-input">Expected protein sequence (plain sequence or FASTA; chains assigned A, B, … in order)
+      <label class="peptide-sequence-input peptide-reference-only">Expected protein sequence (plain sequence or FASTA; chains assigned A, B, … in order)
         <textarea id="peptide-fasta" rows="5" style="width:100%;font-family:monospace;" spellcheck="false"></textarea>
       </label>
+      <details id="peptide-modification-settings" class="settings-group">
+        <summary>Variable modifications</summary>
       <div class="tab-toolbar peptide-preparation">
         <label>Cysteines <select id="peptide-reduction"><option value="reduced">Reduced / free thiols</option><option value="unreduced">Unreduced disulfides</option></select></label>
         <label title="Only enable for this sample's preparation. Adds carbamidomethyl to every free cysteine."><input id="peptide-iam" type="checkbox"> Fixed IAM alkylation (Cys)</label>
         <label id="peptide-disulfides-label" hidden>Disulfide pairs <input id="peptide-disulfides" type="text" placeholder="A:3-A:18, A:8-A:25" title="Pairs of cysteine positions. Unreduced linked peptides are excluded from this linear-peptide search."></label>
       </div>
-      <details class="settings-group">
-        <summary>Variable modifications · this sample</summary>
         <div class="tab-toolbar">
           <label><input id="peptide-variable-oxidation" type="checkbox"> Oxidation (M)</label>
           <label><input id="peptide-variable-deamidation" type="checkbox"> Deamidation (N/Q)</label>
@@ -295,8 +289,27 @@
           <label>Maximum variable modifications per peptide <input id="peptide-variable-max" type="number" value="4" min="1" max="4" style="width:65px;"></label>
         </div>
         <p class="toolbar-note">Combinations are searched. Unknown sites require discriminating MS/MS cuts; MS alone does not localize them. Preparation and chemistry choices stay with the selected sample during this session.</p>
+        <fieldset id="peptide-remnant-settings" class="settings-group peptide-reference-only">
+          <legend>Digest remnants and modification sites</legend>
+          <div id="peptide-linkages" style="overflow:auto;"></div>
+          <button id="btn-peptide-add-linkage" class="btn btn-sm">+ Add remnant / modification</button>
+        </fieldset>
       </details>
-      <details id="peptide-method-settings" class="settings-group">
+      <details id="database-search-settings" class="settings-group" hidden>
+        <summary>Database search settings · Comet</summary>
+        <div class="tab-toolbar">
+          <label>Precursor ± ppm <input id="database-search-ppm" type="number" min="1" max="50" value="10"></label>
+          <label title="Comet uses fixed-width fragment bins, not the reference mapper's ppm tolerance.">Fragment bin (Da) <input id="database-search-bin" type="number" min="0.005" max="0.1" step="0.005" value="0.02"></label>
+          <label>Missed cleavages <input id="database-search-missed" type="number" min="0" max="3" value="2"></label>
+          <label><input id="database-search-semi" type="checkbox"> Allow one non-tryptic terminus (slower)</label>
+        </div>
+        <div class="tab-toolbar">
+          <label>Charge <input id="database-search-charge-min" type="number" min="1" max="6" value="1">–<input id="database-search-charge-max" type="number" min="1" max="6" value="6"></label>
+          <label>Peptide length <input id="database-search-length-min" type="number" min="5" max="50" value="5">–<input id="database-search-length-max" type="number" min="5" max="50" value="50"></label>
+          <label title="Estimated spectrum-match error rate, not protein FDR.">Spectrum q threshold <select id="database-search-q"><option value="0.01">1%</option><option value="0.05">5% (exploratory)</option></select></label>
+        </div>
+      </details>
+      <details id="peptide-method-settings" class="settings-group peptide-reference-only">
         <summary>Peptide mapping settings</summary>
         <div class="tab-toolbar">
         <label>Trypsin missed cleavages: <input id="peptide-missed" type="number" value="2" min="0" max="3" style="width:65px;"></label>
@@ -324,14 +337,18 @@
       <p class="toolbar-note">0 disables optional peak cutoffs. Measured spectra remain unchanged. CID b/y ions; protonated positive ions only. Isotope and elution checks stay enabled.</p>
       <details class="toolbar-note"><summary>Differences from BioConfirm</summary><p>These are matching numerical settings, not the Agilent search engine. Agilent quality/identification scores, Agile 2 integration, Na/K adduct grouping, negative ions and scan averaging are not reproduced. CATrupole searches charges +1 to +6, supports up to four variable common modifications combined with one optional site-searched remnant (within the selected total), retains competing assignments and individual measured spectra, and does not calculate an identification FDR.</p></details>
       </details>
-      <fieldset class="settings-group">
-        <legend>Digest remnants and modification sites</legend>
-        <div id="peptide-linkages" style="overflow:auto;"></div>
-        <button id="btn-peptide-add-linkage" class="btn btn-sm">+ Add remnant / modification</button>
-      </fieldset>
       </section>
-      <p id="peptide-import-status" class="toolbar-note" role="status"></p>
-      <button id="btn-peptide-analyze" class="btn btn-primary">Map measured MS / MS/MS to reference</button>
+      <p id="peptide-import-status" class="toolbar-note peptide-reference-only" role="status"></p>
+      <button id="btn-peptide-analyze" class="btn btn-primary peptide-reference-only">Map measured MS / MS/MS to reference</button>
+      <section id="database-search-panel" hidden aria-label="Local database search">
+        <div class="peptide-export-toolbar">
+          <button id="btn-database-search" type="button" class="btn btn-primary">Search database</button>
+          <button id="btn-database-search-cancel" type="button" class="btn btn-sm" hidden>Cancel search</button>
+          <progress id="database-search-progress" hidden aria-label="Database search in progress"></progress>
+        </div>
+        <p id="database-search-status" role="status" aria-live="polite"></p>
+        <div id="database-search-results"></div>
+      </section>
       <p id="peptide-status" class="toolbar-note" role="status"></p>
       <details id="peptide-analysis-details" class="toolbar-note" hidden><summary>Analysis details</summary><p id="peptide-analysis-warning"></p></details>
       <div id="peptide-map-export" class="peptide-export-toolbar" hidden>
@@ -371,6 +388,8 @@
       <p id="qtof-status" class="toolbar-note" role="status">Select a QTOF protein digest or peptide mapping run to view measured MS1 and MS/MS spectra.</p>
       <div class="tab-toolbar">
         <label>MS1 scan: <select id="qtof-survey-select" disabled></select></label>
+        <button id="qtof-ms1-prev" class="btn btn-sm" type="button" disabled aria-label="Previous MS scan">←</button>
+        <button id="qtof-ms1-next" class="btn btn-sm" type="button" disabled aria-label="Next MS scan">→</button>
         <label>Time (min): <input id="qtof-time" type="number" min="0" step="0.001" style="width:110px;"></label>
         <button id="btn-qtof-time" class="btn btn-sm" disabled>Go to nearest scan</button>
       </div>
@@ -378,6 +397,10 @@
       <div id="qtof-ms1-plot" class="plot-container" style="height:330px;"></div>
       <div class="tab-toolbar" style="margin-top:12px;">
         <label>Acquired MS/MS scan: <select id="qtof-fragment-select" disabled></select></label>
+        <button id="qtof-ms2-prev" class="btn btn-sm" type="button" disabled aria-label="Previous MS/MS scan">←</button>
+        <button id="qtof-ms2-next" class="btn btn-sm" type="button" disabled aria-label="Next MS/MS scan">→</button>
+        <label>Time (min): <input id="qtof-fragment-time" type="number" min="0" step="0.001" style="width:110px;"></label>
+        <button id="btn-qtof-fragment-time" class="btn btn-sm" type="button" disabled>Go to nearest MS/MS scan</button>
       </div>
       <p id="qtof-fragment-status" class="toolbar-note" role="status">No MS/MS scan selected.</p>
       <div id="qtof-ms2-plot" class="plot-container" style="height:330px;"></div>
@@ -577,11 +600,11 @@
         </label>
         <button id="btn-auto-detect-window" class="btn btn-sm">Auto-Detect Window</button>
         <button id="btn-run-deconv" class="btn btn-primary">Run Deconvolution</button>
+        <button id="btn-refresh-deconv" class="btn btn-deconv-refresh" type="button">Refresh</button>
         <div class="deconv-mode-toggle">
           <span class="deconv-mode-label">Drag Mode</span>
           <button id="btn-deconv-mode-deconvolute" class="btn btn-sm btn-primary" type="button">Deconvolute</button>
           <button id="btn-deconv-mode-zoom" class="btn btn-sm" type="button">Zoom</button>
-          <button id="btn-refresh-deconv" class="btn btn-sm" type="button">Refresh</button>
         </div>
       </div>
       <div class="deconv-controls">
@@ -998,13 +1021,14 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.62"></script>
-  <script src="js/charts.js?v=0.2.62"></script>
+  <script src="js/api.js?v=0.2.63"></script>
+  <script src="js/charts.js?v=0.2.63"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
+  <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.62"></script>
+  <script src="js/app.js?v=0.2.63"></script>
 </body>
 </html>

@@ -2,9 +2,11 @@
 
 Peptide Mapping has an organism / cell-line dropdown and **Download** button.
 Nothing is downloaded until requested. Downloaded databases are available offline.
-This feature manages sequence downloads only. It does not perform an unknown-
-protein spectrum search, and does not load a whole organism into the existing
-single-reference mapper. Mapping and its numerical settings are unchanged.
+Choose **Analysis → Search downloaded database** to identify protein candidates
+from acquired positive-ion QTOF digest MS/MS without providing a sequence.
+This optional, local Comet search is separate from **Map supplied sequence**;
+it does not load a whole organism into the single-reference mapper. See
+[Database search](database-search.md) for workflow, defaults and confidence.
 
 ## Catalog
 
@@ -40,6 +42,12 @@ removal of application user data will also remove its databases.
 ## Download integrity and recovery
 
 - Only hard-coded UniProt HTTPS sources and organism IDs are accepted.
+- Connection timeouts, interrupted reads, and temporary server errors try three
+  official sources in order: UniProt USA, EMBL-EBI UK, then ExPASy Switzerland.
+  Progress names the source and attempt. Each retry starts a fresh download
+  with that source's own release manifest; chunks/releases are never mixed.
+  TLS certificate validation is never disabled, and certificate or checksum
+  failures stop the download rather than accepting an unverified database.
 - Fetch the official `RELEASE.metalink`; verify the gzip size and published MD5.
   HTTPS authenticates the source; MD5 is the publisher's transport checksum.
 - Validate protein FASTA syntax, taxonomy, nonempty sequences, and reasonable
@@ -62,6 +70,7 @@ UniProt Consortium, Creative Commons Attribution 4.0 International (CC BY 4.0).
 The download's exact source and release are retained in its metadata.
 
 - https://www.uniprot.org/help/license
+- https://www.uniprot.org/help/downloads
 - https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/
 - https://www.cellosaurus.org/CVCL_0045 (HEK293)
 - https://www.cellosaurus.org/CVCL_0063 (HEK293T)

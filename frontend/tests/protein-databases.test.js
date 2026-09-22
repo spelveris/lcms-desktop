@@ -107,7 +107,9 @@ test('API uses allowlisted IDs only and UI never puts a whole database into the 
   const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
   const api = fs.readFileSync(path.join(__dirname, '../js/api.js'), 'utf8');
   assert.match(html, /id="protein-database-select"/);
-  assert.match(html, /automatic spectrum-to-database identification is not included yet/);
+  assert.match(html, /Search downloaded database/);
+  assert.ok(!html.includes('Storage &amp; database information'));
+  assert.ok(!html.includes('Database downloads only.'));
   assert.match(api, /encodeURIComponent\(databaseId\)/);
   assert.doesNotMatch(source, /peptide-fasta|analyzePeptides|fetch\(/);
 });

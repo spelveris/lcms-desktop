@@ -1,6 +1,6 @@
 /* Download management only: never feed an organism FASTA to the single-reference mapper. */
 const proteinDatabaseView = { snapshot: null, busy: false, offline: false, timer: null, initialized: false };
-const PROTEIN_DATABASE_ACTIVE = new Set(['connecting', 'downloading', 'verifying', 'installing', 'cancelling']);
+const PROTEIN_DATABASE_ACTIVE = new Set(['connecting', 'retrying', 'downloading', 'verifying', 'installing', 'cancelling']);
 
 function proteinDatabaseSize(bytes) {
   return `${(Number(bytes || 0) / 1e6).toFixed(1)} MB`;
@@ -17,7 +17,8 @@ function proteinDatabaseMessage(snapshot) {
   const active = job && PROTEIN_DATABASE_ACTIVE.has(job.state);
   if (active) {
     const name = snapshot.databases.find(item => item.id === job.database_id)?.label || 'Database';
-    const phases = { connecting: 'Connecting to UniProt…', verifying: 'Verifying protein sequences…',
+    const phases = { connecting: job.attempt > 1 ? `Connecting to ${job.source} (attempt ${job.attempt}/${job.max_attempts})…` : 'Connecting to UniProt…',
+      retrying: 'Connection interrupted; trying another official UniProt mirror…', verifying: 'Verifying protein sequences…',
       installing: 'Saving verified database…', cancelling: 'Cancelling download…' };
     return { state: 'working', text: `${name} · ${job.state === 'downloading'
       ? `${proteinDatabaseSize(job.downloaded_bytes)} / ${proteinDatabaseSize(job.total_bytes)} downloaded`
@@ -58,7 +59,7 @@ function renderProteinDatabases() {
       groups.get(preset.group).appendChild(option);
     }
     select.value = snapshot.selected_preset || '';
-    document.getElementById('protein-database-directory').textContent = snapshot.directory;
+    document.getElementById('protein-database-folder').title = snapshot.directory;
   }
   select.disabled = !snapshot || state.busy || state.offline || active;
   button.textContent = state.offline ? 'Retry connection' : database?.installed ? 'Downloaded' : 'Download';

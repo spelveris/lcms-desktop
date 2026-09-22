@@ -6,4 +6,5 @@ backend/__pycache__/
 dist/
 release/
 build/pyinstaller/
+build/comet/
 .DS_Store

@@ -4,6 +4,18 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 function fixture(){const ctx=vm.createContext({console});for(const file of ['qtof.js','peptides.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'),ctx);return code=>vm.runInContext(code,ctx);}
+test('MS/MS tab scan arrows follow acquired chronological entries without wrapping',()=>{
+ const run=fixture();run('var scans=[{scan_id:21,time:1.1},{scan_id:88,time:1.3},{scan_id:101,time:1.7}]');
+ assert.equal(run("qtofNavigationTarget(scans,'',1).scan_id"),21);
+ assert.equal(run("qtofNavigationTarget(scans,'21',1).scan_id"),88);
+ assert.equal(run("qtofNavigationTarget(scans,'101',-1).scan_id"),88);
+ assert.equal(run("qtofNavigationTarget(scans,'21',-1)"),null);
+ assert.equal(run("qtofNavigationTarget(scans,'101',1)"),null);
+ assert.equal(run("qtofNavigationTarget([],'',1)"),null);
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ assert.ok(html.includes('data-tab="tab-qtof">MS/MS spectra</button>'));
+ for(const id of ['qtof-ms1-prev','qtof-ms1-next','qtof-ms2-prev','qtof-ms2-next','btn-qtof-fragment-time'])assert.ok(html.includes(`id="${id}"`));
+});
 test('only instrument-linked MS/MS precursors are associated with a survey',()=>{
  const run=fixture();assert.equal(run('qtofAcquiredPrecursors([{parent_scan_id:5},{parent_scan_id:null},{parent_scan_id:6}],5).length'),1);
  assert.equal(run('qtofNearestSurvey([{time:1,scan_id:1},{time:2,scan_id:2}],1.9).scan_id'),2);

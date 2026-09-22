@@ -39,6 +39,11 @@ function qs(params) {
 // ---- Endpoints matching backend server.py ----
 
 const api = {
+  databaseSearchStatus() { return apiFetch('/api/database-search'); },
+  startDatabaseSearch(payload) { return apiFetch('/api/database-search', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); },
+  cancelDatabaseSearch(id) { return apiFetch(`/api/database-search/${encodeURIComponent(id)}/cancel`, {method:'POST'}); },
+  databaseSearchResults(id) { return apiFetch(`/api/database-search/${encodeURIComponent(id)}/results`); },
+  databaseSearchSpectrum(id, scan) { return apiFetch(`/api/database-search/${encodeURIComponent(id)}/spectrum/${encodeURIComponent(scan)}`); },
   health() {
     return apiFetch('/api/health');
   },

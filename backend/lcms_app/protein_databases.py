@@ -7,11 +7,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import gzip
 import hashlib
+from http.client import IncompleteRead
 import json
 import os
 from pathlib import Path
 import re
 import ssl
+from urllib.error import HTTPError, URLError
 import tempfile
 from threading import Event, RLock, Thread
 import time
@@ -21,6 +23,10 @@ import xml.etree.ElementTree as ET
 
 
 BASE_URL = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/'
+MIRROR_URL = 'https://ftp.ebi.ac.uk/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/'
+SWISS_MIRROR_URL = 'https://ftp.expasy.org/databases/uniprot/current_release/knowledgebase/reference_proteomes/'
+DOWNLOAD_SOURCES = (BASE_URL, MIRROR_URL, SWISS_MIRROR_URL)
+SOURCE_LABELS = {BASE_URL:'UniProt (USA)', MIRROR_URL:'UniProt EBI (UK)', SWISS_MIRROR_URL:'UniProt ExPASy (Switzerland)'}
 CATALOG = {
     'human': dict(label='Human', organism='Homo sapiens', proteome='UP000005640', taxon=9606,
                   domain='Eukaryota', estimated_download_mb=8, minimum_entries=10000),
@@ -40,7 +46,7 @@ PRESETS = [
     dict(id='yeast', label='Yeast — Saccharomyces cerevisiae (S288c)', database_id='yeast', group='Other organisms'),
     dict(id='cho', label='CHO → Chinese hamster', database_id='chinese-hamster', group='Other organisms'),
 ]
-ACTIVE_STATES = {'connecting', 'downloading', 'verifying', 'installing', 'cancelling'}
+ACTIVE_STATES = {'connecting', 'retrying', 'downloading', 'verifying', 'installing', 'cancelling'}
 MAX_DOWNLOAD = 100_000_000
 MAX_FASTA = 500_000_000
 CHUNK = 128 * 1024
@@ -62,9 +68,9 @@ def _source(database_id):
 
 def _safe_url(url):
     parsed = urlsplit(url)
-    if (parsed.scheme != 'https' or parsed.hostname != 'ftp.uniprot.org'
+    if (parsed.scheme != 'https' or parsed.hostname not in ('ftp.uniprot.org', 'ftp.ebi.ac.uk', 'ftp.expasy.org')
             or parsed.port not in (None, 443) or parsed.username or parsed.password
-            or not url.startswith(BASE_URL)):
+            or not any(url.startswith(base) for base in DOWNLOAD_SOURCES)):
         raise ValueError('The database download must stay on the official UniProt HTTPS server.')
     return url
 
@@ -84,6 +90,15 @@ def open_uniprot(url):
     request = Request(_safe_url(url), headers={'User-Agent': 'CATrupole protein-database downloader',
                                               'Accept-Encoding': 'identity'})
     return opener.open(request, timeout=20)
+
+
+def _transient_network_error(error):
+    if isinstance(error, HTTPError):
+        return error.code in (408, 429, 500, 502, 503, 504)
+    reason = error.reason if isinstance(error, URLError) else error
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return False  # Never hide an authentication failure by disabling TLS.
+    return isinstance(reason, (TimeoutError, ConnectionError, IncompleteRead)) or isinstance(error, URLError)
 
 
 def parse_release(content, filename):
@@ -220,7 +235,7 @@ class ProteinDatabaseStore:
                                       saved=installed, scope='Reference proteome: main representative protein sequences'))
             return dict(directory=str(self.root), selected_preset=self.selected_preset,
                         presets=[dict(p) for p in PRESETS], databases=databases,
-                        job=dict(self._job) if self._job else None, spectrum_search_available=False)
+                        job=dict(self._job) if self._job else None, spectrum_search_available=True)
 
     def select(self, preset_id):
         if not isinstance(preset_id, str) or preset_id not in {preset['id'] for preset in PRESETS}:
@@ -230,6 +245,14 @@ class ProteinDatabaseStore:
             _atomic_json(self.root / 'settings.json', {'selected_preset': preset_id})
             self.selected_preset = preset_id
             return self.snapshot()
+
+    def search_database(self, database_id):
+        _source(database_id)
+        with self._lock:
+            saved = self._installed(database_id)
+            if not saved or saved.get('invalid'):
+                raise ValueError('Download a verified protein database before searching.')
+            return self.root / database_id / 'proteins.fasta', dict(saved)
 
     def start(self, database_id):
         _source(database_id)
@@ -280,7 +303,20 @@ class ProteinDatabaseStore:
                 try:
                     if (self.root / database_id).exists():
                         raise ValueError('A database already exists here; it was left untouched.')
-                    metadata = self._download(database_id, stage)
+                    for attempt, base in enumerate(DOWNLOAD_SOURCES, 1):
+                        self._progress(state='connecting', attempt=attempt, max_attempts=len(DOWNLOAD_SOURCES),
+                                       source=SOURCE_LABELS[base], downloaded_bytes=0, total_bytes=None)
+                        try:
+                            metadata = self._download(database_id, stage, base)
+                            break
+                        except Exception as error:
+                            if not _transient_network_error(error):
+                                raise
+                            if attempt == len(DOWNLOAD_SOURCES):
+                                raise ValueError('Could not download from the three official UniProt servers (USA, UK, Switzerland). Check your connection and retry.') from error
+                            self._progress(state='retrying')
+                            if self._cancel.wait(attempt):
+                                raise DownloadCancelled()
                     self._progress(state='installing')
                     (stage / 'download.fasta.gz').unlink()
                     (stage / 'metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
@@ -298,8 +334,10 @@ class ProteinDatabaseStore:
             with self._lock:
                 self._job.update(state='failed', error=str(error) or type(error).__name__)
 
-    def _download(self, database_id, stage):
+    def _download(self, database_id, stage, base=BASE_URL):
         item, directory, filename = _source(database_id)
+        source_url = directory + filename
+        directory = base + directory[len(BASE_URL):]
         self._check_cancel()
         with self._open(directory + 'RELEASE.metalink') as response:
             release, expected_size, expected_md5 = parse_release(response.read(1_000_001), filename)
@@ -351,7 +389,7 @@ class ProteinDatabaseStore:
         if count < item['minimum_entries'] or not sequence_length:
             raise ValueError('The downloaded reference proteome is incomplete.')
         return dict(schema_version=1, database_id=database_id, proteome=item['proteome'], taxon=item['taxon'],
-                    source_url=directory + filename, uniprot_release=release, compressed_md5=expected_md5,
+                    source_url=source_url, download_url=directory + filename, uniprot_release=release, compressed_md5=expected_md5,
                     sha256=sha256.hexdigest(), bytes=size, download_bytes=received, protein_count=count,
                     downloaded_at=datetime.now(timezone.utc).isoformat(),
                     attribution='UniProt Consortium — CC BY 4.0; reference FASTA unchanged',

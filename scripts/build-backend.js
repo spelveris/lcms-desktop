@@ -47,7 +47,8 @@ function resolvePythonCommand() {
   throw new Error("No usable Python interpreter found.");
 }
 
-function run() {
+async function run() {
+  const cometPath = await require('./prepare-comet').prepare();
   const python = resolvePythonCommand();
   const dataSep = process.platform === "win32" ? ";" : ":";
   const lcmsAppPath = path.join(repoRoot, "backend", "lcms_app");
@@ -146,6 +147,7 @@ function run() {
     "--collect-data", "certifi",
     "--copy-metadata", "certifi",
     "--recursive-copy-metadata", "ms_deisotope",
+    "--add-binary", `${cometPath}${dataSep}comet`,
     "--add-data", `${path.join(repoRoot, 'third_party')}${dataSep}third_party`,
 	    "--hidden-import",
 	    "uvicorn",
@@ -205,7 +207,13 @@ function run() {
     process.exit(1);
   }
 
+  const searchCheck = spawnSync(exePath, ['--database-search-self-test'], { stdio: 'inherit', timeout: 90000 });
+  if (searchCheck.status !== 0) {
+    console.error('Packaged Comet search / target-decoy check failed.', searchCheck.error || '');
+    process.exit(1);
+  }
+
   console.log(`Backend build complete: ${exePath}`);
 }
 
-run();
+run().catch(error => { console.error(error); process.exitCode = 1; });

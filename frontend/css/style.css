@@ -71,6 +71,14 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
 #peptide-linkages label[hidden] { display: none; }
 .peptide-preparation { flex-wrap: wrap; }
+.btn.btn-deconv-refresh { background: #183e73; border-color: #29558e; color: #fff; }
+.btn.btn-deconv-refresh:hover:not(:disabled) { background: #204c87; border-color: #4675b5; }
+#tab-peptides [hidden] { display: none; }
+#database-search-settings input { width: 78px; }
+.database-search-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.database-search-table th, .database-search-table td { text-align: left; padding: 6px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.database-search-scroll { max-height: 360px; overflow: auto; margin: 8px 0; }
+.database-search-scroll th { position: sticky; top: 0; background: var(--bg-card); }
 .protein-databases { padding: 10px 12px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
 .protein-databases .tab-toolbar { flex-wrap: wrap; margin-bottom: 6px; }
 .protein-databases .tab-toolbar label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
@@ -826,7 +834,7 @@ body.sidebar-resizing .sidebar {
 .tab-panel {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 10px;
 }
 .tab-panel.hidden { display: none; }
 

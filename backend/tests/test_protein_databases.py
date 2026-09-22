@@ -9,6 +9,8 @@ import tempfile
 from threading import Event
 import unittest
 from unittest.mock import patch
+from urllib.error import URLError, HTTPError
+import ssl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lcms_app'))
 import protein_databases as databases
@@ -74,10 +76,55 @@ class ProteinDatabaseTests(unittest.TestCase):
     def test_catalog_is_offline_and_does_not_create_directories(self):
         status = self.store.snapshot()
         self.assertEqual(set(databases.CATALOG), {'human', 'ecoli-k12', 'yeast', 'chinese-hamster'})
-        self.assertFalse(status['spectrum_search_available'])
+        self.assertTrue(status['spectrum_search_available'])
         self.assertFalse(self.store.root.exists())
         self.assertEqual(self.network.calls, [])
         self.assertFalse(any(item['installed'] for item in status['databases']))
+
+    def test_handshake_timeout_retries_official_mirror_and_preserves_provenance(self):
+        def network(url):
+            if url.startswith(databases.BASE_URL): raise URLError(TimeoutError('TLS handshake timed out'))
+            return self.network(url)
+        self.store._open=network
+        with patch.object(self.store._cancel,'wait',return_value=False):status=self.download()
+        self.assertEqual(status['job']['state'],'complete')
+        saved=self.row()['saved']
+        self.assertTrue(saved['source_url'].startswith(databases.BASE_URL))
+        self.assertTrue(saved['download_url'].startswith(databases.MIRROR_URL))
+        self.assertTrue(all(url.startswith(databases.MIRROR_URL) for url in self.network.calls))
+        path, metadata=self.store.search_database('human');self.assertEqual(path.read_bytes(),self.network.fasta)
+
+    def test_retry_never_disables_certificates_or_retries_integrity_failure(self):
+        self.assertFalse(databases._transient_network_error(URLError(ssl.SSLCertVerificationError('certificate failed'))))
+        self.assertFalse(databases._transient_network_error(ValueError('checksum mismatch')))
+        self.assertFalse(databases._transient_network_error(HTTPError('https://ftp.uniprot.org/',404,'missing',{},None)))
+        self.assertTrue(databases._transient_network_error(TimeoutError('read timed out')))
+        with self.assertRaises(ValueError):self.store.search_database('../human')
+
+    def test_two_failed_servers_fall_back_to_swiss_mirror(self):
+        calls=[]
+        def network(url):
+            calls.append(url)
+            if not url.startswith(databases.SWISS_MIRROR_URL): raise HTTPError(url,503,'unavailable',{},None)
+            return self.network(url)
+        self.store._open=network
+        status=self.download()
+        self.assertEqual(status['job']['state'],'complete')
+        self.assertEqual(status['job']['attempt'],3)
+        self.assertTrue(self.row()['saved']['download_url'].startswith(databases.SWISS_MIRROR_URL))
+        self.assertEqual(len(calls),4)
+
+    def test_all_failed_servers_stop_without_installing_a_partial_database(self):
+        calls=[]
+        def network(url):
+            calls.append(url);raise TimeoutError('TLS timed out')
+        self.store._open=network
+        status=self.download()
+        self.assertEqual(status['job']['state'],'failed')
+        self.assertIn('three official',status['job']['error'])
+        self.assertEqual(len(calls),3)
+        self.assertFalse(self.row()['installed'])
+        self.assertFalse((self.store.root/'.partial-human').exists())
 
     def test_atomic_install_keeps_original_fasta_and_provenance_not_gzip(self):
         status = self.download()

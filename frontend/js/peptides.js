@@ -398,6 +398,7 @@ function peptideSyncSamples(files) {
   if (files.some(f => f.path === previous)) select.value = previous;
   if (previous && select.value !== previous) peptideClearResults();
   peptideSelectPreparation(select.value);
+  if (select.value !== previous && typeof databaseSearchSampleChanged === 'function') databaseSearchSampleChanged();
   const tab = document.querySelector('[data-tab="tab-peptides"]');
   tab.classList.toggle('hidden', !files.length);
   if (!files.length && tab.classList.contains('active')) document.querySelector('[data-tab="tab-single"]').click();
@@ -850,6 +851,7 @@ async function peptideShowMatch(row) {
 
 function initPeptideMapping() {
   if (typeof initProteinDatabases === 'function') initProteinDatabases();
+  if (typeof initDatabaseSearch === 'function') initDatabaseSearch();
   const methodIds=[...Object.values(PEPTIDE_METHOD_FIELDS).map(([id])=>id),...Object.keys(PEPTIDE_BASIC_DEFAULTS),'peptide-terminal-truncation','peptide-default-evidence'];
   try {
     const saved=JSON.parse(localStorage.getItem('catrupole-peptide-method-v1') || '{}');

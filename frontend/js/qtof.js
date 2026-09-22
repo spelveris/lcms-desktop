@@ -24,6 +24,29 @@ function qtofNearestSurvey(scans, time) {
   return scans.reduce((best, scan) => Math.abs(scan.time - time) < Math.abs(best.time - time) ? scan : best);
 }
 
+function qtofNavigationTarget(scans, selected, direction) {
+  if (!scans?.length || ![-1,1].includes(direction)) return null;
+  const index = scans.findIndex(scan => String(scan.scan_id) === String(selected));
+  const next = index < 0 ? (direction > 0 ? 0 : -1) : index + direction;
+  return next >= 0 && next < scans.length ? scans[next] : null;
+}
+
+function qtofUpdateNavigation(busy = false) {
+  for (const [level, selectId] of [['ms1','qtof-survey-select'],['ms2','qtof-fragment-select']]) {
+    const scans = qtofViewer.scans?.[level] || [], selected = document.getElementById(selectId).value;
+    for (const [suffix, direction] of [['prev',-1],['next',1]]) {
+      document.getElementById(`qtof-${level}-${suffix}`).disabled = busy || !qtofNavigationTarget(scans, selected, direction);
+    }
+  }
+  document.getElementById('btn-qtof-fragment-time').disabled = busy || !qtofViewer.scans?.ms2?.length;
+}
+
+function qtofStep(level, direction) {
+  const selectId = level === 'ms1' ? 'qtof-survey-select' : 'qtof-fragment-select';
+  const next = qtofNavigationTarget(qtofViewer.scans?.[level], document.getElementById(selectId).value, direction);
+  if (next) return level === 'ms1' ? qtofShowSurvey(next.scan_id) : qtofShowFragment(next.scan_id);
+}
+
 function qtofAcquiredPrecursors(scans, parentId) {
   return scans.filter(scan => scan.parent_scan_id === parentId);
 }
@@ -67,6 +90,8 @@ function qtofReset() {
   }
   document.getElementById('btn-qtof-time').disabled = true;
   document.getElementById('qtof-time').value = '';
+  document.getElementById('qtof-fragment-time').value = '';
+  qtofUpdateNavigation();
   document.getElementById('qtof-fragment-status').textContent = 'No MS/MS scan selected.';
   qtofClearPlot('qtof-ms1-plot'); qtofClearPlot('qtof-ms2-plot');
 }
@@ -86,8 +111,10 @@ function qtofOptions(id, scans, label) {
 async function qtofShowSurvey(scanId) {
   if (!qtofViewer.scans || !Number.isInteger(scanId)) return;
   const generation = ++qtofViewer.generation;
+  qtofUpdateNavigation(true);
   qtofClearPlot('qtof-ms1-plot'); qtofClearPlot('qtof-ms2-plot');
   document.getElementById('qtof-fragment-select').value = '';
+  document.getElementById('qtof-fragment-time').value = '';
   document.getElementById('qtof-fragment-status').textContent = 'Loading MS1 scan…';
   try {
     const spectrum = await api.getQtofSpectrum(qtofViewer.path, scanId, qtofViewer.polarity);
@@ -106,6 +133,8 @@ async function qtofShowSurvey(scanId) {
     });
   } catch (error) {
     if (generation === qtofViewer.generation) document.getElementById('qtof-fragment-status').textContent = error.message;
+  } finally {
+    if (generation === qtofViewer.generation) qtofUpdateNavigation();
   }
 }
 
@@ -119,6 +148,7 @@ async function qtofShowFragment(scanId) {
     if (qtofViewer.generation !== before + 1) return;
   }
   const generation = ++qtofViewer.generation;
+  qtofUpdateNavigation(true);
   qtofClearPlot('qtof-ms2-plot');
   document.getElementById('qtof-fragment-status').textContent = 'Loading measured MS/MS scan…';
   if (meta.parent_scan_id === null) {
@@ -130,6 +160,7 @@ async function qtofShowFragment(scanId) {
     const spectrum = await api.getQtofSpectrum(qtofViewer.path, scanId, qtofViewer.polarity);
     if (generation !== qtofViewer.generation) return;
     document.getElementById('qtof-fragment-select').value = String(scanId);
+    document.getElementById('qtof-fragment-time').value = meta.time.toFixed(4);
     document.getElementById('qtof-fragment-status').textContent =
       `Measured MS/MS · precursor ${meta.precursor_mz.toFixed(5)} m/z · ${meta.time.toFixed(4)} min · collision energy ${meta.collision_energy.toFixed(2)} eV` +
       (meta.parent_scan_id === null ? ' · No recorded MS1 parent is available.' : '') +
@@ -137,6 +168,8 @@ async function qtofShowFragment(scanId) {
     await qtofDraw('qtof-ms2-plot', spectrum);
   } catch (error) {
     if (generation === qtofViewer.generation) document.getElementById('qtof-fragment-status').textContent = error.message;
+  } finally {
+    if (generation === qtofViewer.generation) qtofUpdateNavigation();
   }
 }
 
@@ -160,12 +193,22 @@ async function qtofOpen() {
     const firstFragment = scans.ms2.find(s => s.parent_scan_id !== null);
     const firstId = firstFragment?.parent_scan_id ?? scans.ms1[0]?.scan_id;
     if (firstId !== undefined) await qtofShowSurvey(firstId);
+    else qtofUpdateNavigation();
   } catch (error) {
     if (generation === qtofViewer.generation) status.textContent = error.message;
   }
 }
 
 function initQtofViewer() {
+  for (const level of ['ms1','ms2']) {
+    document.getElementById(`qtof-${level}-prev`).addEventListener('click', () => qtofStep(level,-1));
+    document.getElementById(`qtof-${level}-next`).addEventListener('click', () => qtofStep(level,1));
+  }
+  document.getElementById('btn-qtof-fragment-time').addEventListener('click', () => {
+    const value = document.getElementById('qtof-fragment-time').value;
+    const scan = value !== '' && qtofNearestSurvey(qtofViewer.scans?.ms2 || [],Number(value));
+    if (scan) qtofShowFragment(scan.scan_id);
+  });
   document.getElementById('btn-load-qtof').addEventListener('click', qtofOpen);
   for (const id of ['qtof-sample-select', 'qtof-polarity']) {
     document.getElementById(id).addEventListener('change', () => {

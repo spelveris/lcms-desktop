@@ -10,7 +10,7 @@ test('peptide QTOF panel gap and intact control padding are compact without chan
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   assert.match(css, /\.reference-masses-panel\s*\{[^}]*margin:\s*0 0 8px;/);
   assert.doesNotMatch(css, /#reference-masses-panel[^{}]*~\s*\.tab-panel/);
-  assert.match(css, /\.tab-panel\s*\{[^}]*padding:\s*20px;/);
+  assert.match(css, /\.tab-panel\s*\{[^}]*padding:\s*10px;/);
   assert.match(css, /\.deconv-controls\s*\{[^}]*padding:\s*10px 16px;/);
   assert.match(css, /\.deconv-controls\s*>\s*\.toggle-expert\s*\{\s*margin-bottom:\s*0;/);
   assert.doesNotMatch(html, /In Deconvolute mode, drag over UV or TIC/);
@@ -19,6 +19,17 @@ test('peptide QTOF panel gap and intact control padding are compact without chan
     'deconv-intact-method', 'deconv-start', 'deconv-end', 'expert-mode-toggle']) {
     assert.ok(html.includes(`id="${id}"`), `${id} remains available`);
   }
+});
+
+test('every tab shares the smaller equal outer inset without per-tab padding overrides', () => {
+  const css = fs.readFileSync(path.join(root, 'css/style.css'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const panels = [...html.matchAll(/<div\b[^>]*class="tab-panel(?:\s[^\"]*)?"[^>]*>/g)];
+  assert.equal(panels.length, 14);
+  for (const [panel] of panels) assert.doesNotMatch(panel, /style="[^"]*padding/);
+  assert.equal([...css.matchAll(/\.tab-panel\s*\{/g)].length, 1);
+  assert.match(css, /\.tab-panel\s*\{[^}]*overflow-y:\s*auto;[^}]*padding:\s*10px;/);
+  assert.doesNotMatch(css, /#tab-[\w-]+\s*\{[^}]*padding(?:-top|-left|-right)?:/);
 });
 
 function fixture() {
