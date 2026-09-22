@@ -72,7 +72,7 @@ function run() {
   // Ensure backend runtime dependencies exist in the *same* interpreter that runs PyInstaller.
   const depsCheck = spawnSync(
     python,
-    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas, ms_deisotope"],
+    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas, ms_deisotope, certifi"],
     { stdio: "ignore" }
   );
   if (depsCheck.status !== 0) {
@@ -94,7 +94,7 @@ function run() {
 
   const depsRecheck = spawnSync(
     python,
-    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas, ms_deisotope"],
+    [...pyPrefix, "-c", "import fastapi, uvicorn, numpy, scipy, matplotlib, pandas, ms_deisotope, certifi"],
     { stdio: "ignore" }
   );
   if (depsRecheck.status !== 0) {
@@ -143,6 +143,8 @@ function run() {
     "--collect-all", "brainpy",
     "--collect-all", "psims",
     "--collect-all", "pyteomics",
+    "--collect-data", "certifi",
+    "--copy-metadata", "certifi",
     "--recursive-copy-metadata", "ms_deisotope",
     "--add-data", `${path.join(repoRoot, 'third_party')}${dataSep}third_party`,
 	    "--hidden-import",
@@ -184,6 +186,14 @@ function run() {
   });
   if (isotopeCheck.status !== 0) {
     console.error("Packaged isotope-engine check failed.", isotopeCheck.error || "");
+    process.exit(1);
+  }
+
+  const databaseCheck = spawnSync(exePath, ["--database-self-test"], {
+    stdio: "inherit", timeout: 60000,
+  });
+  if (databaseCheck.status !== 0) {
+    console.error("Packaged database storage / HTTPS certificate check failed.", databaseCheck.error || "");
     process.exit(1);
   }
 

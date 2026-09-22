@@ -7357,9 +7357,11 @@ function renderDeconvResults(data) {
   const displayedSpectrum=getDisplayedDeconvSpectrum(data);
   const measuredView=displayedSpectrum===data.measured_spectrum && !!displayedSpectrum;
   const profileDescription=document.getElementById('deconv-profile-description');
-  if(profileDescription)profileDescription.textContent=isotopeAware
-    ? `${data.workflow.scans_analyzed} MS1 scans fitted. ${data.workflow.description}`
-    : 'Smoothed charge projection: 0.1 Da bins, 2 Da smoothing. This preview is not isotope-resolved deconvolution.';
+  if(profileDescription){
+    profileDescription.hidden=!isotopeAware;
+    profileDescription.textContent=isotopeAware
+      ? `${data.workflow.scans_analyzed} MS1 scans fitted. ${data.workflow.description}` : '';
+  }
 
   const components = getDeconvDisplayComponents();
   if (components.length > 0) {
@@ -7494,7 +7496,10 @@ function applyDenseDeconvProfileStyle(style = {}, { includeView = true } = {}) {
   const params = getCurrentDeconvolutionParameters();
   style.deconv_export_variant = 'dense-profile';
   style.deconv_profile_bin_da = 0.10;
-  style.deconv_profile_smooth_sigma_da = 2.0;
+  // Use the result's instrument metadata, never a filename or a grid preference.
+  const qtof = state.deconvResults?.spectrum_source === 'qtof_centroid_grid'
+    || state.deconvResults?.workflow?.id === 'qtof-envelope';
+  style.deconv_profile_smooth_sigma_da = qtof ? 1.0 : 2.0;
   style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
   style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
   style.deconv_profile_use_monoisotopic = params.monoisotopic === true;

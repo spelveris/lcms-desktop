@@ -1,5 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+contextBridge.exposeInMainWorld("catrupoleDatabases", {
+  openFolder: () => ipcRenderer.invoke("databases:open-folder"),
+});
+
 contextBridge.exposeInMainWorld("catrupoleUpdates", {
   getStatus: () => ipcRenderer.invoke("updates:get-status"),
   checkForUpdates: () => ipcRenderer.invoke("updates:check-now"),

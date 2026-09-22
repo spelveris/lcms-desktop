@@ -63,6 +63,7 @@ from search_index import record_transferred_sample, search_shared_index, write_c
 import analysis
 import config as lcms_config
 from reference_masses import filter_sample, normalize_policy, ReferenceSettingsStore
+from protein_databases import ProteinDatabaseStore
 
 # ---------------------------------------------------------------------------
 # App
@@ -71,6 +72,8 @@ from reference_masses import filter_sample, normalize_policy, ReferenceSettingsS
 async def lifespan(_app):
     plot_runtime.warm_in_background()
     yield
+    if _protein_database_store is not None:
+        _protein_database_store.close()
 
 
 app = FastAPI(title="LC-MS Desktop API", version=lcms_config.APP_VERSION, lifespan=lifespan)
@@ -87,6 +90,8 @@ _sample_cache: dict[str, SampleData] = {}
 _sample_cache_state: dict[str, str] = {}
 _reference_view_cache = {}
 _reference_store = None
+_protein_database_store = None
+_protein_database_lock = Lock()
 RUN_SETTLE_SECONDS = 120
 WASH_POSITIONS = {91}
 DEFAULT_DECONV_MIN_INPUT_MZ = 100.0
@@ -2129,6 +2134,7 @@ def _serialize_deconvolution_components(components: list[dict]) -> list[dict]:
             "ion_mzs": comp.get("ion_mzs", []),
             "ion_charges": comp.get("ion_charges", []),
             "ion_intensities": comp.get("ion_intensities", []),
+            **({'ion_display_peaks':comp['ion_display_peaks']} if 'ion_display_peaks' in comp else {}),
             **({key:comp.get(key) for key in ('isotope_aware','fit_score','scan_count','ion_mono_mzs','envelopes','isotope_ambiguous')} if comp.get('isotope_aware') else {}),
         })
     return results
@@ -2208,6 +2214,7 @@ def _run_report_deconvolution(
         components.extend(singly)
 
     results = _serialize_deconvolution_components(components)
+    analysis.add_charge_display_peaks(results, mz_arr, intensity_arr, float(params['pwhh']))
     filtered = [r for r in results if low_mw <= r["mass"] <= high_mw]
     filtered.sort(key=lambda c: c["intensity"], reverse=True)
     return _sort_serialized_deconvolution_results(filtered)
@@ -2964,6 +2971,43 @@ def qtof_scans(path: str = Query(...), polarity: str = Query("positive")):
             "ms1": ms1.metadata if ms1 else [], "ms2": ms2.metadata if ms2 else []}
 
 
+def _protein_databases():
+    global _protein_database_store
+    with _protein_database_lock:
+        if _protein_database_store is None:
+            _protein_database_store = ProteinDatabaseStore(_app_user_data_dir())
+        return _protein_database_store
+
+
+@app.get('/api/protein-databases')
+def protein_database_status():
+    return _protein_databases().snapshot()
+
+
+@app.post('/api/protein-databases/select')
+def protein_database_select(payload: dict = Body(...)):
+    try:
+        return _protein_databases().select(payload.get('preset_id'))
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/api/protein-databases/{database_id}/download')
+def protein_database_download(database_id: str):
+    try:
+        return _protein_databases().start(database_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/api/protein-databases/{database_id}/cancel')
+def protein_database_cancel(database_id: str):
+    try:
+        return _protein_databases().cancel(database_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/api/peptide-mapping/references")
 def peptide_references(path: str = Query(...)):
     sample = _get_sample(path)
@@ -3347,6 +3391,7 @@ def deconvolute(
         qtof_deconvolution.flag_charge_ambiguities(results)
 
     qtof = getattr(sample, 'qtof_info', None) is not None
+    analysis.add_charge_display_peaks(results, mz_arr, intensity_arr, pwhh)
     if qtof:
         # Compact only after all calculations, without dropping measured bins.
         mz_arr, intensity_arr = analysis.compact_spectrum_zero_runs(mz_arr, intensity_arr)
@@ -4514,6 +4559,10 @@ def export_report_pdf(payload: dict = Body(...)):
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if '--database-self-test' in sys.argv:
+        from database_download_smoke import run
+        print(json.dumps(run()))
+        sys.exit(0)
     if '--peptide-self-test' in sys.argv:
         from ms1_features import smoke_test
         print(json.dumps(smoke_test()))

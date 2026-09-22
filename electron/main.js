@@ -322,6 +322,15 @@ ipcMain.handle("updates:perform-action", async () => {
 // Backend lifecycle
 // ---------------------------------------------------------------------------
 
+ipcMain.handle("databases:open-folder", async () => {
+  // No renderer-supplied path; this is the same persistent root passed to Python.
+  const directory = path.join(app.getPath("userData"), "databases");
+  await fs.promises.mkdir(directory, { recursive: true });
+  const error = await shell.openPath(directory);
+  if (error) throw new Error(error);
+  return directory;
+});
+
 function resolveBackendCommand() {
   if (app.isPackaged) {
     const backendDir = path.join(process.resourcesPath, "backend");

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.60">
+  <link rel="stylesheet" href="css/style.css?v=0.2.62">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -219,6 +219,7 @@
       <button class="tab-btn" data-tab="tab-run-router">Transfer Router</button>
     </nav>
 
+    <div id="tab-peptides" class="tab-panel hidden">
     <details id="reference-masses-panel" class="reference-masses-panel" hidden>
       <summary>QTOF reference ions <span id="reference-masses-summary"></span></summary>
       <div class="tab-toolbar">
@@ -247,13 +248,37 @@
       <p class="toolbar-note">Selected reference windows are excluded from all QTOF analyses and exports, including reference-precursor MS/MS scans. Applying clears calculated results, not raw files. A coincident analyte in the same window is also excluded. Detection does not apply another mass correction.</p>
     </details>
 
-    <div id="tab-peptides" class="tab-panel hidden">
       <div class="tab-toolbar">
         <label>Digest sample: <select id="peptide-sample-select"></select></label>
         <button id="btn-peptide-import" class="btn btn-sm">Read BioConfirm reference</button>
         <label>FASTA file: <input id="peptide-fasta-file" type="file" accept=".fasta,.fa,.faa,.txt"></label>
       </div>
-      <label>Expected protein sequence (plain sequence or FASTA; chains assigned A, B, … in order)
+      <section class="protein-databases" aria-label="Download protein databases">
+        <div class="tab-toolbar">
+          <label for="protein-database-select">Protein database
+            <select id="protein-database-select" disabled><option value="">Choose organism / cell line…</option></select>
+          </label>
+          <button id="protein-database-download" type="button" class="btn btn-sm" disabled>Download</button>
+          <button id="protein-database-cancel" type="button" class="btn btn-sm" hidden>Cancel</button>
+          <button id="protein-database-folder" type="button" class="btn btn-sm" disabled>Open databases folder</button>
+        </div>
+        <div class="protein-database-feedback">
+          <progress id="protein-database-progress" aria-label="Database download progress" max="1" hidden></progress>
+          <span id="protein-database-status" role="status" aria-live="polite">Loading saved databases…</span>
+        </div>
+        <details class="protein-database-details">
+          <summary>Storage &amp; database information</summary>
+          <p id="protein-database-directory"></p>
+          <p>Downloads stay in CATrupole’s user-data folder across app updates. Human cell-line presets share one human reference database, not cell-line-specific sequences. E. coli uses K-12; yeast uses S288c. These are main representative sequences; extra isoforms and engineered variants are not included.</p>
+          <p>Source: UniProt Consortium · CC BY 4.0. Release version, source URL and checksums are saved with each unchanged FASTA.</p>
+        </details>
+        <p class="protein-database-note">Database downloads only. Mapping below still uses your supplied protein sequence; automatic spectrum-to-database identification is not included yet.</p>
+      </section>
+      <section class="peptide-setup-panel" aria-label="Peptide mapping setup">
+      <div class="tab-toolbar peptide-reference-row">
+        <label>Saved reference: <select id="peptide-reference-select"></select></label>
+      </div>
+      <label class="peptide-sequence-input">Expected protein sequence (plain sequence or FASTA; chains assigned A, B, … in order)
         <textarea id="peptide-fasta" rows="5" style="width:100%;font-family:monospace;" spellcheck="false"></textarea>
       </label>
       <div class="tab-toolbar peptide-preparation">
@@ -271,9 +296,6 @@
         </div>
         <p class="toolbar-note">Combinations are searched. Unknown sites require discriminating MS/MS cuts; MS alone does not localize them. Preparation and chemistry choices stay with the selected sample during this session.</p>
       </details>
-      <div class="tab-toolbar">
-        <label>Saved reference: <select id="peptide-reference-select"></select></label>
-      </div>
       <details id="peptide-method-settings" class="settings-group">
         <summary>Peptide mapping settings</summary>
         <div class="tab-toolbar">
@@ -307,11 +329,12 @@
         <div id="peptide-linkages" style="overflow:auto;"></div>
         <button id="btn-peptide-add-linkage" class="btn btn-sm">+ Add remnant / modification</button>
       </fieldset>
+      </section>
       <p id="peptide-import-status" class="toolbar-note" role="status"></p>
       <button id="btn-peptide-analyze" class="btn btn-primary">Map measured MS / MS/MS to reference</button>
       <p id="peptide-status" class="toolbar-note" role="status"></p>
       <details id="peptide-analysis-details" class="toolbar-note" hidden><summary>Analysis details</summary><p id="peptide-analysis-warning"></p></details>
-      <div class="peptide-export-toolbar">
+      <div id="peptide-map-export" class="peptide-export-toolbar" hidden>
         <button id="btn-peptide-map-pdf" class="btn btn-sm" type="button" disabled>Download map PDF</button>
         <span class="toolbar-note">PDFs use Deconvolution export styling.</span>
       </div>
@@ -328,11 +351,11 @@
           <div id="peptide-chromatogram-plot" class="peptide-chromatogram-canvas" data-fixed-plot-height="300"></div>
         </div>
       </section>
-      <div class="peptide-export-toolbar">
+      <div id="peptide-spectrum-export" class="peptide-export-toolbar" hidden>
         <button id="btn-peptide-spectrum-pdf" class="btn btn-sm" type="button" disabled>Download spectrum PDF</button>
       </div>
       <p id="peptide-spectrum-status" class="toolbar-note"></p>
-      <div class="plot-container peptide-spectrum-card">
+      <div id="peptide-spectrum-card" class="plot-container peptide-spectrum-card" hidden>
         <div id="peptide-spectrum-plot" class="peptide-spectrum-canvas" data-fixed-plot-height="430"></div>
       </div>
       <section id="peptide-ion-sequence" class="peptide-ion-sequence" hidden aria-label="Selected peptide fragment-ion sequence"></section>
@@ -406,7 +429,7 @@
           <button id="btn-single-toggle-sketcher" class="btn btn-sm">Draw Molecule</button>
           <button id="btn-single-use-drawn" class="btn btn-sm">Use Drawn Structure</button>
         </div>
-        <div id="single-smiles-result" class="toolbar-note">Enter SMILES or draw a molecule, then compute and add target m/z automatically.</div>
+        <div id="single-smiles-result" class="toolbar-note"></div>
         <div id="single-sketcher-wrap" class="hidden">
           <iframe id="single-sketcher-frame" src="jsme-frame.html" style="width:100%;height:420px;border:none;background:#e0e0e0;"></iframe>
         </div>
@@ -560,7 +583,6 @@
           <button id="btn-deconv-mode-zoom" class="btn btn-sm" type="button">Zoom</button>
           <button id="btn-refresh-deconv" class="btn btn-sm" type="button">Refresh</button>
         </div>
-        <span class="toolbar-note">In Deconvolute mode, drag over UV or TIC to set the window and run automatically. Switch to Zoom if you only want to inspect the chromatogram.</span>
       </div>
       <div class="deconv-controls">
         <label id="deconv-method-wrap" hidden>Intact analysis
@@ -645,15 +667,15 @@
         </div>
         <div class="two-col deconv-dense-row">
           <div class="deconv-plot-card deconv-dense-preview-card">
-            <div id="dense-profile-view-controls" class="deconv-mass-download-row" aria-label="Mass profile view">
-              <button id="btn-dense-focus" class="btn btn-sm btn-primary" type="button" aria-pressed="true" title="Zoom around the selected deconvoluted mass; no signal is removed">Focus selected mass</button>
-              <button id="btn-dense-full-range" class="btn btn-sm" type="button" aria-pressed="false" title="Show the complete configured mass range">Full range</button>
-            </div>
             <div id="deconv-dense-mass-preview" class="deconv-dense-preview deconv-plot-inner">
               <p class="placeholder-msg">Run deconvolution to render the dense mass profile.</p>
             </div>
-            <p id="deconv-profile-description" class="toolbar-note">Smoothed charge projection: 0.1 Da bins, 2 Da smoothing. This preview is not isotope-resolved deconvolution.</p>
-            <div class="deconv-mass-download-row">
+            <p id="deconv-profile-description" class="toolbar-note" hidden></p>
+            <div class="deconv-mass-download-row deconv-dense-actions">
+              <div id="dense-profile-view-controls" class="dense-profile-view-controls" aria-label="Mass profile view">
+                <button id="btn-dense-focus" class="btn btn-sm btn-primary" type="button" aria-pressed="true" title="Zoom around the selected deconvoluted mass; no signal is removed">Focus selected mass</button>
+                <button id="btn-dense-full-range" class="btn btn-sm" type="button" aria-pressed="false" title="Show the complete configured mass range">Full range</button>
+              </div>
               <button class="btn btn-sm btn-export-deconv-masses" data-format="pdf-dense">Download PDF</button>
             </div>
           </div>
@@ -976,12 +998,13 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.60"></script>
-  <script src="js/charts.js?v=0.2.60"></script>
+  <script src="js/api.js?v=0.2.62"></script>
+  <script src="js/charts.js?v=0.2.62"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
+  <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.60"></script>
+  <script src="js/app.js?v=0.2.62"></script>
 </body>
 </html>

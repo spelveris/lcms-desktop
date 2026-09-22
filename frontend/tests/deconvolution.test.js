@@ -5,6 +5,22 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 
+test('peptide QTOF panel gap and intact control padding are compact without changing controls', () => {
+  const css = fs.readFileSync(path.join(root, 'css/style.css'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(css, /\.reference-masses-panel\s*\{[^}]*margin:\s*0 0 8px;/);
+  assert.doesNotMatch(css, /#reference-masses-panel[^{}]*~\s*\.tab-panel/);
+  assert.match(css, /\.tab-panel\s*\{[^}]*padding:\s*20px;/);
+  assert.match(css, /\.deconv-controls\s*\{[^}]*padding:\s*10px 16px;/);
+  assert.match(css, /\.deconv-controls\s*>\s*\.toggle-expert\s*\{\s*margin-bottom:\s*0;/);
+  assert.doesNotMatch(html, /In Deconvolute mode, drag over UV or TIC/);
+  for (const id of ['deconv-sample-select', 'deconv-background-select', 'btn-auto-detect-window',
+    'btn-run-deconv', 'btn-deconv-mode-deconvolute', 'btn-deconv-mode-zoom', 'btn-refresh-deconv',
+    'deconv-intact-method', 'deconv-start', 'deconv-end', 'expert-mode-toggle']) {
+    assert.ok(html.includes(`id="${id}"`), `${id} remains available`);
+  }
+});
+
 function fixture() {
   const elements = new Map();
   const plots = new Map();
@@ -19,6 +35,27 @@ function fixture() {
   vm.runInContext(fs.readFileSync(path.join(root, 'js/app.js'), 'utf8'), context);
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
+
+test('Single Sample halves vertical card gaps without changing other tabs or control padding',()=>{
+  const css=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  assert.match(css,/#tab-single > \.tab-toolbar,[\s\S]*?#tab-single \.plot-container\s*\{ margin-bottom: 8px; \}/);
+  assert.match(css,/#tab-single > \.mz-toolbar\s*\{ margin-bottom: 6px; \}/);
+  assert.match(css,/#tab-single > \.metrics-bar\s*\{ row-gap: 6px; \}/);
+  assert.match(css,/#tab-single \.plot-stack\s*\{ row-gap: 6px; \}/);
+  assert.match(css,/#single-results\s*\{ row-gap: 8px; \}/);
+  assert.match(css,/\.tab-toolbar\s*\{[^}]*margin-bottom: 16px;[^}]*padding: 12px 16px;/);
+  assert.match(css,/\.mz-toolbar\s*\{[^}]*margin-bottom: 12px;[^}]*padding: 8px 16px;/);
+  assert.doesNotMatch(html,/Enter SMILES or draw a molecule, then compute and add target m\/z automatically/);
+  assert.match(html,/<div id="single-smiles-result" class="toolbar-note"><\/div>/);
+  assert.match(css,/#single-smiles-result:empty\s*\{ display: none; \}/);
+  for(const id of ['btn-single-smiles-to-target','btn-single-toggle-sketcher','btn-single-use-drawn'])assert.ok(html.includes(`id="${id}"`));
+  const {run,elements}=fixture();
+  const result={style:{}};elements.set('single-smiles-result',result);
+  run('setSingleSmilesResult("Calculated m/z: 123.456", "success")');
+  assert.equal(result.textContent,'Calculated m/z: 123.456');
+  assert.equal(result.style.color,'var(--success)');
+});
 
 function denseFixture(shift = 0) {
   const masses = [18791.2, 18845.1, 18898.9, 18952.8].map(m => m + shift);
@@ -64,7 +101,7 @@ test('dense style keeps full calculation limits and only changes the view', () =
   run('state.deconvResults={workflow:{id:"qtof-envelope"},components}; state.deconvDisplayComponents=components');
   const focus = run('applyDenseDeconvProfileStyle({deconv_x_min_da:1000,deconv_x_max_da:50000})');
   assert.equal(focus.deconv_x_min_da,1000);assert.equal(focus.deconv_x_max_da,50000);
-  assert.equal(focus.deconv_profile_smooth_sigma_da,2);assert.equal(focus.deconv_profile_bin_da,.1);
+  assert.equal(focus.deconv_profile_smooth_sigma_da,1);assert.equal(focus.deconv_profile_bin_da,.1);
   assert.ok(focus.deconv_profile_view_max_da>18953);
   run('state.deconvDenseViewMode="full"');
   const full=run('applyDenseDeconvProfileStyle({deconv_x_min_da:1000,deconv_x_max_da:50000})');
@@ -74,6 +111,28 @@ test('dense style keeps full calculation limits and only changes the view', () =
   const exported=run('applyDenseDeconvProfileStyle({deconv_x_min_da:1000,deconv_x_max_da:50000},{includeView:false})');
   assert.equal(exported.deconv_profile_view_min_da,undefined);assert.equal(exported.deconv_profile_view_max_da,undefined);
   assert.equal(exported.deconv_x_min_da,1000);assert.equal(exported.deconv_x_max_da,50000);
+  assert.equal(exported.deconv_profile_smooth_sigma_da,1);
+});
+
+test('only metadata-confirmed QTOF results use 1 Da profile smoothing', () => {
+  const {run}=fixture();
+  for(const result of [{}, {spectrum_source:'sample'}, {path:'qtof.sirslt',spectrum:{mz_grid_step:.001}}]) {
+    run(`state.deconvResults=${JSON.stringify(result)}`);
+    assert.equal(run('applyDenseDeconvProfileStyle().deconv_profile_smooth_sigma_da'),2);
+  }
+  run('state.deconvResults={workflow:null,spectrum_source:"qtof_centroid_grid"}');
+  assert.equal(run('applyDenseDeconvProfileStyle().deconv_profile_smooth_sigma_da'),1);
+});
+
+test('dense view controls sit below the graph with the export button, without the removed comment', () => {
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  const start=html.indexOf('class="two-col deconv-dense-row"');
+  const card=html.slice(start,html.indexOf('class="deconv-plot-card deconv-ion-card"',start));
+  assert.ok(card.indexOf('id="deconv-dense-mass-preview"')<card.indexOf('id="dense-profile-view-controls"'));
+  assert.match(card,/deconv-dense-actions[\s\S]*dense-profile-view-controls[\s\S]*data-format="pdf-dense"/);
+  assert.doesNotMatch(html+fs.readFileSync(path.join(root,'js/app.js'),'utf8'),/Smoothed charge projection: 0.1 Da bins/);
+  const css=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
+  assert.match(css,/\.deconv-dense-actions\s*\{[^}]*flex: 0 0 auto;[^}]*margin-top: 10px/);
 });
 
 test('selecting another coloured-result component focuses that mass and full range is reversible', () => {
@@ -324,6 +383,41 @@ test('both second-row plots keep equal heights independently of wrapped download
     assert.equal(element.style.height, '400px');
     assert.equal(element.dataset.fixedPlotHeight, '400');
   }
+});
+
+test('QTOF charge highlights retain sparse raw peaks and use measured display coordinates',()=>{
+  const {run,context,plots}=fixture();
+  context.mz=Array.from({length:150000},(_,i)=>1000+i*.001);
+  context.ints=context.mz.map(()=>0);context.ints[12347]=334400;
+  context.comps=[{mass:10000,intensity:100,ion_mzs:[1012.3],ion_charges:[10],
+    ion_display_peaks:[{mz:context.mz[12347],intensity:334400}]}];
+  run('charts.plotIonSelectionInteractive("ions",mz,ints,comps,{mzGridStep:.001})');
+  const plot=plots.get('ions');
+  assert.equal(plot.data[0].x.length,150000);
+  assert.equal(plot.data[0].y[12347],334400);
+  const marker=plot.data.find(t=>t.line?.width===1.6);
+  assert.deepEqual(Array.from(marker.x),[1012.347,1012.347]);
+  assert.deepEqual(Array.from(marker.y),[0,334400]);
+  assert.match(marker.hovertemplate,/Fitted envelope centre 1012.3/);
+  assert.ok(plot.layout.yaxis.range[1]>334400);
+  assert.equal(context.comps[0].ion_mzs[0],1012.3);
+});
+
+test('ProIQ and legacy charge plots retain every measured point without an instrument flag',()=>{
+  const {run,context,plots}=fixture();
+  context.mz=Array.from({length:18571},(_,i)=>100+i*.1);
+  context.ints=context.mz.map(()=>0);context.ints[8405]=12967083;
+  context.comps=[{mass:18790.92230142,intensity:100,ion_mzs:[940.551295],ion_charges:[20],
+    ion_display_peaks:[{mz:context.mz[8405],intensity:12967083}]}];
+  run('charts.plotIonSelectionInteractive("ions",mz,ints,comps)');
+  const plot=plots.get('ions');
+  assert.equal(plot.data[0].x.length,18571);
+  assert.equal(plot.data[0].y[8405],12967083);
+  const marker=plot.data.find(t=>t.line?.width===1.6);
+  assert.deepEqual(Array.from(marker.x),[context.mz[8405],context.mz[8405]]);
+  assert.deepEqual(Array.from(marker.y),[0,12967083]);
+  assert.equal(context.comps[0].ion_charges[0],20);
+  assert.equal(context.comps[0].mass,18790.92230142);
 });
 
 test('sidebar/window resize includes the peptide spectrum and preserves its canvas height',()=>{

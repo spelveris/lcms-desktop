@@ -1,6 +1,7 @@
 """Analysis functions for LC-MS data processing."""
 
 import warnings
+from bisect import bisect_left
 import numpy as np
 from scipy import signal
 from scipy import integrate
@@ -9,6 +10,45 @@ from typing import Optional
 from data_reader import SampleData
 
 QTOF_SUM_GRID_STEP = 0.001
+
+
+def add_charge_display_peaks(components, mz, intensity, pwhh):
+    """Anchor charge highlights to measured peaks without changing the fit.
+
+    Smoothed/centroided fit positions need not lie on the measured apex. For
+    display only, take the strongest measured point within half the fitted
+    peak width, bounded by midpoints to other assigned centres. This is a local
+    charge-region highlight, NOT isotope identification or a mass/charge refit.
+    Original ion positions, fitted intensities and masses stay untouched.
+    Use the actual analysis spectrum, after any background subtraction.
+    """
+    width = float(pwhh)
+    if not np.isfinite(width) or width <= 0:
+        return
+    mz, intensity = np.asarray(mz), np.asarray(intensity)
+    centres = sorted({float(x) for c in components if not c.get('isotope_aware')
+                      for x in c.get('ion_mzs', []) if np.isfinite(x)})
+    for component in components:
+        if component.get('isotope_aware'):
+            continue
+        markers = []
+        for centre in component.get('ion_mzs', []):
+            marker = None
+            if np.isfinite(centre):
+                at = bisect_left(centres, centre)
+                left, right = centre - width / 2, centre + width / 2
+                if at > 0:
+                    left = max(left, (centres[at - 1] + centre) / 2)
+                if at + 1 < len(centres):
+                    right = min(right, (centres[at + 1] + centre) / 2)
+                lo, hi = np.searchsorted(mz, [left, right])
+                if hi > lo:
+                    peak = lo + int(np.argmax(intensity[lo:hi]))
+                    if intensity[peak] > 0:
+                        marker = {'mz': float(mz[peak]), 'intensity': float(intensity[peak]),
+                                  'window_min_mz': float(left), 'window_max_mz': float(right)}
+            markers.append(marker)
+        component['ion_display_peaks'] = markers
 
 
 def sum_qtof_centroids(times, scans, start_time, end_time):

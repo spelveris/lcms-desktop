@@ -102,6 +102,22 @@ const api = {
     return apiFetch(`/api/peptide-mapping/references?${qs({ path })}`);
   },
 
+  proteinDatabases() {
+    return apiFetch('/api/protein-databases');
+  },
+
+  selectProteinDatabase(presetId) {
+    return apiFetch('/api/protein-databases/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preset_id: presetId }) });
+  },
+
+  downloadProteinDatabase(databaseId) {
+    return apiFetch(`/api/protein-databases/${encodeURIComponent(databaseId)}/download`, { method: 'POST' });
+  },
+
+  cancelProteinDatabase(databaseId) {
+    return apiFetch(`/api/protein-databases/${encodeURIComponent(databaseId)}/cancel`, { method: 'POST' });
+  },
+
   analyzePeptides(payload) {
     return apiFetch('/api/peptide-mapping/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   },

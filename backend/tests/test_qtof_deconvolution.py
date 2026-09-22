@@ -27,6 +27,79 @@ def synthetic_sample():
 
 
 class IsotopeAwareTests(unittest.TestCase):
+    def test_envelope_display_uses_local_measured_peaks_without_refitting(self):
+        import copy
+        c={'mass':14861.3,'ion_mzs':[1352.0293354,1239.446568,1144.189815],
+           'ion_intensities':[35625.,26778.,22237.], 'ion_charges':[11,12,13]}
+        before=copy.deepcopy(c)
+        mz=np.array([1143.,1144.101,1144.19,1239.446,1239.525,1352.029,1352.116,1353.])
+        intensity=np.array([9e8,163281.,0.,0.,181024.,0.,334400.,9e8])
+        original=intensity.copy()
+        server.analysis.add_charge_display_peaks([c],mz,intensity,.6)
+        self.assertEqual([p['mz'] for p in c['ion_display_peaks']],[1352.116,1239.525,1144.101])
+        self.assertEqual([p['intensity'] for p in c['ion_display_peaks']],[334400.,181024.,163281.])
+        for key,value in before.items():self.assertEqual(c[key],value)
+        np.testing.assert_array_equal(intensity,original)
+        serialized=server._sort_serialized_deconvolution_results([c])[0]
+        self.assertEqual(serialized['ion_display_peaks'],c['ion_display_peaks'])
+
+    def test_display_regions_stop_at_other_assignments_and_do_not_reach_distant_peaks(self):
+        a={'ion_mzs':[500.], 'ion_charges':[10]}
+        b={'ion_mzs':[500.2], 'ion_charges':[10]}
+        empty={'ion_mzs':[800.]}
+        isotope={'isotope_aware':True,'ion_mzs':[900.]}
+        server.analysis.add_charge_display_peaks([a,b,empty,isotope],
+            np.array([499.95,500.15,500.2,801.]),np.array([12.,1000.,300.,999999.]),.6)
+        self.assertEqual(a['ion_display_peaks'][0]['mz'],499.95)
+        self.assertEqual(b['ion_display_peaks'][0]['mz'],500.15)
+        self.assertEqual(empty['ion_display_peaks'],[None])
+        self.assertNotIn('ion_display_peaks',isotope)
+        server.analysis.add_charge_display_peaks([empty],np.array([800.]),np.array([0.]),.6)
+        self.assertEqual(empty['ion_display_peaks'],[None])
+
+    def test_export_charge_marker_uses_measured_bin_height_not_fitted_centre(self):
+        import matplotlib.pyplot as plt
+        component={'mass':14861.,'intensity':100.,'charge_states':[11],
+                   'ion_mzs':[1352.03],'ion_charges':[11],'ion_intensities':[35000.]}
+        mz=np.array([1352.,1352.03,1352.116,1352.5]);y=np.array([0.,0.,334400.,0.])
+        server.analysis.add_charge_display_peaks([component],mz,y,.6)
+        figure=server.plotting.create_ion_selection_figure(mz,y,[component],{'show_grid':False})
+        try:
+            segment=figure.axes[0].collections[0].get_segments()[0]
+            np.testing.assert_array_equal(segment,[[1352.116,0.],[1352.116,334400.]])
+            self.assertEqual(figure.axes[0].texts[0].xy,(1352.116,334400.))
+        finally:plt.close(figure)
+
+    def test_measured_marker_metadata_is_added_for_both_qtof_and_legacy_envelope_results(self):
+        s,_=synthetic_sample()
+        component={'mass':1000.,'intensity':100.,'ion_mzs':[500.1],
+                   'ion_charges':[2],'ion_intensities':[100.]}
+        params={n:p.default.default for n,p in inspect.signature(server.deconvolute).parameters.items()}
+        params.update(path='qtof-name-is-not-metadata.sirslt',start=.9,end=1.1,include_singly_charged=False)
+        for qtof in [True,False]:
+            if not qtof:s.qtof_info=None
+            with patch.object(server,'_get_sample',return_value=s), \
+                 patch.object(server.analysis,'sum_spectra_in_range',return_value=(np.array([500.,500.1,500.2]),np.array([0.,100.,0.]))), \
+                 patch.object(server.analysis,'deconvolute_protein_local_lcms_machine_like',return_value=[component]):
+                result=server.deconvolute(**params)
+            self.assertEqual(result['components'][0]['ion_display_peaks'][0]['mz'],500.1)
+            self.assertEqual(result['components'][0]['ion_mzs'],component['ion_mzs'])
+            self.assertEqual(result['components'][0]['mass'],component['mass'])
+
+    def test_legacy_report_gets_same_display_peak_without_changing_fitting_defaults(self):
+        component={'mass':18790.9,'intensity':100.,'ion_mzs':[940.55],
+                   'ion_charges':[20],'ion_intensities':[95.]}
+        mz=np.array([940.3,940.4,940.5,940.6,940.7,940.8])
+        y=np.array([5.,20.,90.,100.,30.,5.])
+        with patch.object(server.analysis,'deconvolute_protein_local_lcms_machine_like',return_value=[component]) as fitter:
+            result=server._run_report_deconvolution(mz,y,{'include_singly_charged':False},qtof=False)
+        self.assertEqual(result[0]['ion_display_peaks'][0]['mz'],940.6)
+        self.assertEqual(result[0]['ion_display_peaks'][0]['intensity'],100.)
+        self.assertEqual(result[0]['ion_mzs'],[940.55])
+        self.assertEqual(result[0]['mass'],18790.9)
+        self.assertEqual(fitter.call_args.kwargs['pwhh'],.6)
+        self.assertIsNone(fitter.call_args.kwargs['smoothing_reference_step'])
+
     def test_metadata_not_filename_enables_only_this_instrument_intact_workflow(self):
         s,_=synthetic_sample();self.assertTrue(qd.is_intact_qtof(s))
         for change in [{'instrument':'G6120'},{'instrument':'G6546'},{'is_protein_digest':True},

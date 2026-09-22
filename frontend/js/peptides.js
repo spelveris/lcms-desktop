@@ -381,7 +381,7 @@ function peptideClearResults() {
   document.getElementById('peptide-analysis-details').hidden=true;
   document.getElementById('peptide-analysis-warning').textContent='';
   peptideClearSpectrumExport();
-  document.getElementById('btn-peptide-map-pdf').disabled=true;
+  peptideSetExportAvailable('map',false);
   document.getElementById('peptide-coverage').replaceChildren();
   document.getElementById('peptide-results').replaceChildren();
   document.getElementById('peptide-spectrum-status').textContent = '';
@@ -461,7 +461,7 @@ function peptideInitCoverageResize() {
 function peptideRender(result) {
   peptideRenderCoverage(result);
   peptideRenderTable(result);
-  document.getElementById('btn-peptide-map-pdf').disabled=!result.coverage?.length;
+  peptideSetExportAvailable('map',Boolean(result.coverage?.length));
   void peptideLoadChromatogram();
 }
 
@@ -579,9 +579,15 @@ async function peptideLoadChromatogram(row=null) {
   } catch(error) { if(current())status.textContent=`Chromatogram unavailable: ${error.message}`; }
 }
 
+function peptideSetExportAvailable(kind, available) {
+  document.getElementById(`btn-peptide-${kind}-pdf`).disabled=!available;
+  document.getElementById(`peptide-${kind}-export`).hidden=!available;
+}
+
 function peptideClearSpectrumExport() {
   peptideView.selectedMatch=null;peptideView.selectedSpectrum=null;
-  document.getElementById('btn-peptide-spectrum-pdf').disabled=true;
+  peptideSetExportAvailable('spectrum',false);
+  document.getElementById('peptide-spectrum-card').hidden=true;
 }
 
 async function peptideExportPdf(kind) {
@@ -825,22 +831,25 @@ async function peptideShowMatch(row) {
   try {
     const spectrum=await api.getQtofSpectrum(peptideView.path,row.scan_id,'positive');
     if(generation!==peptideView.generation)return;
+    if(!spectrum.mz?.length || spectrum.mz.length!==spectrum.intensities?.length)throw Error('No measured peaks in this spectrum.');
     const isotopePeaks=row.isotope_peaks || [{mz:row.precursor_mz,intensity:row.precursor_intensity,offset:row.isotope_offset}];
     const overlays=msOnly ? [{x:isotopePeaks.map(p=>p.mz),y:isotopePeaks.map(p=>p.intensity),text:isotopePeaks.map(p=>`M${p.offset?`+${p.offset}`:''} · +${row.charge}`),mode:'markers+text',textposition:'top center',marker:{color:'#48a66b',size:7},type:'scatter'}] : peptideFragmentTraces(row);
     const maximum=spectrum.intensities.reduce((a,b)=>Math.max(a,b),0);
+    document.getElementById('peptide-spectrum-card').hidden=false;
     await Plotly.react('peptide-spectrum-plot',[qtofStickTrace(spectrum),...overlays],peptideSpectrumLayout(maximum),PLOT_CONFIG);
     if(generation!==peptideView.generation)return;
     if(!msOnly)peptideRenderIonSequence(row);
     peptideView.selectedMatch=row;peptideView.selectedSpectrum=spectrum;
-    document.getElementById('btn-peptide-spectrum-pdf').disabled=false;
+    peptideSetExportAvailable('spectrum',spectrum.mz.length>0 && spectrum.mz.length===spectrum.intensities.length);
     document.getElementById('peptide-spectrum-status').textContent=msOnly
       ? `${row.sequence} · MS1 feature apex: scan ${row.scan_id} · ${row.time.toFixed(4)} min · m/z ${row.precursor_mz.toFixed(5)} · +${row.charge}, isotope offset ${row.isotope_offset}. ${Number(row.precursor_intensity).toPrecision(5)} counts${row.precursor_relative_intensity_pct==null?'':` (${row.precursor_relative_intensity_pct.toFixed(2)}% of scan maximum)`}. ${row.isotope_count} required isotope peaks across ${row.observation_count} consecutive surveys (${row.time_start.toFixed(3)}–${row.time_end.toFixed(3)} min); envelope fit ${(100*row.isotope_fit).toFixed(1)}%. No linked MS/MS: peptide sequence remains a candidate.`
       : `${row.sequence} · measured MS/MS scan ${row.scan_id} · acquired at ${row.time.toFixed(4)} min · precursor m/z ${row.precursor_mz.toFixed(5)}, inferred +${row.charge}. ${row.ms1_supported ? `MS1 feature linked (${row.precursor_link}); ${peptideElutionRange(row) ? `supported interval ${row.precursor_feature.time_start.toFixed(3)}–${row.precursor_feature.time_end.toFixed(3)} min; ` : ''}${row.precursor_feature.observation_count} surveys.` : 'Precursor feature unconfirmed; excluded from MS feature coverage.'} Blue b / red y labels are candidate matches. Precursor isotope offset: ${row.isotope_offset}.`;
-  } catch(error) { if(generation===peptideView.generation)document.getElementById('peptide-spectrum-status').textContent=error.message; }
+  } catch(error) { if(generation===peptideView.generation){peptideClearSpectrumExport();document.getElementById('peptide-spectrum-status').textContent=error.message;} }
   await chromatogramTask;
 }
 
 function initPeptideMapping() {
+  if (typeof initProteinDatabases === 'function') initProteinDatabases();
   const methodIds=[...Object.values(PEPTIDE_METHOD_FIELDS).map(([id])=>id),...Object.keys(PEPTIDE_BASIC_DEFAULTS),'peptide-terminal-truncation','peptide-default-evidence'];
   try {
     const saved=JSON.parse(localStorage.getItem('catrupole-peptide-method-v1') || '{}');

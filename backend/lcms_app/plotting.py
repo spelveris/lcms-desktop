@@ -3313,10 +3313,16 @@ def create_ion_selection_figure(
         ion_ints = r.get('ion_intensities', [])
 
         if ion_mzs:
-            # For each ion, draw a colored line from 0 to its intensity on the
-            # raw spectrum (interpolated).
-            for mz_val, z, ion_int in zip(ion_mzs, ion_charges, ion_ints):
-                # Interpolate intensity at this m/z from the raw spectrum
+            for ion_index, (mz_val, z, ion_int) in enumerate(zip(ion_mzs, ion_charges, ion_ints)):
+                # Envelope fits can land between measured peaks. The API
+                # supplies a bounded local display peak without changing the fit.
+                display_peaks = r.get('ion_display_peaks') or []
+                marker = display_peaks[ion_index] if ion_index < len(display_peaks) else None
+                if not r.get('isotope_aware') and isinstance(marker, dict):
+                    peak_mz = _coerce_finite_float(marker.get('mz'), np.nan)
+                    if np.isfinite(peak_mz):
+                        mz_val = peak_mz
+                # Read the plotted spectrum, including any blank subtraction.
                 raw_int = max((point[1] for envelope in r.get('envelopes',[]) for point in envelope['envelope'] if point[0]==mz_val),default=0.) if r.get('isotope_aware') else float(np.interp(mz_val, mz, intensity))
                 ax.vlines(mz_val, 0, raw_int, color=color, linewidth=1.5, zorder=3)
                 # Label with charge state

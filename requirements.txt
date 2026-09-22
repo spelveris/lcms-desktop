@@ -1,5 +1,7 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
+# Trusted HTTPS roots for optional UniProt downloads in the frozen desktop app.
+certifi>=2024.2.2
 # rainbow-api 1.4 removed the `prec` argument used by data_reader.py.
 # Keep the version used by the known-good v0.2.38 desktop backend.
 rainbow-api==1.0.10

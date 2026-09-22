@@ -57,6 +57,40 @@ function domFixture() {
   return {ctx,nodes,run:code=>vm.runInContext(code,ctx)};
 }
 
+test('peptide setup shares one card and retains every preparation and search control',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ const panel=html.split('<section class="peptide-setup-panel"')[1].split('</section>')[0];
+ for(const id of ['peptide-reference-select','peptide-fasta','peptide-reduction','peptide-iam',
+   'peptide-variable-oxidation','peptide-variable-deamidation','peptide-variable-iam',
+   'peptide-method-settings','peptide-missed','peptide-precursor-ppm','peptide-fragment-ppm',
+   'peptide-ms1-relative','peptide-charge-min','peptide-linkages','btn-peptide-add-linkage']) {
+   assert.ok(panel.includes(`id="${id}"`),id);
+   assert.equal(html.split(`id="${id}"`).length-1,1,`${id} is not duplicated`);
+ }
+ const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
+ assert.match(css,/\.peptide-setup-panel \.tab-toolbar\s*\{[^}]*border: 0;[^}]*background: transparent;/);
+});
+
+test('PDF toolbars and empty spectrum card are hidden until exportable results exist',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ for(const id of ['peptide-map-export','peptide-spectrum-export','peptide-spectrum-card'])assert.match(html,new RegExp(`id="${id}"[^>]*hidden`));
+ const {run,nodes}=domFixture();
+ run('peptideSetExportAvailable("map",true);peptideSetExportAvailable("spectrum",true)');
+ assert.equal(nodes.get('peptide-map-export').hidden,false);
+ assert.equal(nodes.get('peptide-spectrum-export').hidden,false);
+ run('peptideClearResults()');
+ for(const kind of ['map','spectrum']){
+   assert.equal(nodes.get(`peptide-${kind}-export`).hidden,true);
+   assert.equal(nodes.get(`btn-peptide-${kind}-pdf`).disabled,true);
+ }
+ assert.equal(nodes.get('peptide-spectrum-card').hidden,true);
+ run('peptideRenderCoverage=()=>{};peptideRenderTable=()=>{};peptideLoadChromatogram=()=>{};peptideRender({coverage:[]})');
+ assert.equal(nodes.get('peptide-map-export').hidden,true);
+ run('peptideRender({coverage:[{}]})');
+ assert.equal(nodes.get('peptide-map-export').hidden,false);
+ assert.equal(nodes.get('peptide-spectrum-export').hidden,true);
+});
+
 test('GGisoK editor resolves an imported B48 modification and locks chemistry controls',()=>{
   const {run,nodes}=domFixture();
   run(`document.getElementById('peptide-fasta').value='>A\\nAAAAAK\\n>B\\nAAAAAK';
@@ -465,6 +499,22 @@ test('stale spectrum response cannot restore a cleared sequence map',async()=>{
  resolve({mz:[324.15539],intensities:[100]});await pending;
  assert.equal(nodes.get('peptide-ion-sequence').hidden,true);
  assert.equal(nodes.get('peptide-spectrum-status').textContent,'');
+ assert.equal(nodes.get('peptide-spectrum-export').hidden,true);
+ assert.equal(nodes.get('peptide-spectrum-card').hidden,true);
+});
+
+test('failed and empty spectra do not expose PDF actions or an empty graph card',async()=>{
+ const {run,ctx,nodes}=domFixture();ctx.row=candidate;
+ for(const read of [async()=>{throw Error('Could not read scan');},async()=>({mz:[],intensities:[]})]){
+   ctx.api.getQtofSpectrum=read;
+   await run('peptideShowMatch(row)');
+   assert.equal(nodes.get('peptide-spectrum-export').hidden,true);
+   assert.equal(nodes.get('peptide-spectrum-card').hidden,true);
+ }
+ ctx.api.getQtofSpectrum=async()=>({mz:[324.15539],intensities:[100]});
+ await run('peptideShowMatch(row)');
+ assert.equal(nodes.get('peptide-spectrum-export').hidden,false);
+ assert.equal(nodes.get('peptide-spectrum-card').hidden,false);
 });
 
 test('editing input invalidates a pending mapping response',async()=>{
@@ -507,6 +557,18 @@ test('protein-wide modification positions are searchable and alternative sites d
  run('peptideView.filters.review="site"');assert.equal(run('peptideFilteredRows(result).length'),1);
  ctx.chain={id:'B',sequence:'A'.repeat(44)+'PEPTIDER'};
  assert.equal(run('peptideCoverageSpans(result,chain).length'),1);
+});
+
+test('reference controls exist only inside Peptide Mapping and inherit its tab visibility',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ const start=html.indexOf('<div id="tab-peptides" class="tab-panel hidden">');
+ const end=html.indexOf('<!-- Tab: QTOF acquired',start);
+ assert.ok(start>=0 && end>start);
+ assert.equal(html.split('id="reference-masses-panel"').length-1,1);
+ assert.match(html.slice(start,end),/^<div id="tab-peptides" class="tab-panel hidden">\s*<details id="reference-masses-panel"/);
+ assert.equal((html.slice(start,end).match(/id="reference-masses-(detect|apply)"/g)||[]).length,2);
+ const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
+ assert.match(css,/\.tab-panel\.hidden\s*\{\s*display:\s*none;/);
 });
 
 test('reference controls validate custom masses and distinguish detected signal from selected exclusion',()=>{
@@ -877,7 +939,7 @@ test('both blue and green coverage clicks reserve room for the full horizontal m
 
 test('peptide canvas height excludes outer-card padding and borders',()=>{
  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
- assert.match(html,/<div class="plot-container peptide-spectrum-card">\s*<div id="peptide-spectrum-plot" class="peptide-spectrum-canvas" data-fixed-plot-height="430"><\/div>\s*<\/div>/);
+ assert.match(html,/<div id="peptide-spectrum-card" class="plot-container peptide-spectrum-card" hidden>\s*<div id="peptide-spectrum-plot" class="peptide-spectrum-canvas" data-fixed-plot-height="430"><\/div>\s*<\/div>/);
  const css=fs.readFileSync(path.join(__dirname,'../css/style.css'),'utf8');
  assert.match(css,/\.peptide-spectrum-canvas\s*\{[^}]*width: 100%;[^}]*height: 430px;[^}]*padding: 0;[^}]*border: 0;/);
  assert.doesNotMatch(html,/id="peptide-spectrum-plot"[^>]*class="plot-container"/);

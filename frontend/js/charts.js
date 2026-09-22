@@ -76,24 +76,6 @@ function normalizeArray(arr) {
   return m === 0 ? arr : arr.map(v => v / m);
 }
 
-function downsamplePair(x, y, maxPoints = 8000) {
-  if (!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length || x.length <= maxPoints) {
-    return { x: x || [], y: y || [] };
-  }
-  const step = Math.max(1, Math.ceil(x.length / maxPoints));
-  const xs = [];
-  const ys = [];
-  for (let i = 0; i < x.length; i += step) {
-    xs.push(x[i]);
-    ys.push(y[i]);
-  }
-  if (xs[xs.length - 1] !== x[x.length - 1]) {
-    xs.push(x[x.length - 1]);
-    ys.push(y[y.length - 1]);
-  }
-  return { x: xs, y: ys };
-}
-
 function finiteNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -1685,7 +1667,9 @@ const charts = {
       return;
     }
 
-    const { x: mzPlot, y: intPlot } = downsamplePair(mz, ints, 8000);
+    // Keep all supplied points for every instrument. Stride sampling lowers
+    // ProIQ apices and can omit narrow QTOF peaks completely when zoomed.
+    const mzPlot = mz, intPlot = ints;
 
     const n = Math.max(1, Math.min(10, comps.length));
     const columns = n > 1 ? 2 : 1;
@@ -1701,7 +1685,7 @@ const charts = {
     const xMin = mzPlot[0];
     const xMax = mzPlot[mzPlot.length - 1];
     const layoutOverrides = {};
-    const yMax = Math.max(1, ...intPlot) * 1.15;
+    const yMax = intPlot.reduce((maximum,value)=>Math.max(maximum,value),1) * 1.15;
 
     for (let i = 0; i < n; i++) {
       const comp = comps[i];
@@ -1746,21 +1730,29 @@ const charts = {
       const ionX = [];
       const ionY = [];
       const ionText = [];
+      const ionHover = [];
       ionMzs.forEach((mzIon, k) => {
-        const yIon = comp.isotope_aware ? Math.max(0,...(comp.envelopes||[]).flatMap(e=>e.envelope.filter(p=>p[0]===mzIon).map(p=>p[1]))) : interpAt(mzPlot, intPlot, mzIon);
+        const displayPeak=comp.ion_display_peaks?.[k];
+        const displayMz=Number.isFinite(displayPeak?.mz) ? displayPeak.mz : mzIon;
+        const yIon = comp.isotope_aware ? Math.max(0,...(comp.envelopes||[]).flatMap(e=>e.envelope.filter(p=>p[0]===mzIon).map(p=>p[1])))
+          : interpAt(mz, ints, displayMz);
+        const hover=displayPeak
+          ? `Measured grid peak m/z ${formatSpectrumMz(displayMz,options.mzGridStep)}<br>Fitted envelope centre ${formatSpectrumMz(mzIon)}<br>Charge-region highlight; not an isotope assignment`
+          : `m/z ${formatSpectrumMz(mzIon)}`;
         traces.push({
-          x: [mzIon, mzIon],
+          x: [displayMz, displayMz],
           y: [0, yIon],
           type: 'scatter',
           mode: 'lines',
           xaxis: xRef,
           yaxis: yRef,
           line: { color, width: 1.6 },
-          hovertemplate: `m/z ${formatSpectrumMz(mzIon)}<extra></extra>`,
+          hovertemplate: `${hover}<br>Intensity %{y:.3e}<extra></extra>`,
           showlegend: false,
         });
-        ionX.push(mzIon);
+        ionX.push(displayMz);
         ionY.push(yIon);
+        ionHover.push(hover);
         const z = ionCharges[k];
         ionText.push(Number.isFinite(z) ? `z=${z}` : '');
       });
@@ -1770,14 +1762,14 @@ const charts = {
           x: ionX,
           y: ionY,
           text: ionText,
-          customdata: ionX.map(value => formatSpectrumMz(value)),
+          customdata: ionHover,
           type: 'scatter',
           mode: 'text',
           xaxis: xRef,
           yaxis: yRef,
           textposition: 'top center',
           textfont: { size: 8, color },
-          hovertemplate: '%{text}<br>m/z %{customdata}<extra></extra>',
+          hovertemplate: '%{text}<br>%{customdata}<extra></extra>',
           showlegend: false,
         });
       }

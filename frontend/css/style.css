@@ -71,6 +71,19 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-linkage-scheme { font-family: var(--font-mono); margin: 6px 0; overflow-wrap: anywhere; }
 #peptide-linkages label[hidden] { display: none; }
 .peptide-preparation { flex-wrap: wrap; }
+.protein-databases { padding: 10px 12px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+.protein-databases .tab-toolbar { flex-wrap: wrap; margin-bottom: 6px; }
+.protein-databases .tab-toolbar label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.protein-databases .tab-toolbar select { min-width: 180px; width: 330px; max-width: 100%; }
+.protein-database-feedback { display: flex; align-items: center; gap: 10px; font-size: 12px; flex-wrap: wrap; }
+.protein-database-feedback progress { width: 140px; height: 8px; accent-color: #78bef4; }
+#protein-database-status[data-state="installed"] { color: #62bd83; }
+#protein-database-status[data-state="error"] { color: var(--text-secondary); }
+.protein-databases [hidden] { display: none; }
+.protein-database-details { font-size: 11px; color: var(--text-muted); margin-top: 7px; }
+.protein-database-details summary { cursor: pointer; }
+.protein-database-details p { margin: 5px 0; overflow-wrap: anywhere; }
+.protein-database-note { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; }
 #expert-params[hidden], #deconv-isotope-workflow[hidden], #deconv-method-wrap[hidden], #deconv-spectrum-view-wrap[hidden], #dense-profile-view-controls[hidden] { display: none; }
 .peptide-preparation label[hidden], #peptide-analysis-details[hidden] { display: none; }
 #peptide-analysis-details { margin: 6px 0; }
@@ -949,6 +962,17 @@ body.sidebar-resizing .sidebar {
   flex-wrap: wrap;
 }
 
+/* Compact only the vertical separation of Single Sample cards. */
+#tab-single > .tab-toolbar,
+#tab-single > .molecule-tools,
+#tab-single > .metrics-bar,
+#tab-single .plot-container { margin-bottom: 8px; }
+#tab-single > .mz-toolbar { margin-bottom: 6px; }
+#tab-single > .metrics-bar { row-gap: 6px; }
+#tab-single .plot-stack { row-gap: 6px; }
+#single-results { row-gap: 8px; }
+#single-smiles-result:empty { display: none; }
+
 .molecule-tools-row label {
   display: flex;
   align-items: center;
@@ -1575,7 +1599,7 @@ body.sidebar-resizing .sidebar {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 10px 16px;
   margin-bottom: 16px;
 }
 .deconv-controls .input-row {
@@ -1585,6 +1609,7 @@ body.sidebar-resizing .sidebar {
   font-weight: 600;
   margin-bottom: 8px;
 }
+.deconv-controls > .toggle-expert { margin-bottom: 0; }
 .expert-params {
   border-top: 1px solid var(--border);
   padding-top: 12px;
@@ -2343,7 +2368,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   font-style: italic;
 }
 .reference-masses-panel {
-  margin: 8px 0 14px;
+  margin: 0 0 8px;
   padding: 8px 12px;
   border: 1px solid var(--border, #d4dce7);
   border-radius: 6px;
@@ -2359,3 +2384,41 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 #peptide-method-settings input[type="number"] { width: 84px; }
 #peptide-method-settings .tab-toolbar { flex-wrap: wrap; margin-top: 10px; }
 #peptide-method-settings { margin-bottom: 12px; }
+
+/* One setup card, with sections instead of nested toolbar rectangles. */
+.peptide-setup-panel {
+  padding: 12px 16px;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  min-width: 0;
+}
+.peptide-setup-panel .tab-toolbar {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 0;
+  margin: 0;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+}
+.peptide-setup-panel .peptide-sequence-input { display: block; margin: 6px 0; }
+.peptide-setup-panel .peptide-sequence-input textarea { display: block; margin-top: 6px; }
+.peptide-setup-panel > .settings-group {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 8px 0;
+  margin: 4px 0 0;
+  min-width: 0;
+}
+.peptide-setup-panel > details > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.peptide-setup-panel > fieldset > legend { padding: 0 6px 0 0; }
+.peptide-setup-panel #peptide-method-settings { margin: 4px 0 0; }
+.peptide-setup-panel #peptide-method-settings .tab-toolbar { margin: 0; }
+.peptide-setup-panel .toolbar-note { margin: 4px 0 0; }
+.peptide-export-toolbar[hidden], .peptide-spectrum-card[hidden] { display: none; }
+.deconv-dense-actions { flex: 0 0 auto; align-items: center; margin-top: 10px; }
+.dense-profile-view-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-right: auto; min-width: 0; }
