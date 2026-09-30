@@ -256,6 +256,12 @@ function denseProfileVisibleMaximum(profile, rangeDa) {
   return maximum;
 }
 
+function componentMassDecimals(component, fallbackDigits = null) {
+  const digits = component?.mass_display_decimals;
+  return Number.isInteger(digits) && digits >= 0 && digits <= 6 ? digits
+    : component?.isotope_aware ? 6 : fallbackDigits ?? (Number(component?.mass) >= 10000 ? 1 : 2);
+}
+
 function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
   const x = profile.massKDa || [], y = profile.relativeIntensity || [];
   if (x.length < 3 || x.length !== y.length || !(rangeDa[1] > rangeDa[0])) return [];
@@ -317,7 +323,8 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
   };
   for (const peak of candidates) {
     if (annotations.length >= 12) break;
-    const label = `${peak.mass.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} Da`;
+    const digits = options.massDecimals === 2 ? 2 : 1;
+    const label = `${peak.mass.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })} Da`;
     const labelWidth = label.length * 5.6 + 8;
     const px = (peak.mass - rangeDa[0]) / (rangeDa[1] - rangeDa[0]) * width;
     const py = (yRange[1] - peak.intensity) / ySpan * height;
@@ -350,7 +357,7 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
   return annotations;
 }
 
-function bindDenseProfileLabels(divId, profile, initialRangeDa, mainMass) {
+function bindDenseProfileLabels(divId, profile, initialRangeDa, mainMass, massDecimals) {
   const plot = document.getElementById(divId);
   if (!plot?.on || !window.Plotly?.relayout) return;
   if (plot.__denseLabelHandler && plot.removeListener) plot.removeListener('plotly_relayout', plot.__denseLabelHandler);
@@ -368,7 +375,7 @@ function bindDenseProfileLabels(divId, profile, initialRangeDa, mainMass) {
       ? [0, (maximum || 100) * 1.3]
       : event['yaxis.range'] || [event['yaxis.range[0]'] ?? plot.layout?.yaxis?.range?.[0] ?? 0, event['yaxis.range[1]'] ?? plot.layout?.yaxis?.range?.[1] ?? 130];
     const annotations = buildDenseProfileAnnotations(profile, range, {
-      width: Math.max(120, (plot.clientWidth || 800) - 108), height: Math.max(80, (plot.clientHeight || 340) - 106), mainMass, yRange: yr,
+      width: Math.max(120, (plot.clientWidth || 800) - 108), height: Math.max(80, (plot.clientHeight || 340) - 106), mainMass, massDecimals, yRange: yr,
     });
     busy = true;
     Promise.resolve(window.Plotly.relayout(plot, { annotations, 'xaxis.range': range.map(v => v / 1000), 'xaxis.autorange': false, 'yaxis.range': yr, 'yaxis.autorange': false }))
@@ -1433,11 +1440,11 @@ const charts = {
         type: 'scatter', mode: 'lines',
         line: { color, width: 2.5 },
         showlegend: false,
-        hovertemplate: `Mass: ${c.isotope_aware?String(c.mass):c.mass.toFixed(1)} Da<br>Rel. Int: ${relInt.toFixed(1)}%<extra></extra>`,
+        hovertemplate: `Mass: ${c.mass.toFixed(componentMassDecimals(c, 1))} Da<br>Rel. Int: ${relInt.toFixed(1)}%<extra></extra>`,
       });
 
       // Label above each peak
-      const labelText = c.isotope_aware ? c.mass.toFixed(6) : c.mass >= 10000 ? c.mass.toFixed(1) : c.mass.toFixed(2);
+      const labelText = c.mass.toFixed(componentMassDecimals(c));
       annotations.push({
         x: mKDa, y: relInt,
         text: labelText,
@@ -1538,7 +1545,12 @@ const charts = {
       massMinDa = 1000.0;
       massMaxDa = 50000.0;
     }
-    const profile = buildDenseZeroChargeProfile(
+    const fitted=spectrum?.fitted_profile;
+    const fitMaximum=fitted ? Math.max(0,...fitted.intensity) : 0;
+    const profile = fitted ? {
+      massKDa:fitted.mass.map(m=>m/1000),
+      relativeIntensity:fitted.intensity.map(y=>fitMaximum>0?y/fitMaximum*100:0),
+    } : buildDenseZeroChargeProfile(
       spectrum?.mz || [],
       spectrum?.intensities || [],
       {
@@ -1559,7 +1571,7 @@ const charts = {
     const yRange = [0, (visibleMax || 100) * 1.3];
     const showTitle = style.deconv_show_title !== false;
     const layout = mergeLayout({
-      title: { text: showTitle ? (options.title || 'Deconvoluted Masses') : '', font: { size: 14 } },
+      title: { text: showTitle ? (options.title || (fitted?'Experimental profile fit':'Deconvoluted Masses')) : '', font: { size: 14 } },
       xaxis: {
         title: 'Mass (kDa)',
         range: viewRangeDa.map(v => v / 1000),
@@ -1590,6 +1602,7 @@ const charts = {
       dragmode: 'zoom',
       annotations: buildDenseProfileAnnotations(profile, viewRangeDa, {
         mainMass: style.deconv_profile_selected_mass,
+        massDecimals: style.deconv_mass_decimals,
         width: Math.max(120, (document.getElementById(divId)?.clientWidth || 800) - 108), height: plotHeight - 106, yRange,
       }),
     });
@@ -1622,13 +1635,24 @@ const charts = {
         width: Math.max(0.5, finiteNumber(style.line_width, getLineWidth())),
       },
       customdata: Array.from(displayed.x, mass => mass * 1000),
-      hovertemplate: 'Mass: %{customdata:.1f} Da<br>Relative Intensity: %{y:.2f}%<extra></extra>',
+      hovertemplate: `Mass: %{customdata:.${style.deconv_mass_decimals === 2 ? 2 : 1}f} Da<br>Relative Intensity: %{y:.2f}%<extra></extra>`,
       showlegend: false,
     };
 
     Plotly.newPlot(divId, [trace], layout, PLOT_CONFIG).then(() => {
-      bindDenseProfileLabels(divId, profile, viewRangeDa, style.deconv_profile_selected_mass);
+      bindDenseProfileLabels(divId, profile, viewRangeDa, style.deconv_profile_selected_mass, style.deconv_mass_decimals);
     });
+  },
+
+  plotQtofProfileFitCheck(divId, fit) {
+    if(!fit)return;
+    const traces=[['observed','Measured window mean','#222222'],['predicted','Fitted model','#215caf'],['residual','Measured − model','#b34d35']]
+      .map(([key,name,color])=>({x:fit.mz,y:fit[key].map((v,i)=>fit.usable[i]?v:null),
+        type:'scattergl',mode:'lines',name,line:{color,width:.8},connectgaps:false}));
+    Plotly.react(divId,traces,mergeLayout({height:300,showlegend:true,
+      xaxis:{title:'m/z',automargin:true},yaxis:{title:'Mean profile intensity',autorange:true,zeroline:true,automargin:true},
+      margin:{l:65,r:25,t:20,b:65},legend:{orientation:'h',y:1.13},
+    }),PLOT_CONFIG);
   },
 
   plotIonDetail(divId, component) {
@@ -1647,7 +1671,7 @@ const charts = {
       }),
     }];
     const layout = mergeLayout({
-      title: { text: `Ion Detail: ${component.mass.toFixed(1)} Da`, font: { size: 14 } },
+      title: { text: `Ion Detail: ${component.mass.toFixed(componentMassDecimals(component, 1))} Da`, font: { size: 14 } },
       xaxis: { title: 'Charge State (z)', dtick: 1 }, yaxis: { title: 'Intensity' },
       showlegend: false, height: getContainerHeight(divId, 300),
     });
@@ -1775,7 +1799,7 @@ const charts = {
       }
 
       const massVal = Number(comp.mass || 0);
-      const massText = comp.isotope_aware ? massVal.toFixed(6) : massVal >= 10000 ? massVal.toFixed(1) : massVal.toFixed(2);
+      const massText = massVal.toFixed(componentMassDecimals(comp));
       const chargeStates = Array.isArray(comp.charge_states) ? comp.charge_states.filter(Number.isFinite) : [];
       const chargeText = chargeStates.length > 1
         ? `z=${Math.min(...chargeStates)}-${Math.max(...chargeStates)}`

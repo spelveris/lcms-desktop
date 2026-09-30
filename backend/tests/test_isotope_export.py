@@ -7,6 +7,24 @@ import server
 
 
 class IsotopeExportTests(unittest.TestCase):
+    def test_qtof_labels_have_two_decimals_without_rounding_data_or_legacy_labels(self):
+        import copy
+        plot=server.plotting
+        legacy={'mass':58968.512345678,'intensity':100.,'ion_mzs':[1000.1],'ion_charges':[59],'ion_intensities':[100.]}
+        qtof={**legacy,'mass_display_decimals':2}
+        original=copy.deepcopy(qtof)
+        self.assertEqual(plot._component_mass_label(legacy),'58968.5')
+        self.assertEqual(plot._component_mass_label(qtof),'58968.51')
+        self.assertEqual(plot._component_mass_label({**qtof,'isotope_aware':True}),'58968.51')
+        self.assertEqual(plot._component_mass_label({**legacy,'isotope_aware':True}),'58968.512346')
+        self.assertEqual(plot._normalize_deconvolution_component(qtof)['mass_display_decimals'],2)
+        fig=server.plt.figure();ax=fig.add_subplot(111)
+        try:
+            plot._plot_deconvoluted_masses_panel(ax,[legacy|{'intensity':1},qtof],x_max_da=65000)
+            self.assertIn('58968.51',[t.get_text() for t in ax.texts])
+        finally:server.plt.close(fig)
+        self.assertEqual(qtof,original)
+
     def test_measured_isotope_export_has_unrounded_sticks_and_da_axis(self):
         spectrum={'mz':[1001.234567890123],'intensities':[123.4],
                   'isotope_profile':[{'mass':10002.27291423502,'intensity':123.4}]}

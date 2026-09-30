@@ -6593,10 +6593,15 @@ function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
     method.dataset.samplePath=samplePath;
   }
   const isotopeAware=getIntactAnalysisMethod(samplePath)==='isotope';
+  const profileFit=getIntactAnalysisMethod(samplePath)==='profile';
+  const profileOption=document.getElementById('deconv-profile-option');
+  if(profileOption)profileOption.disabled=!available || state.loadedSamples[samplePath]?.qtof?.profile_available!==true;
+  const profileNotice=document.getElementById('deconv-profile-workflow');
+  if(profileNotice)profileNotice.hidden=!profileFit;
   const isotopeNotice=document.getElementById('deconv-isotope-workflow');
   if(isotopeNotice)isotopeNotice.hidden=!isotopeAware;
   const expert=document.getElementById('expert-params');
-  if(expert)expert.hidden=isotopeAware;
+  if(expert)expert.hidden=isotopeAware || profileFit;
   const select = document.getElementById('deconv-mw-algorithm');
   if (!select) return;
 
@@ -6613,11 +6618,14 @@ function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
 function getIntactAnalysisMethod(samplePath) {
   const select=document.getElementById('deconv-intact-method');
   return state.loadedSamples[samplePath]?.isotope_aware_intact===true
-    && select?.dataset.samplePath===samplePath && select.value==='isotope' ? 'isotope' : 'envelope';
+    && select?.dataset.samplePath===samplePath
+    ? select.value==='isotope' ? 'isotope'
+      : select.value==='profile' && state.loadedSamples[samplePath]?.qtof?.profile_available===true ? 'profile' : 'envelope'
+    : 'envelope';
 }
 
 function getDisplayedDeconvSpectrum(data=state.deconvResults) {
-  return data?.workflow?.id==='qtof-envelope'
+  return ['qtof-envelope','qtof-profile'].includes(data?.workflow?.id)
     && document.getElementById('deconv-spectrum-view')?.value==='measured'
     && data.measured_spectrum ? data.measured_spectrum : data?.spectrum;
 }
@@ -6650,7 +6658,7 @@ function getCurrentDeconvolutionParameters(samplePath = '') {
     return {...params,min_charge:2,max_charge:50,min_peaks:4,min_input_mz:300,monoisotopic:true,fwhm:0};
   }
 
-  if (!expertMode) {
+  if (!expertMode || params.intact_method==='profile') {
     return params;
   }
 
@@ -7344,12 +7352,23 @@ function renderDeconvResults(data) {
   resultsDiv.classList.remove('hidden');
   syncDeconvBottomLayout();
   const isotopeAware=data.workflow?.id==='qtof-isotope-aware';
+  const profileFit=data.workflow?.id==='qtof-profile';
+  const fitCheck=document.getElementById('deconv-profile-check');
+  if(fitCheck){
+    fitCheck.hidden=!profileFit;
+    fitCheck.ontoggle=()=>{if(fitCheck.open && profileFit)charts.plotQtofProfileFitCheck('deconv-profile-check-plot',data.fit_check);};
+    if(fitCheck.open && profileFit)charts.plotQtofProfileFitCheck('deconv-profile-check-plot',data.fit_check);
+  }
   const denseViewControls = document.getElementById('dense-profile-view-controls');
   if (denseViewControls) denseViewControls.hidden = isotopeAware;
   const viewWrap=document.getElementById('deconv-spectrum-view-wrap');
-  if(viewWrap)viewWrap.hidden=data.workflow?.id!=='qtof-envelope';
+  if(viewWrap)viewWrap.hidden=!['qtof-envelope','qtof-profile'].includes(data.workflow?.id);
   const view=document.getElementById('deconv-spectrum-view');
   if(view){
+    for(const option of Array.from(view.options || [])){
+      if(option.value==='summed')option.textContent=profileFit?'Window-mean profile':'Summed time window';
+      if(option.value==='measured')option.textContent=profileFit?'Native apex profile (display selection, before blank subtraction)':'Measured centroids (unrounded, before blank subtraction)';
+    }
     view.disabled=!data.measured_spectrum;
     view.title=data.measured_spectrum ? '' : 'Use a narrower time window to inspect unrounded centroids (up to 500,000 points).';
     if(!data.measured_spectrum)view.value='summed';
@@ -7358,8 +7377,10 @@ function renderDeconvResults(data) {
   const measuredView=displayedSpectrum===data.measured_spectrum && !!displayedSpectrum;
   const profileDescription=document.getElementById('deconv-profile-description');
   if(profileDescription){
-    profileDescription.hidden=!isotopeAware;
-    profileDescription.textContent=isotopeAware
+    profileDescription.hidden=!isotopeAware && !profileFit;
+    profileDescription.textContent=profileFit
+      ? `${data.workflow.description} Unexplained signal ${(data.workflow.unexplained_fraction*100).toFixed(1)}%; model overshoot ${(data.workflow.overshoot_fraction*100).toFixed(1)}%.${data.workflow.converged?'':' Fit iteration limit reached—review before use.'}`
+      : isotopeAware
       ? `${data.workflow.scans_analyzed} MS1 scans fitted. ${data.workflow.description}` : '';
   }
 
@@ -7398,10 +7419,13 @@ function renderDeconvResults(data) {
       });
     }
     charts.plotMassSpectrum('deconv-spectrum-plot', displayedSpectrum.mz, displayedSpectrum.intensities, [], {
-      title: measuredView ? 'Measured centroids · selected time window · before blank subtraction'
+      title: profileFit ? (measuredView
+        ? `Native apex profile · ${data.measured_spectrum.time.toFixed(3)} min · display selection · before blank subtraction`
+        : `Window-mean profile${hasBackground?' · blank subtracted':''} · ${data.spectrum.mz_grid_step} m/z integrated grid`)
+        : measuredView ? 'Measured centroids · selected time window · before blank subtraction'
         : (hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum')
         + (isotopeAware ? ` · MS1 scan ${data.workflow.display_scan_id} (${data.workflow.display_time.toFixed(3)} min)` : data.spectrum.mz_grid_step ? ` · summed window · ${data.spectrum.mz_grid_step} m/z grid` : ''),
-      centroidSticks:isotopeAware || measuredView,
+      centroidSticks:isotopeAware || (measuredView && !profileFit),
       primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
       mzGridStep: displayedSpectrum.mz_grid_step,
       primaryColor: '#1f77b4',
@@ -7434,7 +7458,7 @@ function renderDeconvResults(data) {
     const maxIntensity = Math.max(...components.map(c => Number(c.intensity || 0)));
     let html = `<div class="data-table-wrapper"><table class="data-table">
       <thead><tr>
-        <th>#</th><th>${isotopeAware?'Estimated monoisotopic mass (Da)':'Mass (Da)'}</th><th>Charges</th><th>Num Ions</th><th>${isotopeAware?'Fit score':'R&sup2;'}</th><th>Rel. Intensity (%)</th>
+        <th>#</th><th>${isotopeAware?'Estimated monoisotopic mass (Da)':profileFit?'Envelope reference mass (Da)':'Mass (Da)'}</th><th>Charges</th><th>Num Ions</th><th>${isotopeAware?'Fit score':'R&sup2;'}</th><th>Rel. Intensity (%)</th>
       </tr></thead><tbody>`;
 
     components.forEach((m, i) => {
@@ -7442,7 +7466,7 @@ function renderDeconvResults(data) {
       const relInt = maxIntensity > 0 && m.intensity != null ? ((m.intensity / maxIntensity) * 100).toFixed(1) : '-';
       html += `<tr class="deconv-row" data-idx="${i}" style="cursor:pointer;">
         <td>${i + 1}</td>
-        <td>${m.isotope_aware?`${m.mass.toFixed(6)}${m.isotope_ambiguous?' *':''}`:m.mass.toFixed(1)}</td>
+        <td>${m.mass.toFixed(componentMassDecimals(m, 1))}${m.isotope_ambiguous?' *':''}</td>
         <td style="font-family:var(--font);max-width:150px;overflow:hidden;text-overflow:ellipsis;">${chargeStr}</td>
         <td>${m.peaks_found || m.num_charges || '-'}</td>
         <td>${m.isotope_aware?Number(m.fit_score).toFixed(2):m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
@@ -7498,7 +7522,8 @@ function applyDenseDeconvProfileStyle(style = {}, { includeView = true } = {}) {
   style.deconv_profile_bin_da = 0.10;
   // Use the result's instrument metadata, never a filename or a grid preference.
   const qtof = state.deconvResults?.spectrum_source === 'qtof_centroid_grid'
-    || state.deconvResults?.workflow?.id === 'qtof-envelope';
+    || ['qtof-envelope', 'qtof-isotope-aware', 'qtof-profile'].includes(state.deconvResults?.workflow?.id);
+  style.deconv_mass_decimals = qtof ? 2 : 1;
   style.deconv_profile_smooth_sigma_da = qtof ? 1.0 : 2.0;
   style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
   style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
@@ -7515,6 +7540,15 @@ function applyDenseDeconvProfileStyle(style = {}, { includeView = true } = {}) {
     style.deconv_x_max_da = Math.max(style.deconv_x_max_da ?? 50000, range[1]);
   }
   style.show_grid = false;
+  const fitted=state.deconvResults?.spectrum?.fitted_profile;
+  if(fitted){
+    [style.deconv_x_min_da,style.deconv_x_max_da]=fitted.range;
+    style.deconv_profile_view_min_da=Math.max(fitted.range[0],style.deconv_profile_view_min_da ?? fitted.range[0]);
+    style.deconv_profile_view_max_da=Math.min(fitted.range[1],style.deconv_profile_view_max_da ?? fitted.range[1]);
+    if(style.deconv_profile_view_max_da<=style.deconv_profile_view_min_da){
+      [style.deconv_profile_view_min_da,style.deconv_profile_view_max_da]=fitted.range;
+    }
+  }
   return style;
 }
 
@@ -7710,7 +7744,7 @@ async function exportDeconvSpectrumPdf() {
   const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
   const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
   const title = spectrum===state.deconvResults?.measured_spectrum
-    ? 'Centroids (before blank)'
+    ? state.deconvResults?.workflow?.id==='qtof-profile' ? 'Native apex profile (display selection, before blank)' : 'Centroids (before blank)'
     : state.deconvResults?.background_path
     ? 'Background-Subtracted Mass Spectrum'
     : 'Mass Spectrum';
@@ -7770,8 +7804,10 @@ async function exportDeconvMasses(format) {
     style.deconv_selected_component = getSelectedDeconvComponent();
   }
   if (isDensePdf) {
-    // Preserve existing downloads; these new labels/focus are on-screen only.
+    // Keep the PDF's existing full range; its prominent peaks now have editable
+    // two-decimal Da labels and leader lines, independent of interactive zoom.
     applyDenseDeconvProfileStyle(style, { includeView: false });
+    style.deconv_show_peak_labels = true;
   }
 
   const exportLabel = isDensePdf
@@ -7813,8 +7849,8 @@ function showIonDetail(component) {
 
   const card = document.createElement('div');
   card.className = 'ion-detail-card';
-  card.innerHTML = `<h4>Ion Detail: ${component.mass.toFixed(1)} Da</h4>`;
-  if(component.isotope_aware)card.innerHTML=`<h4>Isotope-envelope candidate: ${component.mass.toFixed(6)} Da</h4><p class="toolbar-note">Mass spread ${Number(component.mass_std).toFixed(6)} Da across fitted envelopes. ${component.scan_count} MS1 scans. Observed m/z below is the envelope apex, not necessarily the monoisotopic peak.</p>`;
+  card.innerHTML = `<h4>Ion Detail: ${component.mass.toFixed(componentMassDecimals(component, 1))} Da</h4>`;
+  if(component.isotope_aware)card.innerHTML=`<h4>Isotope-envelope candidate: ${component.mass.toFixed(componentMassDecimals(component))} Da</h4><p class="toolbar-note">Mass spread ${Number(component.mass_std).toFixed(6)} Da across fitted envelopes. ${component.scan_count} MS1 scans. Observed m/z below is the envelope apex, not necessarily the monoisotopic peak.</p>`;
   container.appendChild(card);
 
   const charges = component.ion_charges || [];
@@ -8287,7 +8323,7 @@ function renderBatchDeconvolution(data) {
   samples.forEach((sample) => {
     const windowStr = `${Number.isFinite(sample.start) ? sample.start.toFixed(2) : '-'} - ${Number.isFinite(sample.end) ? sample.end.toFixed(2) : '-'}`;
     const comps = sample.displayComponents || [];
-    const topMasses = comps.map(c => c.mass.toFixed(1)).join(', ') || '-';
+    const topMasses = comps.map(c => c.mass.toFixed(componentMassDecimals(c, 1))).join(', ') || '-';
     const maxIntensity = Math.max(0, ...comps.map((c) => Number(c.intensity || 0)));
     const relInts = comps
       .map((c) => (maxIntensity > 0 ? ((Number(c.intensity || 0) / maxIntensity) * 100).toFixed(1) : '-'))

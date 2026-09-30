@@ -1043,7 +1043,7 @@ test('MS-only selected spectrum discloses actual passing intensity and relative 
  ctx.api.getQtofSpectrum=async()=>({mz:[955.4676],intensities:[250]});
  await run('peptideShowMatch(row)');
  assert.match(nodes.get('peptide-spectrum-status').textContent,/250.00 counts \(7.50% of scan maximum\)/);
- assert.match(nodes.get('peptide-spectrum-status').textContent,/3 consecutive surveys/);
+ assert.match(nodes.get('peptide-spectrum-status').textContent,/3 supported surveys/);
  assert.match(nodes.get('peptide-spectrum-status').textContent,/envelope fit 98.0%/);
 });
 

@@ -104,6 +104,51 @@ def _eligible_precursors(peptide, charge, model, mzs, tolerance):
     return np.flatnonzero(np.isfinite(mzs[:3]) & (abs(mzs[:3]-targets) <= targets*tolerance))
 
 
+def _elution_support(times, trace, patterns, apex, core_support, competing_apices, minimum):
+    """Extend an already accepted peak, never seed a new weak MS1 feature.
+
+    A percentage of the apex clips asymmetric chromatographic tails. Follow
+    measured, isotope-compatible signal instead, bounded by local background,
+    acquisition gaps, and the valley before another independently seeded peak.
+    One interrupted isotope observation may be bridged, but that survey cannot
+    support a precursor link. Raw trace values and the strict core stay intact.
+    """
+    lower = int(np.searchsorted(times, times[apex]-2., side='left'))
+    upper = min(len(times)-1, int(np.searchsorted(times, times[apex]+2., side='right'))-1)
+    previous = [p for p in competing_apices if p < apex]
+    following = [p for p in competing_apices if p > apex]
+    if previous:
+        p = previous[-1]
+        lower = max(lower, p+int(np.argmin(trace[p:apex+1]))+1)
+    if following:
+        p = following[0]
+        upper = min(upper, apex+int(np.argmin(trace[apex:p+1]))-1)
+    # Robust low-signal estimate from the local trace, not from only the peak.
+    local = trace[lower:upper+1]
+    low = local[local <= np.quantile(local, .2)]
+    background = float(np.median(low))
+    noise = float(np.median(abs(low-background))) * 1.4826
+    floor = max(float(minimum), background+3*noise)
+    support = {int(i) for i in core_support if lower <= i <= upper}
+    for direction, start in [(-1, min(support)), (1, max(support))]:
+        cursor, missed = start, 0
+        while lower <= cursor+direction <= upper:
+            nxt = cursor+direction
+            if abs(times[nxt]-times[cursor]) > .15:
+                break
+            if trace[nxt] <= floor:
+                break  # Never bridge an absent signal or a baseline valley.
+            if patterns[nxt][3]:
+                support.add(nxt)
+                missed = 0
+            else:
+                missed += 1
+                if missed > 1:
+                    break
+            cursor = nxt
+    return np.array(sorted(support), dtype=int)
+
+
 def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intensity=0., method=None):
     if channel is None or not peptides or len(channel.scans) < MIN_SURVEYS:
         return []
@@ -170,6 +215,8 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
             continue
         widths = peak_widths(trace, peaks, rel_height=.5,
                             prominence_data=(properties['prominences'],properties['left_bases'],properties['right_bases']))
+        competing_apices = [int(a) for pi,a in enumerate(peaks)
+                            if a in seed_scans and properties['prominences'][pi] >= trace[a]*.5]
         for pi, apex in enumerate(peaks):
             if apex not in seed_scans or properties['prominences'][pi] < trace[apex]*.5:
                 continue
@@ -198,6 +245,12 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
             support = np.arange(first,last+1)
             if len(support) < MIN_SURVEYS:
                 continue
+            core_start, core_end = float(times[run[0]]), float(times[run[-1]])
+            support = _elution_support(times, trace, patterns, apex, support,
+                                       competing_apices, method['ms1_peak_min'])
+            if len(support) < MIN_SURVEYS:
+                continue
+            first, last = int(support[0]), int(support[-1])
             observed, mzs, score, _ = patterns[apex]
             eligible = _eligible_precursors(peptide,z,model,mzs,tolerance)
             isotope = int(eligible[np.argmax(observed[eligible])])
@@ -213,10 +266,13 @@ def find_features(channel, peptides, ppm, min_relative_intensity=.05, min_intens
                 'ambiguous_scan':False, 'sequence_ambiguous':False, 'site_ambiguous':False,
                 'site_search':any(m.get('variable') for m in peptide['modifications']),
                 'observation_count':len(support), 'core_observation_count':len(run), 'time_start':float(times[first]), 'time_end':float(times[last]),
+                'core_time_start':core_start, 'core_time_end':core_end,
+                'elution_boundary_method':'isotope-supported tail to local background/valley',
                 'isotope_count':len(model[2]), 'isotope_fit':score, 'isotope_coelution':coelution,
                 'peak_prominence_fraction':float(properties['prominences'][pi]/trace[apex]),
                 'isotope_peaks':[{'mz':float(mzs[k]),'intensity':float(observed[k]),'offset':int(k)} for k in range(len(observed)) if observed[k]>0],
                 '_survey_ids':{channel.metadata[j]['scan_id'] for j in support}, '_cadence':float(np.median(np.diff(times[support]))),
+                '_supported_times':set(times[support]),
                 '_targets':((peptide['mass']+model[0])/z+PROTON).tolist(),
                 '_trace':trace, '_times':times,
                 '_group_targets':((peptide['mass']+model[0][model[2]])/z+PROTON).tolist(),
@@ -290,7 +346,16 @@ def link_msms(features, rows, ppm, signature):
                 continue
             margin = min(.1,feature['_cadence']*1.5)
             in_time = feature['time_start']-margin <= row['time'] <= feature['time_end']+margin
-            if in_time and (parent in feature['_survey_ids'] if parent is not None else True):
+            if parent is not None:
+                supported_parent = parent in feature['_survey_ids']
+            else:
+                # Without a recorded parent, infer only from the immediately
+                # preceding supported survey, not a gap inside the interval.
+                preceding = int(np.searchsorted(feature['_times'], row['time'], side='right'))-1
+                supported_parent = (preceding >= 0
+                    and feature['_times'][preceding] in feature['_supported_times']
+                    and row['time']-feature['_times'][preceding] <= margin)
+            if in_time and supported_parent:
                 candidates.append(feature)
         row['ms1_supported'] = len(candidates)==1
         row['precursor_link'] = ('recorded parent' if parent is not None else 'mass/charge/RT inferred') if len(candidates)==1 else 'unconfirmed'

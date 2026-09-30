@@ -85,6 +85,7 @@ class IsotopeAwareTests(unittest.TestCase):
             self.assertEqual(result['components'][0]['ion_display_peaks'][0]['mz'],500.1)
             self.assertEqual(result['components'][0]['ion_mzs'],component['ion_mzs'])
             self.assertEqual(result['components'][0]['mass'],component['mass'])
+            self.assertEqual(result['components'][0].get('mass_display_decimals'),2 if qtof else None)
 
     def test_legacy_report_gets_same_display_peak_without_changing_fitting_defaults(self):
         component={'mass':18790.9,'intensity':100.,'ion_mzs':[940.55],
@@ -99,6 +100,11 @@ class IsotopeAwareTests(unittest.TestCase):
         self.assertEqual(result[0]['mass'],18790.9)
         self.assertEqual(fitter.call_args.kwargs['pwhh'],.6)
         self.assertIsNone(fitter.call_args.kwargs['smoothing_reference_step'])
+        self.assertNotIn('mass_display_decimals',result[0])
+        with patch.object(server.analysis,'deconvolute_protein_local_lcms_machine_like',return_value=[component]):
+            qtof_result=server._run_report_deconvolution(mz,y,{'include_singly_charged':False},qtof=True)
+        self.assertEqual(qtof_result[0]['mass_display_decimals'],2)
+        self.assertEqual(qtof_result[0]['mass'],component['mass'])
 
     def test_metadata_not_filename_enables_only_this_instrument_intact_workflow(self):
         s,_=synthetic_sample();self.assertTrue(qd.is_intact_qtof(s))
@@ -147,6 +153,7 @@ class IsotopeAwareTests(unittest.TestCase):
             result=server.deconvolute(**params)
         self.assertEqual(result['workflow']['id'],'qtof-isotope-aware')
         serialized=server._serialize_deconvolution_components(result['components'])
+        self.assertEqual(serialized[0]['mass_display_decimals'],2)
         self.assertEqual(serialized[0]['envelopes'],result['components'][0]['envelopes'])
         self.assertIsNone(serialized[0]['r2'])
 

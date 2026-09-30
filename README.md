@@ -34,8 +34,12 @@ removed for display, keeping every occupied bin and the same line shape.
 On-screen peak labels and hover values retain the available numeric precision;
 declared QTOF grid values show three decimals rather than one. Original calibrated
 centroids and inferred ion centroids are not rounded for their hover readouts.
+Intact neutral-mass labels, result tables and component export labels default to
+two decimals for metadata-confirmed QTOF results. Stored masses and m/z values
+remain unchanged; display precision is not a statement of measurement accuracy.
+Other instruments retain their previous label formatting.
 In the default charge-envelope workflow, the dense third-row mass view is an all-charge projection with 0.1 Da bins and
-2 Da Gaussian smoothing, not isotope-resolved deconvolution. The 0.001 m/z grid
+1 Da Gaussian smoothing for QTOF (2 Da for other instruments), not isotope-resolved deconvolution. The 0.001 m/z grid
 does not add isotope resolution or change that algorithm.
 The on-screen dense profile initially focuses on the strongest displayed component.
 Click another coloured mass bar or result-table row to focus that component;
@@ -48,17 +52,62 @@ and charges. Missing/multiply-charged-unavailable assignments use 2% of mass,
 at least 25 Da. This is a reversible viewing
 heuristic, not artifact removal or a guarantee that every visible peak is real.
 Prominent local maxima receive adaptive, collision-spaced labels in **Da** with
-one decimal place; the selected component's nearby apex is emphasized. Labels
+two decimal places for QTOF and one otherwise; the selected component's nearby apex is emphasized. Labels
 are calculated from the full profile before display downsampling and are not
 chemical identifications. Focus changes axis limits only: profile samples,
-normalization, bins, smoothing and analysis results are unchanged. Existing PDF
-downloads remain unchanged; these display labels and focus are on-screen only.
+normalization, bins, smoothing and analysis results are unchanged. Dense-profile
+PDF downloads also label prominent local maxima with collision-spaced vector
+leader lines and two decimal places in Da. These are profile-grid maxima, not
+extra measurement precision or chemical identifications. The selected component's
+nearby apex is emphasized when available. Export axis dimensions, configured
+mass range and profile samples are unchanged; extra vertical label room is
+presentation only. Automatic focus remains on-screen only, and other export
+variants retain their previous layout.
 When smoothing is applied, QTOF peak intensities are expressed on the previous
 0.01 m/z reference-bin scale, so a ten-times-finer grid does not silently lower
 the existing noise threshold by tenfold. Raw summed counts are not rescaled.
 This update does not infer peptide identities from intact spectra.
 Profile-only QTOF runs and other QTOF container layouts are not covered by this
 reader. The third-party source attribution is included with the backend.
+
+### Optional measured-profile reconstruction (v0.2.65)
+
+For metadata-confirmed **G6545XT Intact** runs with supported profile blocks,
+choose **Deconvolution → Intact analysis → Measured profile fit (experimental)**.
+**Charge envelope remains the default**; changing samples restores it. Pro iQ
+`.sirslt` Centroid MW and older `.d` Apex readers and Expert settings are unchanged.
+
+The optional reader decodes native RLE profile blocks with their recorded mass
+calibration, checks the stored mass/intensity bounds, and reads only the selected
+positive MS1 scans (maximum 180). Native profiles are integrated onto a 0.05 m/z
+grid and averaged over the chosen window. An optional intact-QTOF blank is averaged
+over the same interval and subtracted. This is a derived window mean, not an
+unmodified acquisition or an isotope-resolved spectrum. The separate native-apex
+view retains original coordinates with min/max point selection for display only.
+
+A nonnegative reconstruction jointly adjusts a 1 Da neutral-mass grid and a
+shared charge envelope (+2–100, measured range 600–3200 m/z). It covers the main
+region, seeded by the strongest existing charge-envelope component: ±4% of its
+mass, bounded to ±500–2500 Da and the chosen mass limits. A robust asymmetric loss
+leaves unsupported signals in the residual rather than forcing them into the mass
+curve. Eight alternating charge/mass updates are used; successful inner solves do
+not establish a unique or globally optimal solution. No post-fit smoothing is
+applied. The **Experimental profile fit** inspection panel retains measured signal,
+model and signed residual, including model overshoot. Selected reference windows
+have zero fit weight (at least ±0.25 m/z to cover profile wings, plus half a bin).
+
+The coloured components and table remain the established **charge-envelope
+reference assignments**. Experimental curve maxima are not promoted to confirmed
+proteins. Shared charge distributions can underestimate components with different
+charge envelopes; weak overlapping adducts may remain unresolved. The grid and
+two-decimal labels do not imply hundredth-Dalton accuracy. This is not Agilent
+MaxEnt and is not validated as a replacement for its quantitative results.
+
+The dense-profile **Download PDF** exports this fitted curve with peak leaders
+and two-decimal Da labels. Full combined reports require the default envelope
+mode; they do not silently substitute the old curve for an experimental fit.
+The release also improves peptide feature-tail/precursor linking while retaining
+individual measured spectra and the existing mass-error thresholds.
 
 ### Intact analysis defaults and optional isotope fitting (v0.2.59)
 
@@ -164,7 +213,7 @@ Additional feature-apex gates default to **5% of the survey maximum** and **0 co
 corresponding gate, not the feature evidence checks. The maximum is measured
 after reference-ion and m/z-window filtering. At most the 500 strongest passing peaks per scan
 are tested as seeds. Weaker neighbouring scans remain available for isotope and
-chromatographic checks. Counts, isotope fit and consecutive observations are shown
+chromatographic checks. Counts, isotope fit and supported observations are shown
 for the selected feature. These gates do not change MS/MS fragment matching or raw
 data; they can change whether a precursor feature is confirmed.
 The former saved 0% default is upgraded once to 5%; other saved method choices and
@@ -203,9 +252,20 @@ at that same ppm tolerance. The reported precursor must still pass the absolute
 mass gate; acquired m/z values are not shifted or rounded. Strong interleaved finer
 charge patterns reject lower-charge aliases. Isotope traces must coelute with cosine
 at least 0.95. Peak prominence must be at least 50% of apex within +/-0.5 minutes;
-survey gaps cannot exceed 0.15 minutes. Coherent shoulders down to 10% of apex are
-included for MS/MS parent linking. Isotope offsets are merged within a feature,
-while separate chromatographic peaks remain separate.
+survey gaps cannot exceed 0.15 minutes. After the core and three-survey gate pass,
+elution boundaries are estimated automatically for every peptide/charge feature.
+The trace can extend below 10% of apex while the same isotope envelope persists,
+stopping at its local background floor, the valley before a separately seeded
+peak, an acquisition gap, or two consecutive failed isotope observations. A
+two-minute maximum on each side bounds the search. One interrupted isotope
+observation can be bridged but cannot itself support an MS/MS precursor link.
+The tail floor uses the greater of the configured MS1 seed minimum and the local
+lowest-quintile median plus three robust noise estimates (1.4826 times MAD).
+No report boundary, protein name or manually supplied retention interval is used.
+The apex abundance, precursor ppm and fragment-evidence gates are unchanged.
+Isotope offsets are merged within a feature; separate chromatographic peaks
+remain separate. These are conservative measured-support boundaries, not a
+reproduction of Agilent's proprietary feature finder.
 
 These conservative heuristics are not a validated identification/FDR method, and
 can miss narrow, weak, overlapping or edge-of-run peaks. They do not eliminate all
@@ -314,8 +374,9 @@ without claiming site localization; competing peptide sequences remain excluded.
 
 MS/MS is associated using the recorded parent survey plus compatible charge,
 precursor mass and retention time. If the acquisition has no valid parent link,
-a unique local mass/charge/RT association may be used, explicitly labelled as
-inferred. A recorded but incompatible parent is never replaced by a time guess.
+a unique local mass/charge/RT association from the immediately preceding supported
+survey may be used, explicitly labelled as inferred. A recorded but incompatible
+parent is never replaced by a time guess.
 A sequence matched elsewhere in the run no longer suppresses an unrelated MS1
 feature. Strong MS/MS remains visible when precursor feature evidence is missing.
 

@@ -47,6 +47,7 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
 
 # Import existing modules
 import qtof_deconvolution
+import qtof_profile_fit
 from data_reader import (
     OLAX_CONTAINER_SUFFIX,
     RSLT_CONTAINER_SUFFIX,
@@ -2140,6 +2141,7 @@ def _serialize_deconvolution_components(components: list[dict]) -> list[dict]:
             "ion_charges": comp.get("ion_charges", []),
             "ion_intensities": comp.get("ion_intensities", []),
             **({'ion_display_peaks':comp['ion_display_peaks']} if 'ion_display_peaks' in comp else {}),
+            **({'mass_display_decimals':comp['mass_display_decimals']} if 'mass_display_decimals' in comp else {}),
             **({key:comp.get(key) for key in ('isotope_aware','fit_score','scan_count','ion_mono_mzs','envelopes','isotope_ambiguous')} if comp.get('isotope_aware') else {}),
         })
     return results
@@ -2220,6 +2222,9 @@ def _run_report_deconvolution(
 
     results = _serialize_deconvolution_components(components)
     analysis.add_charge_display_peaks(results, mz_arr, intensity_arr, float(params['pwhh']))
+    if qtof:
+        for component in results:
+            component['mass_display_decimals'] = 2
     filtered = [r for r in results if low_mw <= r["mass"] <= high_mw]
     filtered.sort(key=lambda c: c["intensity"], reverse=True)
     return _sort_serialized_deconvolution_results(filtered)
@@ -3304,6 +3309,7 @@ def deconvolute(
     intact_method: str = Query("envelope"),
 ):
     """Run deconvolution on summed spectrum and return detected components."""
+    request_arguments = locals().copy()
     sample = _get_sample(path)
     if sample.ms_scans is None:
         raise HTTPException(status_code=404, detail="No MS data")
@@ -3323,6 +3329,19 @@ def deconvolute(
         if background.ms_scans is None:
             raise HTTPException(status_code=404, detail="No MS data in background sample")
 
+    if intact_method == 'profile':
+        try:
+            if not qtof_deconvolution.is_intact_qtof(sample):
+                raise ValueError('Profile fitting requires metadata-confirmed G6545XT intact data')
+            reference = deconvolute(**{**request_arguments, 'intact_method': 'envelope'})
+            result = qtof_profile_fit.run(sample, start, end, low=low_mw, high=high_mw,
+                background=background, reference_components=reference['components'])
+            analysis.add_charge_display_peaks(result['components'], result['spectrum']['mz'],
+                                             result['spectrum']['intensities'], .3)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**result, 'background_path': normalized_background_path or None}
+
     try:
         isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, intact_method)
     except ValueError as exc:
@@ -3333,6 +3352,8 @@ def deconvolute(
                                             low=low_mw,high=high_mw,minimum_mz=300.)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        for component in result['components']:
+            component['mass_display_decimals'] = 2
         return {**result,'background_path':normalized_background_path or None,
                 'reference_filter':sample.qtof_info.get('reference_filter'),
                 'background_reference_filter':(getattr(background,'qtof_info',None) or {}).get('reference_filter')}
@@ -3443,6 +3464,8 @@ def deconvolute(
     qtof = getattr(sample, 'qtof_info', None) is not None
     analysis.add_charge_display_peaks(results, mz_arr, intensity_arr, pwhh)
     if qtof:
+        for component in results:
+            component['mass_display_decimals'] = 2
         # Compact only after all calculations, without dropping measured bins.
         mz_arr, intensity_arr = analysis.compact_spectrum_zero_runs(mz_arr, intensity_arr)
         raw_mz_arr, raw_intensity_arr = analysis.compact_spectrum_zero_runs(raw_mz_arr, raw_intensity_arr)
@@ -4423,6 +4446,10 @@ def export_report_pdf(payload: dict = Body(...)):
 
     raw_deconv_parameters = payload.get("deconv_parameters")
     deconv_parameters = _normalize_deconvolution_parameters(raw_deconv_parameters)
+    if include_deconv and deconv_parameters['intact_method'] == 'profile':
+        raise HTTPException(status_code=400, detail='Use the dense-profile Download PDF for the experimental profile fit, or switch to charge-envelope mode for the full report')
+    if not include_deconv and deconv_parameters['intact_method'] == 'profile':
+        deconv_parameters['intact_method'] = 'envelope'
     try:
         isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, deconv_parameters['intact_method'])
     except ValueError as exc:
@@ -4465,6 +4492,9 @@ def export_report_pdf(payload: dict = Body(...)):
     else:
         deconv_results = []
         deconv_time_range = None
+
+    if getattr(sample, 'qtof_info', None) is not None:
+        deconv_results = [{**c, 'mass_display_decimals': 2} for c in deconv_results]
 
     A4_W, A4_H = 8.27, 11.69
     plot_runtime.get("plotting")  # Finish font/rcParams setup before opening a PDF.
@@ -4609,6 +4639,9 @@ def export_report_pdf(payload: dict = Body(...)):
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if '--profile-self-test' in sys.argv:
+        print(json.dumps(qtof_profile_fit.smoke_test()))
+        sys.exit(0)
     if '--database-search-self-test' in sys.argv:
         from database_search_smoke import run
         print(json.dumps(run()))

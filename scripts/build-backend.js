@@ -199,6 +199,14 @@ async function run() {
     process.exit(1);
   }
 
+  const profileCheck = spawnSync(exePath, ['--profile-self-test'], {
+    stdio: 'inherit', timeout: 120000,
+  });
+  if (profileCheck.status !== 0) {
+    console.error('Packaged QTOF profile decoder / reconstruction check failed.', profileCheck.error || '');
+    process.exit(1);
+  }
+
   const peptideCheck = spawnSync(exePath, ["--peptide-self-test"], {
     stdio: "inherit", timeout: 120000,
   });

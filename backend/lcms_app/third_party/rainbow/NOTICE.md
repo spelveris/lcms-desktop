@@ -12,6 +12,13 @@ schema metadata, per-scan calibration offsets, fractional intensities, strict
 format/bounds checks, separate MS1/MS2 channels and recorded MS/MS parent links.
 No changes to the existing rainbow-api dependency or legacy readers.
 
+CATrupole profile addition (2026-09-30): `../../qtof_profiles.py` adapts the
+RLE token interpretation from rainbow-api 1.5.2 (`segment_is_rle` and
+`decompress_inten_list`, `rainbow/agilent/masshunter.py`) with bounded decoding,
+recorded-intensity validation and lazy access to selected positive MS1 scans.
+https://github.com/evanyeyeye/rainbow/blob/main/rainbow/agilent/masshunter.py
+The installed rainbow dependency and Pro iQ / ChemStation readers are unchanged.
+
 The adapted Python source and these licenses are shipped in the application's
 `backend/_internal/lcms_app` directory. The source is loaded from that directory
 and may be replaced with a compatible modified module (a modified macOS app may

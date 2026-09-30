@@ -93,6 +93,7 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .protein-database-details p { margin: 5px 0; overflow-wrap: anywhere; }
 .protein-database-note { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; }
 #expert-params[hidden], #deconv-isotope-workflow[hidden], #deconv-method-wrap[hidden], #deconv-spectrum-view-wrap[hidden], #dense-profile-view-controls[hidden] { display: none; }
+#deconv-profile-workflow[hidden], #deconv-profile-check[hidden], #deconv-profile-description[hidden] { display: none; }
 .peptide-preparation label[hidden], #peptide-analysis-details[hidden] { display: none; }
 #peptide-analysis-details { margin: 6px 0; }
 #peptide-analysis-details summary { cursor: pointer; }

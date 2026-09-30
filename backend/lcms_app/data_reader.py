@@ -825,6 +825,9 @@ class SampleData:
         """Load MS profile data from a .sirslt bundle."""
         if qtof_context is not None:
             self.qtof_channels, self.qtof_info = read_qtof(bundle, qtof_context)
+            from qtof_profiles import QtofProfileSource
+            self.qtof_profile_source = QtofProfileSource(bundle, qtof_context)
+            self.qtof_info['profile_available'] = self.qtof_profile_source.available
             from reference_masses import read_method_references
             self.qtof_info['reference_method'] = read_method_references(bundle, self.acq_method)
             self.qtof_info["is_protein_digest"] = is_digest_method(self.acq_method)

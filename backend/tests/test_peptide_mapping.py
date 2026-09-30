@@ -178,6 +178,61 @@ class PeptideMappingTests(unittest.TestCase):
         self.assertNotIn('_survey_ids',survey)
         self.assertEqual(result['coverage'][0]['ms_percent'],100.)
 
+    def test_long_low_tail_links_its_parent_without_lowering_the_ms1_seed_gate(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        profile=(0,0,0,.2,.7,1,.7,.2,.08,.03,.01,.004,0,0,0)
+        scans=feature_scans(peptide,profile=profile,background=100.)
+        ions=np.array(sorted((mass,100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))
+        msms=SimpleNamespace(metadata=[{'scan_id':99,'time':.111,'parent_scan_id':12,
+                            'precursor_mz':peptide['mass']+PROTON}],scans=[ions])
+        row=analyze(self.make_sample(scans,msms),{'fasta':'PEPTIDER'})['matches'][0]
+        self.assertEqual(row['evidence'],'msms');self.assertTrue(row['ms1_supported'])
+        self.assertEqual(row['precursor_feature']['time_end'],.11)
+        weak=feature_scans(peptide,profile=profile,apex=4.,background=100.)
+        self.assertFalse(analyze(self.make_sample(weak),{'fasta':'PEPTIDER'})['matches'])
+
+    def test_single_interrupted_tail_survey_is_not_itself_valid_link_evidence(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        profile=(0,0,.2,.7,1,.7,.2,.08,.03,.01,0,0)
+        scans=feature_scans(peptide,profile=profile)
+        scans[7][1:,1]=0.  # A measured mono peak alone, not an isotope envelope.
+        ions=np.array(sorted((mass,100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))
+        for parent,expected in [(8,False),(9,True)]:
+            msms=SimpleNamespace(metadata=[{'scan_id':99,'time':(parent-1)*.01+.001,
+                                'parent_scan_id':parent,'precursor_mz':peptide['mass']+PROTON}],scans=[ions])
+            result=analyze(self.make_sample(scans,msms),{'fasta':'PEPTIDER'})
+            row=next(r for r in result['matches'] if r['evidence']=='msms')
+            self.assertEqual(row['ms1_supported'],expected)
+            # Missing parent metadata must not make that same unsupported
+            # survey eligible merely because it lies inside the time span.
+            msms.metadata[0].pop('parent_scan_id')
+            result=analyze(self.make_sample(scans,msms),{'fasta':'PEPTIDER'})
+            row=next(r for r in result['matches'] if r['evidence']=='msms')
+            self.assertEqual(row['ms1_supported'],expected)
+
+    def test_automatic_tail_bounds_follow_each_peptide_time_and_width(self):
+        profile=(0,0,.2,.7,1,.7,.2,.08,.03,.01,0,0)
+        for sequence,start,cadence in [('PEPTIDER',5.,.01),('AAAAAK',17.,.03)]:
+            peptide=digest(parse_fasta(sequence),0,[])[0][0]
+            sample=self.make_sample(feature_scans(peptide,profile=profile))
+            for i,meta in enumerate(sample.qtof_channels[0,1].metadata):
+                meta['time']=start+i*cadence
+            row=analyze(sample,{'fasta':sequence})['matches'][0]
+            self.assertAlmostEqual(row['time_start'],start+2*cadence)
+            self.assertAlmostEqual(row['time_end'],start+9*cadence)
+            self.assertLess(row['core_time_end'],row['time_end'])
+
+    def test_extended_tails_stop_at_separate_peak_valleys_and_acquisition_gaps(self):
+        peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
+        profile=(0,0,.2,.7,1,.7,.2,.02,.005,.02,.2,.7,.9,.6,.2,0,0)
+        sample=self.make_sample(feature_scans(peptide,profile=profile))
+        rows=analyze(sample,{'fasta':'PEPTIDER'})['matches']
+        self.assertEqual(len(rows),2)
+        self.assertLess(rows[0]['time_end'],rows[1]['time_start'])
+        for meta in sample.qtof_channels[0,1].metadata[7:]:meta['time']+=1.
+        rows=analyze(sample,{'fasta':'PEPTIDER'})['matches']
+        self.assertLess(rows[0]['time_end'],.07)
+
     def test_wrong_parent_or_distant_msms_does_not_hide_a_feature_or_claim_a_link(self):
         peptide=digest(parse_fasta('PEPTIDER'),0,[])[0][0]
         ions=np.array(sorted((mass,100.) for _,mass,_ in fragments(peptide['residue_masses'],1)))

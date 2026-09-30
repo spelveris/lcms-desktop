@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.63">
+  <link rel="stylesheet" href="css/style.css?v=0.2.65">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -612,9 +612,11 @@
           <select id="deconv-intact-method">
             <option value="envelope">Charge envelope (default)</option>
             <option value="isotope">Isotope fitting (experimental)</option>
+            <option id="deconv-profile-option" value="profile" disabled>Measured profile fit (experimental)</option>
           </select>
         </label>
         <p id="deconv-isotope-workflow" class="toolbar-note" hidden>Optional isotope fitting · 10 ppm · charges +2–50 · requires resolved isotopes. It can miss large or unresolved proteins; alternative isotope assignments are not confirmed separate proteins. Mass-range controls still apply.</p>
+        <p id="deconv-profile-workflow" class="toolbar-note" hidden>QTOF profile fit · main mass region · 600–3200 m/z · charges +2–100 · no post-fit smoothing. Existing charge-envelope masses remain reference markers. Mass-range controls still apply.</p>
         <div class="input-row">
           <label>Start (min)<input type="number" id="deconv-start" step="0.05" value="0" min="0"></label>
           <label>End (min)<input type="number" id="deconv-end" step="0.05" value="30" min="0"></label>
@@ -714,6 +716,10 @@
           </div>
         </div>
         <div id="deconv-results-table-container"></div>
+        <details id="deconv-profile-check" class="deconv-plot-card" hidden>
+          <summary>Experimental profile fit: measured signal, model and signed residual</summary>
+          <div id="deconv-profile-check-plot" style="height:300px"></div>
+        </details>
         <div id="deconv-ion-detail"></div>
       </div>
     </div>

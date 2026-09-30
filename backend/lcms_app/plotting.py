@@ -87,6 +87,15 @@ def _coerce_bool(value, default: bool) -> bool:
     return bool(value)
 
 
+def _component_mass_label(component: dict, fallback_digits=None) -> str:
+    """Format only the display; never round a fitted or measured mass in data."""
+    mass = float(component['mass'])
+    digits = component.get('mass_display_decimals')
+    if type(digits) is not int or not 0 <= digits <= 6:
+        digits = 6 if component.get('isotope_aware') else (fallback_digits if fallback_digits is not None else 1 if mass >= 10000 else 2)
+    return f'{mass:.{digits}f}'
+
+
 def _normalize_deconvolution_export_results(deconv_results: list) -> list[dict]:
     """Keep only finite component values that Matplotlib can render safely."""
     normalized: list[dict] = []
@@ -102,6 +111,8 @@ def _normalize_deconvolution_export_results(deconv_results: list) -> list[dict]:
         normalized.append({
             'mass': mass,
             'intensity': intensity,
+            'mass_display_decimals': item.get('mass_display_decimals'),
+            'isotope_aware': item.get('isotope_aware') is True,
         })
     normalized.sort(key=lambda item: item['intensity'], reverse=True)
     return normalized
@@ -155,6 +166,7 @@ def _normalize_deconvolution_component(component: Optional[dict]) -> Optional[di
         'ion_intensities': [row[1] for row in ion_rows],
         'ion_charges': [row[2] for row in ion_rows],
         'isotope_aware':component.get('isotope_aware') is True,
+        'mass_display_decimals':component.get('mass_display_decimals'),
     }
 
 
@@ -1535,12 +1547,9 @@ def create_mass_spectrum_figure(mz: np.ndarray, intensity: np.ndarray,
             ax2.grid(True, alpha=0.3)
 
         # Add mass labels with appropriate precision
-        for mass, rel_int in zip(masses, norm_intensities):
+        for component, mass, rel_int in zip(deconv_results, masses, norm_intensities):
             if rel_int > 10:  # Only label significant peaks
-                if mass >= 10000:
-                    label_text = f"{mass:.1f}"
-                else:
-                    label_text = f"{mass:.2f}"
+                label_text = _component_mass_label(component)
                 ax2.annotate(label_text,
                            xy=(mass, rel_int),
                            xytext=(0, 5),
@@ -1626,18 +1635,15 @@ def _plot_deconvoluted_masses_panel(
         bar_avoid = max(mass_range * 0.006, 0.10)
 
         for sorted_idx, (orig_idx, (m_kda, intensity, mass_da)) in enumerate(labeled_peaks):
-            if deconv_results[orig_idx].get('isotope_aware'):
+            label_text = _component_mass_label(normalized_results[orig_idx])
+            if normalized_results[orig_idx].get('isotope_aware'):
                 # Full-precision labels stay inside the fixed-size panel even
                 # when zoomed to a few daltons; legacy offsets assume kDa spans.
                 if orig_idx < 5:
-                    ax_deconv.text(.98,.94-.13*orig_idx,f"{mass_da:.6f}",transform=ax_deconv.transAxes,
+                    ax_deconv.text(.98,.94-.13*orig_idx,label_text,transform=ax_deconv.transAxes,
                         ha='right',va='top',fontsize=5.5,color=label_colors[orig_idx % len(label_colors)],
                         bbox={'facecolor':'white','edgecolor':'none','alpha':.8,'pad':1})
                 continue
-            elif mass_da >= 10000:
-                label_text = f"{mass_da:.1f}"
-            else:
-                label_text = f"{mass_da:.2f}"
 
             label_color = label_colors[orig_idx % len(label_colors)]
 
@@ -1804,7 +1810,7 @@ def _plot_deconvoluted_masses_panel(
 
                     calc_val = f"{cm:.1f}"
                     if match_delta <= 5.0:
-                        obs_val = f"{masses[match_idx]:.1f}"
+                        obs_val = _component_mass_label(normalized_results[match_idx], 1)
                         obs_color = label_colors[match_idx % len(label_colors)]
                     else:
                         obs_val = "—"
@@ -1921,7 +1927,7 @@ def _plot_deconvoluted_component_inset(
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(0, 105)
-    mass_label = f"{normalized['mass']:.6f}" if normalized.get('isotope_aware') else f"{normalized['mass']:.1f}"
+    mass_label = _component_mass_label(normalized, 1)
     ax.set_title(f"{mass_label} Da ions", fontsize=6.5, fontweight='bold', pad=2)
     ax.set_xlabel("m/z", fontsize=6)
     ax.tick_params(axis='both', labelsize=5.5, length=3)
@@ -1995,6 +2001,118 @@ def _build_dense_zero_charge_profile(
     return centers, smooth_profile
 
 
+def _dense_profile_label_peaks(x_da, y_profile, mass_range, main_mass=None):
+    """Find prominent profile maxima, not new fitted/identified components.
+
+    Match the interactive view's 4% height / 2% local prominence rules and
+    8 Da neighbourhood. Labels never change or smooth the profile arrays.
+    """
+    from scipy.signal import find_peaks
+    x, y = np.asarray(x_da, dtype=float), np.asarray(y_profile, dtype=float)
+    if len(x) < 3 or len(x) != len(y):
+        return []
+    visible = (x >= mass_range[0]) & (x <= mass_range[1]) & np.isfinite(y)
+    maximum = float(np.max(y[visible])) if np.any(visible) else 0.
+    if maximum <= 0:
+        return []
+    spacing = max(.01, float(np.median(np.diff(x))))
+    radius = max(1, int(np.ceil(8. / spacing)))
+    indices, _ = find_peaks(y, height=maximum * .04, prominence=maximum * .02,
+                            wlen=2 * radius + 1)
+    peaks = [{'mass': float(x[i]), 'intensity': float(y[i]), 'main': False}
+             for i in indices if visible[i]]
+    main_mass = _coerce_finite_float(main_mass, np.nan)
+    if peaks:
+        if np.isfinite(main_mass):
+            nearest = min(peaks, key=lambda p: abs(p['mass'] - main_mass))
+            if abs(nearest['mass'] - main_mass) <= max(10., main_mass * .0005):
+                nearest['main'] = True
+        else:
+            max(peaks, key=lambda p: p['intensity'])['main'] = True
+    return sorted(peaks, key=lambda p: (not p['main'], -p['intensity']))
+
+
+def _annotate_dense_profile_peaks(ax, x_da, y_profile, main_mass=None):
+    """Place editable two-decimal Da labels with non-colliding leader lines.
+
+    Work in display coordinates for physical text spacing, then store anchors
+    in axes coordinates so changing PDF DPI does not move labels. At most 12
+    prominent peaks are labelled; crowded labels are omitted, never the data.
+    """
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.transforms import Bbox
+    from matplotlib.path import Path as MplPath
+
+    xlim = ax.get_xlim()
+    peaks = _dense_profile_label_peaks(x_da, y_profile, [v * 1000 for v in xlim], main_mass)
+    if not peaks:
+        return []
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bounds = ax.get_window_extent(renderer)
+    pad = fig.dpi / 72. * 2.
+    curve_xy = ax.transData.transform(np.column_stack((np.asarray(x_da) / 1000., y_profile)))
+    occupied, annotations = [], []
+
+    def crosses(a, b):
+        def orient(p, q, r):
+            return (q[0]-p[0])*(r[1]-p[1]) - (q[1]-p[1])*(r[0]-p[0])
+        p, q = a; r, s = b
+        return orient(p, q, r)*orient(p, q, s) < 0 and orient(r, s, p)*orient(r, s, q) < 0
+
+    for peak in peaks:
+        if len(annotations) >= 12:
+            break
+        label = f"{peak['mass']:,.2f} Da"
+        weight = 'bold' if peak['main'] else 'normal'
+        font = FontProperties(size=6, weight=weight)
+        width, height, descent = renderer.get_text_width_height_descent(label, font, False)
+        width += 2 * pad
+        height = max(height + descent, fig.dpi / 72. * 6) + 2 * pad
+        if width + 2 * pad > bounds.width or height + 2 * pad > bounds.height:
+            continue
+        origin = ax.transData.transform((peak['mass'] / 1000., peak['intensity']))
+        placement = None
+        for lane in range(10):
+            cy = origin[1] + height / 2 + 2 * pad + lane * (height + pad)
+            if cy + height / 2 > bounds.y1 - pad:
+                break
+            for shift in [0., .65, -.65, 1.3, -1.3, 1.95, -1.95]:
+                cx = np.clip(origin[0] + shift * width,
+                             bounds.x0 + width / 2 + pad, bounds.x1 - width / 2 - pad)
+                box = Bbox.from_bounds(cx-width/2, cy-height/2, width, height)
+                line = (origin, (cx, cy))
+                path = MplPath(line)
+                if any(box.overlaps(old['box'].padded(pad))
+                       or path.intersects_bbox(old['box'].padded(pad), filled=False)
+                       or MplPath(old['line']).intersects_bbox(box.padded(pad), filled=False)
+                       or crosses(line, old['line']) for old in occupied):
+                    continue
+                lo = np.searchsorted(curve_xy[:, 0], box.x0-pad)
+                hi = np.searchsorted(curve_xy[:, 0], box.x1+pad, side='right')
+                if np.any((curve_xy[lo:hi, 1] >= box.y0-pad) & (curve_xy[lo:hi, 1] <= box.y1+pad)):
+                    continue
+                placement = (cx, cy, box, line)
+                break
+            if placement is not None:
+                break
+        if placement is None:
+            continue
+        cx, cy, box, line = placement
+        anchor = ax.transAxes.inverted().transform((cx, cy))
+        annotation = ax.annotate(label, xy=(peak['mass']/1000., peak['intensity']),
+            xytext=anchor, textcoords='axes fraction', ha='center', va='center',
+            fontsize=6, fontweight=weight, color='#215caf' if peak['main'] else '#222222',
+            arrowprops={'arrowstyle': '-', 'color': '#777777', 'linewidth': .5,
+                        'shrinkA': 2, 'shrinkB': 0},
+            bbox={'facecolor': 'white', 'edgecolor': 'none', 'alpha': .85, 'pad': 1},
+            annotation_clip=True)
+        annotations.append(annotation)
+        occupied.append({'box': box, 'line': line})
+    return annotations
+
+
 def create_dense_deconvoluted_mass_profile_figure(
     sample_name: str,
     spectrum: Optional[dict],
@@ -2014,7 +2132,20 @@ def create_dense_deconvoluted_mass_profile_figure(
     mz_values = spectrum.get('mz') if isinstance(spectrum, dict) else []
     intensity_values = spectrum.get('intensities') if isinstance(spectrum, dict) else []
     isotope_profile = spectrum.get('isotope_profile') if isinstance(spectrum, dict) else None
-    x_da, y_profile = (np.array([p['mass'] for p in isotope_profile],dtype=float),
+    fitted_profile = spectrum.get('fitted_profile') if isinstance(spectrum, dict) else None
+    if isinstance(fitted_profile, dict):
+        x_da = np.asarray(fitted_profile.get('mass', []), dtype=float)
+        y_profile = np.asarray(fitted_profile.get('intensity', []), dtype=float)
+        if (x_da.ndim != 1 or y_profile.shape != x_da.shape or len(x_da) > 10000
+                or not np.isfinite(x_da).all() or not np.isfinite(y_profile).all()
+                or np.any(y_profile < 0) or np.any(np.diff(x_da) <= 0)):
+            raise ValueError('Invalid experimental fitted profile')
+        bounds = fitted_profile.get('range', [])
+        if len(bounds) != 2 or not np.isfinite(bounds).all() or bounds[1] <= bounds[0]:
+            raise ValueError('Invalid fitted-profile range')
+        x_min_da, x_max_da = map(float, bounds)
+    else:
+        x_da, y_profile = (np.array([p['mass'] for p in isotope_profile],dtype=float),
                        np.array([p['intensity'] for p in isotope_profile],dtype=float)) if isinstance(isotope_profile,list) else _build_dense_zero_charge_profile(
         mz_values,
         intensity_values,
@@ -2027,6 +2158,7 @@ def create_dense_deconvoluted_mass_profile_figure(
         _coerce_finite_float(style.get('deconv_profile_smooth_sigma_da', 2.0), 2.0),
     )
 
+    y_norm = np.array([], dtype=float)
     if x_da.size > 0 and y_profile.size > 0 and np.max(y_profile) > 0:
         y_norm = (y_profile / float(np.max(y_profile))) * 100.0
         if isinstance(isotope_profile,list):
@@ -2051,7 +2183,7 @@ def create_dense_deconvoluted_mass_profile_figure(
     ax.set_ylabel("Relative Intensity (%)")
     if show_title:
         title_y = 1.08 if subtitle else 1.03
-        ax.set_title("Measured isotopes" if isinstance(isotope_profile,list) else "Deconvoluted Masses", fontweight='bold', y=title_y)
+        ax.set_title("Experimental profile fit" if isinstance(fitted_profile,dict) else "Measured isotopes" if isinstance(isotope_profile,list) else "Deconvoluted Masses", fontweight='bold', y=title_y)
     if subtitle:
         sub_y = 1.02 if show_title else 1.03
         ax.text(
@@ -2064,6 +2196,11 @@ def create_dense_deconvoluted_mass_profile_figure(
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     _apply_locked_deconvolution_export_layout(fig)
+    if not isinstance(isotope_profile, list) and y_norm.size and _coerce_bool(style.get('deconv_show_peak_labels', True), True):
+        # Extra vertical room is presentation only. Keep all original bins,
+        # normalization, smoothing, calculation limits and PDF axis dimensions.
+        ax.set_ylim(0, 130)
+        _annotate_dense_profile_peaks(ax, x_da, y_norm, style.get('deconv_profile_selected_mass'))
     return fig
 
 
@@ -3338,12 +3475,7 @@ def create_ion_selection_figure(
 
         # Title with mass and charge range
         mass_val = r['mass']
-        if r.get('isotope_aware'):
-            mass_str = f"{mass_val:.6f}"
-        elif mass_val >= 10000:
-            mass_str = f"{mass_val:.1f}"
-        else:
-            mass_str = f"{mass_val:.2f}"
+        mass_str = _component_mass_label(r)
         charges = r.get('charge_states', [])
         rel_pct = r['intensity'] / rel_reference_intensity * 100 if rel_reference_intensity > 0 else 0
         charge_str = f"z={min(charges)}-{max(charges)}" if len(charges) > 1 else f"z={charges[0]}" if charges else ""

@@ -125,14 +125,36 @@ test('dense style keeps full calculation limits and only changes the view', () =
   assert.equal(exported.deconv_profile_smooth_sigma_da,1);
 });
 
+test('dense PDF enables peak leaders while keeping the existing export range', () => {
+  const app = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+  const body = app.slice(app.indexOf('async function exportDeconvMasses('));
+  assert.match(body, /if \(isDensePdf\) \{[\s\S]*?applyDenseDeconvProfileStyle\(style, \{ includeView: false \}\);\s*style\.deconv_show_peak_labels = true;/);
+});
+
 test('only metadata-confirmed QTOF results use 1 Da profile smoothing', () => {
   const {run}=fixture();
   for(const result of [{}, {spectrum_source:'sample'}, {path:'qtof.sirslt',spectrum:{mz_grid_step:.001}}]) {
     run(`state.deconvResults=${JSON.stringify(result)}`);
     assert.equal(run('applyDenseDeconvProfileStyle().deconv_profile_smooth_sigma_da'),2);
+    assert.equal(run('applyDenseDeconvProfileStyle().deconv_mass_decimals'),1);
   }
   run('state.deconvResults={workflow:null,spectrum_source:"qtof_centroid_grid"}');
   assert.equal(run('applyDenseDeconvProfileStyle().deconv_profile_smooth_sigma_da'),1);
+  assert.equal(run('applyDenseDeconvProfileStyle().deconv_mass_decimals'),2);
+});
+
+test('QTOF masses show two decimals while calculations and legacy formatting remain intact',()=>{
+  const {run,context}=fixture();
+  context.component={mass:58968.512345678,intensity:100,charge_states:[40],mass_display_decimals:2};
+  assert.equal(run('componentMassDecimals(component)'),2);
+  assert.equal(run('componentMassDecimals({...component,isotope_aware:true})'),2);
+  assert.equal(run('componentMassDecimals({mass:58968.512345678})'),1);
+  assert.equal(run('componentMassDecimals({mass:9999.1234})'),2);
+  assert.equal(run('componentMassDecimals({mass:9999.1234},1)'),1);
+  context.profile=denseFixture();
+  const labels=run('buildDenseProfileAnnotations(profile,[18450,19150],{massDecimals:2})');
+  assert.ok(labels.length>0);assert.ok(labels.every(a=>/\d,\d{3}\.\d{2} Da/.test(a.text)));
+  assert.equal(context.component.mass,58968.512345678);
 });
 
 test('dense view controls sit below the graph with the export button, without the removed comment', () => {
@@ -287,6 +309,45 @@ test('intact metadata enables an explicit option but keeps the previous calculat
  assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')")),before);
 });
 
+test('profile fitting requires QTOF metadata plus profile data and never changes legacy defaults',()=>{
+ const {run,elements}=fixture();
+ for(const id of ['deconv-profile-option','deconv-profile-workflow','deconv-method-wrap','expert-params'])elements.set(id,{});
+ elements.set('deconv-intact-method',{dataset:{},value:'envelope'});
+ elements.set('deconv-mw-algorithm',{dataset:{},value:'apex'});
+ const before=JSON.stringify(run("getCurrentDeconvolutionParameters('proiq.sirslt')"));
+ run("state.loadedSamples['qtof.sirslt']={isotope_aware_intact:true,qtof:{profile_available:true}};syncDeconvMwAlgorithmDefault('qtof.sirslt')");
+ assert.equal(elements.get('deconv-profile-option').disabled,false);
+ assert.equal(run("getIntactAnalysisMethod('qtof.sirslt')"),'envelope');
+ elements.get('deconv-intact-method').value='profile';run("syncDeconvMwAlgorithmDefault('qtof.sirslt')");
+ assert.equal(run("getIntactAnalysisMethod('qtof.sirslt')"),'profile');
+ assert.equal(elements.get('deconv-profile-workflow').hidden,false);
+ assert.equal(elements.get('expert-params').hidden,true);
+ run("state.loadedSamples['qtof.sirslt'].qtof.profile_available=false");
+ assert.equal(run("getIntactAnalysisMethod('qtof.sirslt')"),'envelope');
+ run("syncDeconvMwAlgorithmDefault('proiq.sirslt')");
+ assert.equal(elements.get('deconv-mw-algorithm').value,'centroid');
+ assert.equal(elements.get('deconv-profile-option').disabled,true);
+ assert.equal(elements.get('expert-params').hidden,false);
+ assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('proiq.sirslt')")),before);
+ run("syncDeconvMwAlgorithmDefault('legacy.d')");
+ assert.equal(elements.get('deconv-mw-algorithm').value,'apex');
+});
+
+test('experimental profile plotting uses the fitted curve and preserves signed residuals',()=>{
+ const {run,context,plots}=fixture();
+ context.spectrum={mz:[1000],intensities:[100],fitted_profile:{mass:[9999,10000,10001],intensity:[0,70,14],range:[9998,10002]}};
+ run('buildDenseZeroChargeProfile=()=>{throw new Error("must not project or smooth fitted curve")};charts.plotDenseDeconvolutedMassProfile("fit",spectrum,{style:{deconv_x_min_da:9998,deconv_x_max_da:10002}})');
+ assert.deepEqual(Array.from(plots.get('fit').data[0].y),[0,100,20]);
+ assert.match(plots.get('fit').layout.title.text,/Experimental profile fit/);
+ context.Plotly.react=(id,data,layout)=>plots.set(id,{data,layout});
+ run('charts.plotQtofProfileFitCheck("residual",{mz:[1,2,3],observed:[10,4,0],predicted:[8,7,1],residual:[2,-3,-1],usable:[true,true,false]})');
+ assert.deepEqual(Array.from(plots.get('residual').data[2].y),[2,-3,null]);
+ assert.equal(plots.get('residual').data[2].connectgaps,false);
+ run('state.deconvResults={workflow:{id:"qtof-profile"},spectrum};state.deconvDenseViewMode="full"');
+ const style=run('applyDenseDeconvProfileStyle({deconv_x_min_da:500,deconv_x_max_da:50000})');
+ assert.equal(style.deconv_x_min_da,9998);assert.equal(style.deconv_x_max_da,10002);
+});
+
 test('raw inspection does not replace the summed calculation spectrum or round measured values',()=>{
  const {run,elements,context}=fixture();
  context.data={workflow:{id:'qtof-envelope'},spectrum:{mz:[500.123],intensities:[30]},measured_spectrum:{mz:[500.123456789,500.123456799],intensities:[10,20]}};
@@ -296,6 +357,7 @@ test('raw inspection does not replace the summed calculation spectrum or round m
  assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.measured_spectrum);
  assert.equal(context.data.spectrum.mz[0],500.123);
  assert.equal(run('getDisplayedDeconvSpectrum(data).mz[1]'),500.123456799);
+ context.data.workflow.id='qtof-profile';assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.measured_spectrum);
  context.data.workflow.id='qtof-isotope-aware';assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.spectrum);
 });
 
