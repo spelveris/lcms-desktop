@@ -12,3 +12,5 @@ matplotlib>=3.7.0
 pandas>=2.0.0
 # Isotope-envelope fitting on calibrated G6545XT intact centroids (lazy at runtime).
 ms_deisotope==0.0.60
+# PDF-export regression tests use the same parser version validated locally.
+pypdf==6.10.0
