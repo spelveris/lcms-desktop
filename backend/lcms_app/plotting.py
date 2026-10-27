@@ -2249,6 +2249,74 @@ def _normalize_time_change_trace_payload(traces: list) -> list[dict]:
     return normalized
 
 
+def create_single_chromatogram_export_figure(
+    prepared: dict, sample_name: str = '', style: Optional[dict] = None,
+) -> matplotlib.figure.Figure:
+    """Twice the Deconvolution axis width, identical axis height and text sizes."""
+    style = style or {}
+    base_width = min(30., max(1., _coerce_finite_float(style.get('fig_width'), 6.)))
+    panel_width, panel_height = _get_deconvolution_panel_dimensions(base_width)
+    fig, ax = plt.subplots(figsize=(panel_width, panel_height))
+    _apply_locked_deconvolution_export_layout(fig)
+    left, bottom, width, height = ax.get_position().bounds
+    left_in, bottom_in = left*panel_width, bottom*panel_height
+    width_in, height_in = 2*width*panel_width, height*panel_height
+    canvas_width = panel_width + width*panel_width
+
+    def position_axes():
+        fw, fh = fig.get_size_inches()
+        ax.set_position([left_in/fw, bottom_in/fh, width_in/fw, height_in/fh])
+
+    fig.set_size_inches(canvas_width, panel_height, forward=True)
+    position_axes()
+    line_width = max(.1, _coerce_finite_float(style.get('line_width'), .8))
+    traces = prepared['traces']
+    for trace in traces:
+        ax.plot(trace['times'], trace['intensities'], label=trace['label'],
+                color=trace['color'], linewidth=line_width, rasterized=False)
+    all_times = np.concatenate([trace['times'] for trace in traces])
+    _set_chrom_xlim(ax, all_times)
+    ax.set_xlabel('Elution time (min)')
+    ax.set_ylabel(prepared['y_label'])
+    ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=False)
+    ax.ticklabel_format(axis='x', style='plain', useOffset=False)
+    if _coerce_bool(style.get('show_grid'), False):
+        ax.grid(True, alpha=.3)
+    else:
+        ax.grid(False)
+    ax.spines[['top', 'right']].set_visible(False)
+    if len(traces) > 1:
+        ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.), frameon=False,
+                  fontsize=7, ncol=max(1, int(np.ceil(len(traces)/10))))
+    subtitle_lines = 0
+    if sample_name and _coerce_bool(style.get('deconv_show_subtitle'), True):
+        wrap_width = max(15, int(width_in*72/(7*.53)))
+        subtitle = textwrap.fill(sample_name, width=wrap_width)
+        subtitle_lines = subtitle.count('\n') + 1
+        ax.text(.5, 1.02, subtitle, transform=ax.transAxes, ha='center', va='bottom',
+                fontsize=7, parse_math=False)
+    if _coerce_bool(style.get('deconv_show_title'), True):
+        wrap_width = max(15, int(width_in*72/(9*.55)))
+        title = textwrap.fill(prepared['title'], width=wrap_width)
+        title_y = (1.08 if subtitle_lines else 1.03) + max(0, subtitle_lines-1)*8.4/72/height_in
+        ax.set_title(title, fontweight='bold', y=title_y, va='bottom', parse_math=False)
+    # Enlarge margins for long captions/legends while keeping the physical axes
+    # unchanged. tight_layout/bbox='tight' would silently change that contract.
+    for _ in range(3):
+        fig.canvas.draw()
+        bounds = ax.get_tightbbox(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+        fw, fh = fig.get_size_inches()
+        extra_left, extra_bottom = max(0., .04-bounds.x0), max(0., .04-bounds.y0)
+        extra_right, extra_top = max(0., bounds.x1+.04-fw), max(0., bounds.y1+.04-fh)
+        if max(extra_left, extra_bottom, extra_right, extra_top) < .001:
+            break
+        left_in += extra_left
+        bottom_in += extra_bottom
+        fig.set_size_inches(fw+extra_left+extra_right, fh+extra_bottom+extra_top, forward=True)
+        position_axes()
+    return fig
+
+
 def create_uv_area_export_figure(
     times: list,
     intensities: list,

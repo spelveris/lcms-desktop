@@ -830,12 +830,19 @@ def _parabolic_centroid(mz: np.ndarray, intensity: np.ndarray, peak_idx: int) ->
 
 
 def _gaussian_fit_r2(charges: list[int], intensities: list[float]) -> float:
-    if len(charges) < 3:
+    # Keep charge/intensity pairs together. Multiple measured maxima within one
+    # charge region are not additional, independent charge states.
+    by_charge = {}
+    for charge, intensity in zip(charges, intensities):
+        by_charge[charge] = max(by_charge.get(charge, 0.0), float(intensity))
+    if len(by_charge) < 3:
         return 0.0
-    x = np.array(charges, dtype=float)
-    y = np.log(np.maximum(intensities, 1.0))
+    x = np.array(sorted(by_charge), dtype=float)
+    y = np.log(np.maximum([by_charge[z] for z in x], 1.0))
     try:
         coeffs = np.polyfit(x, y, 2)
+        if coeffs[0] >= 0:
+            return 0.0
         yhat = np.polyval(coeffs, x)
         ss_res = np.sum((y - yhat) ** 2)
         ss_tot = np.sum((y - np.mean(y)) ** 2)
@@ -845,6 +852,82 @@ def _gaussian_fit_r2(charges: list[int], intensities: list[float]) -> float:
         return max(0.0, min(1.0, float(r2)))
     except Exception:
         return 0.0
+
+
+def _has_supported_charge_series(
+    ions: list[dict], min_peaks: int, contig_min: int,
+    noise_cutoff: float, abundance_cutoff: float,
+) -> bool:
+    """Require support distributed over a significant, contiguous charge series.
+
+    Test one intensity per distinct charge against the strongest ion in the
+    candidate, rather than whichever weak peak happened to seed it. An isolated
+    strong ion must not borrow numerous below-cutoff coincidences as evidence.
+    At least two effective charges (participation ratio) are required for series
+    of three or more states. An explicitly permitted two-state series needs
+    1.5 effective charges. Identical rules apply to residual recovery. This gate
+    does not remove measured data or refit accepted masses.
+    """
+    by_charge = {}
+    for ion in ions:
+        charge, intensity = int(ion['charge']), float(ion['intensity'])
+        by_charge[charge] = max(by_charge.get(charge, 0.0), intensity)
+    if not by_charge:
+        return False
+    threshold = max(noise_cutoff, max(by_charge.values()) * abundance_cutoff)
+    supported = sorted((z, y) for z, y in by_charge.items() if y >= threshold and y > 0)
+    if len(supported) < max(2, min_peaks):
+        return False
+    weights = np.array([y for _, y in supported], dtype=float)
+    weights /= weights.max()
+    effective_charges = float(weights.sum() ** 2 / np.square(weights).sum())
+    required_effective = 1.5 if len(supported) == 2 else 2.0
+    if effective_charges < required_effective - 1e-12:
+        return False
+
+    longest = current = 1
+    for previous, following in zip(supported, supported[1:]):
+        current = current + 1 if following[0] == previous[0] + 1 else 1
+        longest = max(longest, current)
+    if longest < contig_min:
+        return False
+    # Preserve the main pass's existing ladder requirements in both passes.
+    count = len(supported)
+    required = 6 if count >= 8 else 4 if count >= 4 else contig_min
+    if count >= 4 and (longest < max(contig_min, required) or longest / count < .60):
+        return False
+    return True
+
+
+def _supported_charge_series(
+    ions: list[dict], min_peaks: int, contig_min: int,
+    noise_cutoff: float, abundance_cutoff: float,
+) -> list[dict]:
+    """Keep a supported series, optionally excluding one isolated intensity spike.
+
+    A coincident impurity can fall inside the mass tolerance of a genuine
+    series. If one charge supplies at least 75% of its intensity and is more
+    than eight times either adjacent charge, test the remaining series on its
+    own. Never rescue it by lowering the evidence requirements. Exclusion is
+    local to this candidate; the measured peak remains available elsewhere.
+    """
+    if _has_supported_charge_series(ions, min_peaks, contig_min, noise_cutoff, abundance_cutoff):
+        return ions
+    by_charge = {}
+    for ion in ions:
+        z, intensity = int(ion['charge']), float(ion['intensity'])
+        by_charge[z] = max(by_charge.get(z, 0.0), intensity)
+    if len(by_charge) < min_peaks + 1:
+        return []
+    charge = max(by_charge, key=by_charge.get)
+    peak = by_charge[charge]
+    adjacent = max(by_charge.get(charge-1, 0.0), by_charge.get(charge+1, 0.0))
+    if peak < .75 * sum(by_charge.values()) or peak <= 8.0 * adjacent:
+        return []
+    remaining = [ion for ion in ions if ion['charge'] != charge]
+    return remaining if _has_supported_charge_series(
+        remaining, min_peaks, contig_min, noise_cutoff, abundance_cutoff,
+    ) else []
 
 
 def _reject_mass_outliers(masses: np.ndarray, intensities: np.ndarray,
@@ -963,7 +1046,7 @@ def deconvolute_protein_local_lcms_machine_like(
     - Apply MW agreement % as ion-set membership gate
     - Apply absolute + relative noise cutoffs
     - Curve-fit MW by weighted regression, centroid fallback
-    - Enforce envelope Gaussianity threshold
+    - Require distinct, significant charge states and distributed intensity
     - Deferred ion-set selection to detect overlapping species
 
     Args:
@@ -1059,40 +1142,16 @@ def deconvolute_protein_local_lcms_machine_like(
                 })
                 ion_indices.add(int(peak_indices[p_idx]))
 
-            if len(ions) < min_peaks:
+            ions = _supported_charge_series(
+                ions, min_peaks, contig_min, noise_cutoff, abundance_cutoff,
+            )
+            if not ions:
                 continue
+            ion_indices = {i['index'] for i in ions}
 
             ion_charges = sorted(set(i['charge'] for i in ions))
-            # Enforce contiguous ladder minimum and reject sparse high-charge
-            # pseudo-ladders that can overfit dense spectra at max_charge=50.
-            longest = 1
-            current = 1
-            for i in range(1, len(ion_charges)):
-                if ion_charges[i] == ion_charges[i - 1] + 1:
-                    current += 1
-                    longest = max(longest, current)
-                else:
-                    current = 1
-            if contig_min > 1 and longest < contig_min:
-                continue
-
-            # Two-tier contiguity gate to suppress sparse pseudo-ladders:
-            #   >= 8 charges: need longest >= 6 AND ratio >= 0.60
-            #   4-7 charges: need longest >= 4 AND ratio >= 0.60
-            #   < 4 charges: existing contig_min check above is sufficient
-            num_charges = len(ion_charges)
-            if num_charges >= 8:
-                contig_ratio = longest / num_charges
-                if longest < max(contig_min, 6) or contig_ratio < 0.60:
-                    continue
-            elif num_charges >= 4:
-                contig_ratio = longest / num_charges
-                if longest < 4 or contig_ratio < 0.60:
-                    continue
-
             intensities = [i['intensity'] for i in ions]
-            r2 = _gaussian_fit_r2(ion_charges, intensities)
-            envelope_ok = r2 >= envelope_cutoff
+            r2 = _gaussian_fit_r2([i['charge'] for i in ions], intensities)
 
             strong = [i for i in ions if i['intensity'] >= anchor_int * mw_assign_cutoff]
             if len(strong) < min_peaks:
@@ -1199,7 +1258,7 @@ def deconvolute_protein_local_lcms_machine_like(
 
     # ── Residual second pass ──────────────────────────────────────────────
     # Collect peaks not claimed by any selected result and run a second
-    # deconvolution pass with relaxed contiguity to recover weak species
+    # deconvolution pass with the same charge-series evidence requirements
     # (e.g. small proteins whose charge ladder was suppressed by overlap).
     all_peak_indices = set(p['index'] for p in peaks)
     residual_indices = all_peak_indices - used_ions
@@ -1246,26 +1305,18 @@ def deconvolute_protein_local_lcms_machine_like(
                     })
                     ion_indices_r.add(int(residual_peak_indices[p_idx]))
 
-                if len(ions) < min_peaks:
+                ions = _supported_charge_series(
+                    ions, min_peaks, contig_min, noise_cutoff, abundance_cutoff,
+                )
+                if not ions:
                     continue
-                # Relaxed contiguity for second pass
+                ion_indices_r = {i['index'] for i in ions}
                 ion_charges = sorted(set(i['charge'] for i in ions))
-                if len(ion_charges) >= 2:
-                    longest = 1
-                    current = 1
-                    for ic in range(1, len(ion_charges)):
-                        if ion_charges[ic] == ion_charges[ic - 1] + 1:
-                            current += 1
-                            longest = max(longest, current)
-                        else:
-                            current = 1
-                    if longest < 2:
-                        continue
 
                 intensities_arr = np.array([i['intensity'] for i in ions])
                 masses_arr = np.array([i['mass'] for i in ions])
                 M_fit = _estimate_component_mass(ions)
-                r2 = _gaussian_fit_r2(ion_charges, [i['intensity'] for i in ions])
+                r2 = _gaussian_fit_r2([i['charge'] for i in ions], [i['intensity'] for i in ions])
 
                 residual_candidates.append({
                     'mass': M_fit,

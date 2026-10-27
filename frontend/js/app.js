@@ -568,8 +568,18 @@ function syncDeconvExpertModeUI() {
   document.querySelectorAll('.deconv-expert-only').forEach((el) => {
     el.classList.toggle('hidden', !expertMode);
   });
-  if (expertMode) {
-    syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '');
+  syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '');
+}
+
+async function handleDeconvExpertModeChange() {
+  const path = document.getElementById('deconv-sample-select')?.value || '';
+  const previousMethod = document.getElementById('deconv-intact-method')?.value || 'envelope';
+  syncDeconvExpertModeUI();
+  if (previousMethod !== getIntactAnalysisMethod(path) && path) {
+    // Leaving Expert Mode also leaves the experimental preset. Recalculate so
+    // the displayed/exported result cannot silently retain the previous method.
+    state.deconvAutoRunSignature = '';
+    await runDeconvolution({ useOverlay: false, silentSuccess: true });
   }
 }
 
@@ -1368,9 +1378,7 @@ function initSettings() {
   renderMzTargets();
 
   // Expert mode toggle
-  document.getElementById('expert-mode-toggle').addEventListener('change', () => {
-    syncDeconvExpertModeUI();
-  });
+  document.getElementById('expert-mode-toggle').addEventListener('change', handleDeconvExpertModeChange);
   syncDeconvExpertModeUI();
   const expertResetBtn = document.getElementById('btn-deconv-expert-reset');
   if (expertResetBtn) {
@@ -2998,6 +3006,7 @@ async function loadSingleSample(options = {}) {
 function renderSingleSample(data) {
   setSingleEmptyState(false);
   const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const sampleName = state.loadedSamples[samplePath]?.name || samplePath.split(/[\\/]/).pop() || 'sample';
   const singlePlotIds = [];
 
   // Metrics
@@ -3028,12 +3037,20 @@ function renderSingleSample(data) {
       div.id = 'uv-combined-plot';
       uvContainer.appendChild(div);
       charts.plotUV('uv-combined-plot', data.uv.wavelengths, uvTitle);
+      appendSingleChromatogramDownloads(uvContainer, {
+        plotId: div.id, kind: 'uv', title: uvTitle, sampleName,
+        traces: data.uv.wavelengths.map((wl, i) => ({...wl, color: charts.getColor(i)})),
+      });
     } else if (data.uv.wavelengths.length === 1) {
       const div = document.createElement('div');
       div.className = 'plot-container';
       div.id = 'uv-plot-0';
       uvContainer.appendChild(div);
       charts.plotUV('uv-plot-0', data.uv.wavelengths, `${uvTitle} (${data.uv.wavelengths[0].nm} nm)`);
+      appendSingleChromatogramDownloads(uvContainer, {
+        plotId: div.id, kind: 'uv', title: `${uvTitle} (${data.uv.wavelengths[0].nm} nm)`, sampleName,
+        traces: [{...data.uv.wavelengths[0], color: charts.getColor(0)}],
+      });
     }
 
     // Also plot individual wavelengths if more than 2
@@ -3044,6 +3061,10 @@ function renderSingleSample(data) {
         div.id = `uv-plot-${i}`;
         uvContainer.appendChild(div);
         charts.plotUV(`uv-plot-${i}`, [wl], `${uvTitle} (${wl.nm} nm)`);
+        appendSingleChromatogramDownloads(uvContainer, {
+          plotId: div.id, kind: 'uv', title: `${uvTitle} (${wl.nm} nm)`, sampleName,
+          traces: [{...wl, color: charts.getColor(0)}],
+        });
       });
     }
   }
@@ -3072,6 +3093,10 @@ function renderSingleSample(data) {
       spectrumPlotId: 'single-spectrum-pos-plot',
     });
     singlePlotIds.push('single-tic-pos-plot');
+    appendSingleChromatogramDownloads(ticContainer, {
+      plotId: posDiv.id, kind: 'tic', title: `${baseTitle} (+)`, sampleName, polarity: 'positive',
+      traces: [{times: data.tic.times_pos, intensities: data.tic.intensities_pos, color: '#1f77b4'}],
+    });
 
     const posSpectrumDiv = document.createElement('div');
     posSpectrumDiv.className = 'plot-container single-spectrum-compact';
@@ -3095,6 +3120,10 @@ function renderSingleSample(data) {
       spectrumPlotId: 'single-spectrum-neg-plot',
     });
     singlePlotIds.push('single-tic-neg-plot');
+    appendSingleChromatogramDownloads(ticContainer, {
+      plotId: negDiv.id, kind: 'tic', title: `${baseTitle} (-)`, sampleName, polarity: 'negative',
+      traces: [{times: data.tic.times_neg, intensities: data.tic.intensities_neg, color: '#d62728'}],
+    });
 
     const negSpectrumDiv = document.createElement('div');
     negSpectrumDiv.className = 'plot-container single-spectrum-compact';
@@ -3119,6 +3148,12 @@ function renderSingleSample(data) {
       spectrumPlotId: 'single-spectrum-plot',
     });
     singlePlotIds.push('single-tic-plot-main');
+    appendSingleChromatogramDownloads(ticContainer, {
+      plotId: ticDiv.id, kind: 'tic', title: (ticTitle && ticTitle.value) || 'Total Ion Chromatogram', sampleName,
+      polarity: data.tic.polarity || (state.loadedSamples[samplePath]?.has_ms_pos ? 'positive'
+        : state.loadedSamples[samplePath]?.has_ms_neg ? 'negative' : null),
+      traces: [{times: data.tic.times, intensities: data.tic.intensities, color: '#ff7f0e'}],
+    });
 
     const spectrumDiv = document.createElement('div');
     spectrumDiv.className = 'plot-container single-spectrum-compact';
@@ -3188,6 +3223,60 @@ function renderSingleSample(data) {
 
   if (singlePlotIds.length > 0) {
     schedulePlotlyResize(singlePlotIds);
+  }
+}
+
+function appendSingleChromatogramDownloads(container, options) {
+  if (!options.traces?.length || options.traces.some(trace => !trace.times?.length || !trace.intensities?.length)) return;
+  const row = document.createElement('div');
+  row.className = 'single-eic-download-row single-chromatogram-download-row';
+  row.dataset.plotId = options.plotId;
+  row.setAttribute('role', 'group');
+  row.setAttribute('aria-label', `${options.title} downloads`);
+  const buttons = [];
+  for (const format of ['csv', 'pdf', 'png']) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-sm';
+    button.textContent = `Download ${format.toUpperCase()}`;
+    button.addEventListener('click', async () => {
+      if (row.dataset.busy === 'true') return;
+      row.dataset.busy = 'true';
+      buttons.forEach(item => { item.disabled = true; });
+      try {
+        await exportSingleChromatogram(options, format);
+      } finally {
+        row.dataset.busy = 'false';
+        buttons.forEach(item => { item.disabled = false; });
+      }
+    });
+    buttons.push(button);
+    row.appendChild(button);
+  }
+  container.appendChild(row);
+}
+
+async function exportSingleChromatogram(options, format) {
+  const name = String(options.sampleName || 'sample').replace(/\.(?:sirslt|rslt|olax|d)$/i, '');
+  const suffix = options.kind === 'tic' ? `tic_${options.polarity || 'default'}`
+    : options.traces.length === 1 ? `uv_${options.traces[0].wavelength ?? options.traces[0].nm}nm` : 'uv_combined';
+  const filenameBase = `${sanitizeFilename(name)}_${suffix}`;
+  showLoading(`Exporting ${format.toUpperCase()}...`);
+  try {
+    const response = await api.exportSingleChromatogram({
+      kind: options.kind, polarity: options.polarity, traces: options.traces,
+      title: options.title, sample_name: name, filename_base: filenameBase, format,
+      dpi: parseInt(document.getElementById('export-dpi')?.value, 10) || 300,
+      style: buildCurrentDeconvStyle(),
+    });
+    const blob = await backendResponseToBlob(response);
+    const filename = getFilenameFromContentDisposition(response.headers.get('content-disposition'), `${filenameBase}.${format}`);
+    downloadBlob(blob, filename);
+    toast(`Exported ${format.toUpperCase()}`, 'success');
+  } catch (err) {
+    toast(`Chromatogram export failed: ${err.message}`, 'error');
+  } finally {
+    hideLoading();
   }
 }
 
@@ -6585,11 +6674,12 @@ function getDefaultDeconvMwAlgorithmForPath(path) {
 
 function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
   const available=state.loadedSamples[samplePath]?.isotope_aware_intact===true;
+  const expertMode=document.getElementById('expert-mode-toggle')?.checked===true;
   const methodWrap=document.getElementById('deconv-method-wrap');
   if(methodWrap)methodWrap.hidden=!available;
   const method=document.getElementById('deconv-intact-method');
   if(method){
-    if(options.force===true || method.dataset.samplePath!==samplePath || !available)method.value='envelope';
+    if(options.force===true || method.dataset.samplePath!==samplePath || !available || !expertMode)method.value='envelope';
     method.dataset.samplePath=samplePath;
   }
   const isotopeAware=getIntactAnalysisMethod(samplePath)==='isotope';
@@ -6600,8 +6690,8 @@ function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
   if(profileNotice)profileNotice.hidden=!profileFit;
   const isotopeNotice=document.getElementById('deconv-isotope-workflow');
   if(isotopeNotice)isotopeNotice.hidden=!isotopeAware;
-  const expert=document.getElementById('expert-params');
-  if(expert)expert.hidden=isotopeAware || profileFit;
+  const envelopeParams=document.getElementById('expert-envelope-params');
+  if(envelopeParams)envelopeParams.hidden=isotopeAware || profileFit;
   const select = document.getElementById('deconv-mw-algorithm');
   if (!select) return;
 
@@ -6618,6 +6708,7 @@ function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
 function getIntactAnalysisMethod(samplePath) {
   const select=document.getElementById('deconv-intact-method');
   return state.loadedSamples[samplePath]?.isotope_aware_intact===true
+    && document.getElementById('expert-mode-toggle')?.checked===true
     && select?.dataset.samplePath===samplePath
     ? select.value==='isotope' ? 'isotope'
       : select.value==='profile' && state.loadedSamples[samplePath]?.qtof?.profile_available===true ? 'profile' : 'envelope'

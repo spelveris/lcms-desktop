@@ -8,6 +8,44 @@ Starting with version `0.2.43`, CATrupole checks GitHub when it starts and once 
 
 Version `0.2.43` is the one-time bridge and must be installed manually. Later versions can update from inside CATrupole.
 
+## Single Sample chromatogram downloads (v0.2.66)
+
+Each UV plot and positive/negative TIC has its own **Download CSV**, **Download
+PDF**, and **Download PNG** buttons. Downloads use the complete data loaded for
+that plot, including its selected UV smoothing, rather than browser display
+downsampling or the current zoom. CSV columns name elution time in minutes,
+the measured UV wavelength and absorbance in mAU, or TIC polarity and intensity
+in counts. Multi-wavelength UV exports retain independent time/intensity column
+pairs; channels with different sampling times are not interpolated or padded
+with invented zeros. Available numeric precision and duplicate times survive.
+
+PDF and PNG use twice the physical plotting-axis width of the standard
+Deconvolution mass export and exactly the same axis height, font sizes, and
+Arial-first typography. Margins can expand for titles or legends while the
+axis dimensions remain fixed. PDFs contain vector paths and embedded TrueType
+text for editing; PNG resolution follows Export DPI. These per-plot downloads
+remain available from the loaded data without reopening a network acquisition.
+
+## Charge-series screening (v0.2.66)
+
+Both charge-envelope passes require the configured minimum number of distinct,
+significant charge states and the same consecutive-series checks. Relative
+support is measured against the candidate's strongest charge, rather than the
+possibly weak anchor used to propose it. Intensity must be distributed over at
+least two effective charges; explicitly permitted two-state sets require 1.5.
+These participation ratios prevent one large ion from borrowing small accidental
+mass matches as a protein envelope. Weak but coherent independent series remain
+eligible at the configured absolute and relative thresholds.
+
+When one charge supplies at least 75% of the candidate intensity and exceeds
+either adjacent charge by more than eightfold, the remaining series is tested
+independently. That charge is omitted only if the remainder meets all the same
+evidence requirements; otherwise the candidate is rejected. Raw spectra retain
+every measured peak. The Gaussian R² diagnostic now pairs each intensity with
+its actual charge and counts each charge once. Broad, irregular protein
+envelopes are assessed by charge-series support, rather than a perfect bell
+shape. Screening and R² alone do not establish chemical identity.
+
 ## QTOF and peptide mapping (v0.2.54)
 
 Agilent TOF/Q-TOF OpenLab `.sirslt` runs with embedded scan/calibration metadata
@@ -73,8 +111,11 @@ reader. The third-party source attribution is included with the backend.
 ### Optional measured-profile reconstruction (v0.2.65)
 
 For metadata-confirmed **G6545XT Intact** runs with supported profile blocks,
-choose **Deconvolution → Intact analysis → Measured profile fit (experimental)**.
-**Charge envelope remains the default**; changing samples restores it. Pro iQ
+choose **Deconvolution → Expert Mode → Intact analysis → Measured profile fit (experimental)**.
+**Charge envelope remains the default**; changing samples or turning Expert Mode
+off restores it. The method selector stays accessible inside Expert Mode for
+both experimental presets; only the inapplicable envelope-tuning fields are hidden.
+Pro iQ
 `.sirslt` Centroid MW and older `.d` Apex readers and Expert settings are unchanged.
 
 The optional reader decodes native RLE profile blocks with their recorded mass

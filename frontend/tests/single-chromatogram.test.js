@@ -1,0 +1,132 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+function fixture() {
+  const nodes = new Map(), requests = [], downloads = [], messages = [];
+  class Element {
+    constructor(tag = 'div') {
+      this.tag = tag; this.children = []; this.dataset = {}; this.style = {};
+      this.listeners = {}; this.attributes = {}; this.value = ''; this.checked = false;
+      this.className = ''; this.disabled = false;
+    }
+    set innerHTML(value) { this.html = value; this.children = []; }
+    get innerHTML() { return this.html || ''; }
+    appendChild(child) { this.children.push(child); if (child.id) nodes.set(child.id, child); return child; }
+    addEventListener(event, callback) { this.listeners[event] = callback; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  for (const id of ['single-sample-select', 'single-metrics', 'single-uv-plots', 'single-tic-plot',
+    'single-eic-plots', 'fig-width', 'line-width', 'show-grid', 'mass-axis-min', 'mass-axis-max', 'export-dpi']) {
+    nodes.set(id, new Element());
+  }
+  nodes.get('single-sample-select').value = '/data/first.sirslt';
+  nodes.get('fig-width').value = '6'; nodes.get('line-width').value = '.8';
+  const response = () => ({headers: {get: () => null}, blob: async () => Buffer.from('export')});
+  const context = vm.createContext({console, setTimeout, clearTimeout,
+    localStorage: {getItem: () => null}, window: {},
+    document: {getElementById: id => nodes.get(id) || null,
+      createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => []},
+    api: {exportSingleChromatogram: async payload => { requests.push(JSON.parse(JSON.stringify(payload))); return response(); }},
+    Plotly: {}, requests, downloads, messages,
+  });
+  for (const file of ['charts.js', 'app.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../js', file), 'utf8'), context);
+  const run = code => vm.runInContext(code, context);
+  run(`setSingleEmptyState=()=>{};schedulePlotlyResize=()=>{};renderSingleInteractiveTicPlot=()=>{};
+    renderSingleSummedSpectrumPlaceholder=()=>{};charts.plotUV=()=>{};
+    showLoading=()=>{};hideLoading=()=>{};toast=(...args)=>messages.push(args);
+    downloadBlob=(blob,name)=>downloads.push({blob,name});
+    state.loadedSamples['/data/first.sirslt']={name:'first.sirslt',has_ms_neg:true};`);
+  return {nodes, context, run, requests, downloads, response, messages};
+}
+
+const uv = [{nm: 278, wavelength: 278, times: [0, .1234567890123, 1], intensities: [-.01, 2.3456789012345, .1]}];
+const tic = {times: [0, .1, .2], intensities: [3, 4, 5], has_dual_polarity: true,
+  times_pos: [0, .1, .2], intensities_pos: [3, 4, 5], times_neg: [.02, .14], intensities_neg: [7, 9]};
+
+test('UV and each TIC have their own downloads directly beneath the corresponding graph', () => {
+  const {context, run, nodes} = fixture(); context.data = {uv: {wavelengths: uv}, tic};
+  run('renderSingleSample(data)');
+  const uvChildren = nodes.get('single-uv-plots').children;
+  assert.equal(uvChildren[0].id, 'uv-plot-0');
+  assert.equal(uvChildren[1].dataset.plotId, 'uv-plot-0');
+  assert.deepEqual(uvChildren[1].children.map(b => b.textContent), ['Download CSV', 'Download PDF', 'Download PNG']);
+  const ticChildren = nodes.get('single-tic-plot').children;
+  assert.equal(ticChildren[0].id, 'single-tic-pos-plot');
+  assert.equal(ticChildren[1].dataset.plotId, 'single-tic-pos-plot');
+  assert.equal(ticChildren[2].id, 'single-spectrum-pos-plot');
+  assert.equal(ticChildren[3].id, 'single-tic-neg-plot');
+  assert.equal(ticChildren[4].dataset.plotId, 'single-tic-neg-plot');
+  assert.equal(ticChildren[5].id, 'single-spectrum-neg-plot');
+});
+
+test('positive and negative buttons export only their own full arrays and matching labels', async () => {
+  const {context, run, nodes, requests, downloads} = fixture(); context.data = {uv: {wavelengths: uv}, tic};
+  run('renderSingleSample(data)');
+  await nodes.get('single-tic-plot').children[1].children[0].listeners.click();
+  await nodes.get('single-tic-plot').children[4].children[1].listeners.click();
+  assert.equal(requests[0].format, 'csv'); assert.equal(requests[0].polarity, 'positive');
+  assert.deepEqual(requests[0].traces[0].times, tic.times_pos);
+  assert.deepEqual(requests[0].traces[0].intensities, tic.intensities_pos);
+  assert.equal(requests[1].format, 'pdf'); assert.equal(requests[1].polarity, 'negative');
+  assert.deepEqual(requests[1].traces[0].times, tic.times_neg);
+  assert.deepEqual(requests[1].traces[0].intensities, tic.intensities_neg);
+  assert.equal(requests[1].style.fig_width, 6); assert.equal(requests[1].style.line_width, .8);
+  assert.equal(downloads.length, 2);
+  assert.match(downloads[0].name, /first_tic_positive.csv$/);
+  assert.match(downloads[1].name, /first_tic_negative.pdf$/);
+});
+
+test('combined and individual UV downloads preserve every wavelength and its independent time axis', async () => {
+  const {context, run, nodes, requests} = fixture();
+  const wavelengths = [...uv, {nm: 214, times: [.2, .7], intensities: [4, 5]}, {nm: 254, times: [.3], intensities: [6]}];
+  context.data = {uv: {wavelengths}}; run('renderSingleSample(data)');
+  const children = nodes.get('single-uv-plots').children;
+  assert.equal(children.length, 8);
+  await children[1].children[0].listeners.click();
+  assert.equal(requests[0].traces.length, 3);
+  assert.deepEqual(requests[0].traces[1].times, [.2, .7]);
+  assert.deepEqual(requests[0].traces[0].intensities, uv[0].intensities);
+  await children[5].children[2].listeners.click();
+  assert.equal(requests[1].format, 'png'); assert.equal(requests[1].traces.length, 1);
+  assert.equal(requests[1].traces[0].nm, 214);
+});
+
+test('an existing plot downloads its loaded sample even if the selection has changed', async () => {
+  const {context, run, nodes, requests, downloads} = fixture();
+  context.data = {uv: {wavelengths: uv}}; run('renderSingleSample(data)');
+  nodes.get('single-sample-select').value = '/data/second.sirslt';
+  run('state.singleSampleData={uv:{wavelengths:[]}}');
+  await nodes.get('single-uv-plots').children[1].children[0].listeners.click();
+  assert.equal(requests[0].sample_name, 'first');
+  assert.deepEqual(requests[0].traces[0].times, uv[0].times);
+  assert.match(downloads[0].name, /^first_uv_278nm.csv$/);
+});
+
+test('duplicate clicks are ignored during export and an error restores all buttons', async () => {
+  const {context, run, nodes, requests, messages} = fixture();
+  let reject;
+  const pending = new Promise((_, fail) => { reject = fail; });
+  context.api.exportSingleChromatogram = data => { requests.push(data); return pending; };
+  context.data = {uv: {wavelengths: uv}}; run('renderSingleSample(data)');
+  const row = nodes.get('single-uv-plots').children[1];
+  const first = row.children[0].listeners.click();
+  await row.children[1].listeners.click();
+  assert.equal(requests.length, 1); assert.ok(row.children.every(b => b.disabled));
+  reject(new Error('temporary failure')); await first;
+  assert.ok(row.children.every(b => !b.disabled));
+  assert.match(messages[0][0], /temporary failure/);
+});
+
+test('a negative-only run is labeled accurately and clearing the plots removes downloads', async () => {
+  const {context, run, nodes, requests} = fixture();
+  context.data = {tic: {times: [.3, .5], intensities: [6, 7], polarity: 'negative'}};
+  run('renderSingleSample(data)');
+  await nodes.get('single-tic-plot').children[1].children[0].listeners.click();
+  assert.equal(requests[0].polarity, 'negative');
+  run('resetSingleSampleView()');
+  assert.equal(nodes.get('single-tic-plot').children.length, 0);
+  assert.equal(nodes.get('single-uv-plots').children.length, 0);
+});

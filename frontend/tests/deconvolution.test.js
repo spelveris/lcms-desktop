@@ -38,7 +38,7 @@ function fixture() {
   const context = vm.createContext({
     console, setTimeout, clearTimeout,
     localStorage: { getItem() { return null; } },
-    document: { addEventListener() {}, getElementById(id) { return elements.get(id) || null; } },
+    document: { addEventListener() {}, querySelectorAll() { return []; }, getElementById(id) { return elements.get(id) || null; } },
     window: {},
     Plotly: { newPlot(id, data, layout) { plots.set(id, { data, layout }); return { then() {} }; } },
   });
@@ -294,26 +294,29 @@ test('dense label binding responds to zoom and resize without relayout loops or 
 
 test('intact metadata enables an explicit option but keeps the previous calculation as default',()=>{
  const {run,elements}=fixture();
- elements.set('deconv-isotope-workflow',{});elements.set('expert-params',{});
+ elements.set('expert-mode-toggle',{checked:true});
+ elements.set('deconv-isotope-workflow',{});elements.set('expert-envelope-params',{});
  elements.set('deconv-method-wrap',{});elements.set('deconv-intact-method',{dataset:{},value:'envelope'});
  const before=JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')"));
  run("state.loadedSamples['qtof.sirslt']={isotope_aware_intact:true};syncDeconvMwAlgorithmDefault('qtof.sirslt')");
  assert.equal(elements.get('deconv-method-wrap').hidden,false);
- assert.equal(elements.get('deconv-isotope-workflow').hidden,true);assert.equal(elements.get('expert-params').hidden,false);
+ assert.equal(elements.get('deconv-isotope-workflow').hidden,true);assert.equal(elements.get('expert-envelope-params').hidden,false);
  assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('qtof.sirslt')")),before);
  elements.get('deconv-intact-method').value='isotope';run("syncDeconvMwAlgorithmDefault('qtof.sirslt')");
  const q=run("getCurrentDeconvolutionParameters('qtof.sirslt')");assert.equal(q.min_charge,2);assert.equal(q.fwhm,0);assert.equal(q.intact_method,'isotope');
- assert.equal(elements.get('expert-params').hidden,true);
+ assert.equal(elements.get('expert-envelope-params').hidden,true);
  assert.equal(run("getCurrentDeconvolutionParameters('other.sirslt').intact_method"),'envelope');
- run("syncDeconvMwAlgorithmDefault('old.sirslt')");assert.equal(elements.get('expert-params').hidden,false);
+ run("syncDeconvMwAlgorithmDefault('old.sirslt')");assert.equal(elements.get('expert-envelope-params').hidden,false);
  assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('old.sirslt')")),before);
 });
 
 test('profile fitting requires QTOF metadata plus profile data and never changes legacy defaults',()=>{
  const {run,elements}=fixture();
- for(const id of ['deconv-profile-option','deconv-profile-workflow','deconv-method-wrap','expert-params'])elements.set(id,{});
+ for(const id of ['deconv-profile-option','deconv-profile-workflow','deconv-method-wrap','expert-envelope-params'])elements.set(id,{});
+ elements.set('expert-mode-toggle',{checked:true});
  elements.set('deconv-intact-method',{dataset:{},value:'envelope'});
  elements.set('deconv-mw-algorithm',{dataset:{},value:'apex'});
+ run("syncDeconvMwAlgorithmDefault('proiq.sirslt')");
  const before=JSON.stringify(run("getCurrentDeconvolutionParameters('proiq.sirslt')"));
  run("state.loadedSamples['qtof.sirslt']={isotope_aware_intact:true,qtof:{profile_available:true}};syncDeconvMwAlgorithmDefault('qtof.sirslt')");
  assert.equal(elements.get('deconv-profile-option').disabled,false);
@@ -321,16 +324,52 @@ test('profile fitting requires QTOF metadata plus profile data and never changes
  elements.get('deconv-intact-method').value='profile';run("syncDeconvMwAlgorithmDefault('qtof.sirslt')");
  assert.equal(run("getIntactAnalysisMethod('qtof.sirslt')"),'profile');
  assert.equal(elements.get('deconv-profile-workflow').hidden,false);
- assert.equal(elements.get('expert-params').hidden,true);
+ assert.equal(elements.get('expert-envelope-params').hidden,true);
  run("state.loadedSamples['qtof.sirslt'].qtof.profile_available=false");
  assert.equal(run("getIntactAnalysisMethod('qtof.sirslt')"),'envelope');
  run("syncDeconvMwAlgorithmDefault('proiq.sirslt')");
  assert.equal(elements.get('deconv-mw-algorithm').value,'centroid');
  assert.equal(elements.get('deconv-profile-option').disabled,true);
- assert.equal(elements.get('expert-params').hidden,false);
+ assert.equal(elements.get('expert-envelope-params').hidden,false);
  assert.equal(JSON.stringify(run("getCurrentDeconvolutionParameters('proiq.sirslt')")),before);
  run("syncDeconvMwAlgorithmDefault('legacy.d')");
  assert.equal(elements.get('deconv-mw-algorithm').value,'apex');
+});
+
+test('experimental method selector stays inside Expert Mode, outside hidden envelope tuning',()=>{
+ const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+ const expert=html.indexOf('id="expert-params"');
+ const method=html.indexOf('id="deconv-method-wrap"');
+ const tuning=html.indexOf('id="expert-envelope-params"');
+ assert.ok(expert<method && method<tuning);
+ assert.equal(html.split('id="deconv-intact-method"').length-1,1);
+ const {run,elements}=fixture();
+ elements.set('expert-mode-toggle',{checked:true});
+ elements.set('expert-params',{hidden:false});elements.set('expert-envelope-params',{});
+ elements.set('deconv-intact-method',{dataset:{samplePath:'qtof'},value:'profile'});
+ run("state.loadedSamples.qtof={isotope_aware_intact:true,qtof:{profile_available:true}};syncDeconvMwAlgorithmDefault('qtof')");
+ assert.equal(elements.get('expert-params').hidden,false);
+ assert.equal(elements.get('expert-envelope-params').hidden,true);
+ elements.get('deconv-intact-method').value='envelope';run("syncDeconvMwAlgorithmDefault('qtof')");
+ assert.equal(elements.get('expert-envelope-params').hidden,false);
+});
+
+test('leaving Expert Mode resets experimental analysis and recalculates without resurrecting it on reopening',async()=>{
+ const {run,elements,context}=fixture();const visibility=[],requests=[];
+ elements.set('expert-mode-toggle',{checked:false});
+ elements.set('expert-params',{classList:{toggle:(name,hidden)=>visibility.push(hidden)}});
+ elements.set('deconv-sample-select',{value:'qtof'});
+ elements.set('deconv-intact-method',{dataset:{samplePath:'qtof'},value:'profile'});
+ context.record=()=>requests.push(run("getIntactAnalysisMethod('qtof')"));
+ run("state.loadedSamples.qtof={isotope_aware_intact:true,qtof:{profile_available:true}};runDeconvolution=async()=>record()");
+ assert.equal(run("getIntactAnalysisMethod('qtof')"),'envelope');
+ await run('handleDeconvExpertModeChange()');
+ assert.deepEqual(requests,['envelope']);assert.equal(visibility.at(-1),true);
+ assert.equal(elements.get('deconv-intact-method').value,'envelope');
+ elements.get('expert-mode-toggle').checked=true;
+ await run('handleDeconvExpertModeChange()');
+ assert.equal(visibility.at(-1),false);assert.deepEqual(requests,['envelope']);
+ assert.equal(run("getIntactAnalysisMethod('qtof')"),'envelope');
 });
 
 test('experimental profile plotting uses the fitted curve and preserves signed residuals',()=>{

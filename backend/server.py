@@ -66,6 +66,7 @@ import config as lcms_config
 from reference_masses import filter_sample, normalize_policy, ReferenceSettingsStore
 from protein_databases import ProteinDatabaseStore
 from database_search import DatabaseSearchStore
+from chromatogram_export import prepare_chromatogram, chromatogram_csv
 
 # ---------------------------------------------------------------------------
 # App
@@ -2748,6 +2749,7 @@ def tic(path: str = Query(...)):
         "times": _ndarray_to_list(sample.ms_times),
         "intensities": _ndarray_to_list(sample.tic),
         "has_dual_polarity": sample.has_dual_polarity,
+        "polarity": "positive" if getattr(sample, 'ms_times_pos', None) is not None else "negative" if getattr(sample, 'ms_times_neg', None) is not None else None,
     }
     if sample.has_dual_polarity:
         result["times_pos"] = _ndarray_to_list(sample.ms_times_pos)
@@ -3835,6 +3837,36 @@ def run_router_copy(payload: dict = Body(...)):
             "errors": error_count,
         },
     }
+
+
+@app.post('/api/export-single-chromatogram')
+def export_single_chromatogram(payload: dict = Body(...)):
+    """Export the complete loaded plot data without reopening or resampling a run."""
+    export_format = str(payload.get('format', 'pdf')).lower()
+    if export_format not in {'csv', 'pdf', 'png'}:
+        raise HTTPException(status_code=400, detail='format must be csv, pdf or png')
+    try:
+        prepared = prepare_chromatogram(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if export_format == 'csv':
+        content = chromatogram_csv(prepared['traces'])
+        media_type = 'text/csv'
+    else:
+        style = payload.get('style')
+        style = style if isinstance(style, dict) else {}
+        dpi = max(72, min(600, _coerce_int(payload.get('dpi'), lcms_config.EXPORT_DPI)))
+        fig = plotting.create_single_chromatogram_export_figure(
+            prepared, str(payload.get('sample_name') or ''), style)
+        try:
+            # Do not crop/rescale: PDF and PNG retain the same physical axes.
+            content = plotting.export_figure(fig, dpi=dpi, format=export_format, tight=False)
+        finally:
+            plt.close(fig)
+        media_type = 'application/pdf' if export_format == 'pdf' else 'image/png'
+    name = _sanitize_filename(str(payload.get('filename_base') or prepared['kind']), fallback='chromatogram')
+    return Response(content=content, media_type=media_type,
+                    headers={'Content-Disposition': f'attachment; filename="{name}.{export_format}"'})
 
 
 @app.post("/api/export-single-sample")

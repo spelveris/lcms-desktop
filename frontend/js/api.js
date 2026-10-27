@@ -261,6 +261,14 @@ const api = {
     });
   },
 
+  exportSingleChromatogram(payload) {
+    return apiFetch('/api/export-single-chromatogram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   exportProgressionPanel(payload) {
     return apiFetch('/api/export-progression-panel', {
       method: 'POST',
