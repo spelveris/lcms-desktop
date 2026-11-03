@@ -4192,6 +4192,8 @@ function syncProgressionAssignmentsToSelectedFiles() {
 }
 
 function readProgressionAssignmentsFromDOM() {
+  // Compare visible labels with their previous defaults before applying a new role.
+  const autoLabels = computeAutoProgressionLabelMap();
   document.querySelectorAll('.prog-active').forEach((el) => {
     const path = el.dataset.path;
     if (!path) return;
@@ -4200,7 +4202,7 @@ function readProgressionAssignmentsFromDOM() {
     state.progressionAssignments[path] = item;
   });
 
-  document.querySelectorAll('.prog-role').forEach((el) => {
+  document.querySelectorAll('.prog-role:checked').forEach((el) => {
     const path = el.dataset.path;
     if (!path) return;
     const item = state.progressionAssignments[path] || {};
@@ -4209,7 +4211,6 @@ function readProgressionAssignmentsFromDOM() {
     state.progressionAssignments[path] = item;
   });
 
-  const autoLabels = computeAutoProgressionLabelMap();
   document.querySelectorAll('.prog-label').forEach((el) => {
     const path = el.dataset.path;
     if (!path) return;
@@ -5383,12 +5384,11 @@ function renderProgressionAssignments() {
           <span class="prog-active-name" title="${escapeAttr(file.path)}">${escapeHtml(file.name)}</span>
         </label>
       </div>
-      <label>Role</label>
-      <select class="prog-role" data-path="${escapeAttr(file.path)}" ${isActive ? '' : 'disabled'}>
-        <option value="initial" ${defaultRole === 'initial' ? 'selected' : ''}>Initial (t=0)</option>
-        <option value="mid" ${defaultRole === 'mid' ? 'selected' : ''}>Mid Timepoint</option>
-        <option value="final" ${defaultRole === 'final' ? 'selected' : ''}>Overnight / Final</option>
-      </select>
+      <div class="prog-role-toggle" role="group" aria-label="Role for ${escapeAttr(file.name)}">
+        ${[['initial', 'Initial (t=0)'], ['mid', 'Mid Timepoint'], ['final', 'Overnight / Final']].map(([role, label]) => `
+          <label><input type="radio" class="prog-role" name="prog-role-${i}" data-path="${escapeAttr(file.path)}" value="${role}" ${defaultRole === role ? 'checked' : ''} ${isActive ? '' : 'disabled'}><span>${label}</span></label>
+        `).join('')}
+      </div>
       <label>Custom Label</label>
       <div class="prog-label-row">
         <input type="text" class="prog-label" data-path="${escapeAttr(file.path)}" placeholder="${escapeAttr(file.name)}" value="${escapeAttr(defaultLabel)}" ${isActive ? '' : 'disabled'}>
@@ -5908,7 +5908,8 @@ function renderEICBatch(data) {
             <button type="button" class="btn btn-sm" data-target-idx="${ti}" style="margin-top:0;">+ Add ${escapeHtml(itemLabel)} Manually</button>
             ${target.signal_type === 'uv'
               ? `<button type="button" class="btn btn-sm" data-clear-target-idx="${ti}" style="margin-top:0;">Clear Areas</button>`
-              : `<button type="button" class="btn btn-sm" data-reset-target-idx="${ti}" style="margin-top:0;">Reset to Auto Peaks</button>`}
+              : `<button type="button" class="btn btn-sm" data-clear-auto-target-idx="${ti}" style="margin-top:0;">Clear Auto Peaks</button>
+                 <button type="button" class="btn btn-sm" data-reset-target-idx="${ti}" style="margin-top:0;">Reset to Auto Peaks</button>`}
           </div>
         </div>
       `;
@@ -5953,6 +5954,11 @@ function renderEICBatch(data) {
           clearTargetAreas(ti);
         });
       } else {
+        section.querySelector(`button[data-clear-auto-target-idx="${ti}"]`).addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          clearTargetAutoPeaks(ti);
+        });
         section.querySelector(`button[data-reset-target-idx="${ti}"]`).addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -6517,6 +6523,14 @@ function clearTargetAreas(targetIdx) {
   target.peaks = [];
   reRenderEICBatch({ preserveScroll: true });
   toast('Cleared UV area windows', 'success');
+}
+
+function clearTargetAutoPeaks(targetIdx) {
+  const target = state.eicBatchData?.targets?.[targetIdx];
+  if (!target || target.signal_type === 'uv') return;
+  target.peaks = (target.peaks || []).filter(peak => peak.type === 'manual');
+  reRenderEICBatch({ preserveScroll: true });
+  toast('Cleared automatic peaks', 'success');
 }
 
 function resetTargetToAutoPeaks(targetIdx) {
@@ -8122,7 +8136,7 @@ async function fetchBatchDeconvPreviewBlob(sample, displayComponents, dpi = 180)
   const response = await api.exportDeconvolutedMasses({
     sample_name: sample.name,
     components: displayComponents,
-    format: 'png',
+    format: 'svg',
     dpi,
     style: buildBatchDeconvExportStyle(),
   });
@@ -8157,7 +8171,7 @@ async function buildBatchDeconvPreviewFallbackBlob(plotId, dpi = 180) {
   if (!plotDiv || !plotDiv.classList.contains('js-plotly-plot')) return null;
   const scale = dpi / 96;
   const dims = getExportDimensions(plotDiv, scale);
-  const imageDataUrl = await buildExportImage(plotDiv, 'png', dims.width, dims.height);
+  const imageDataUrl = await buildExportImage(plotDiv, 'svg', dims.width, dims.height);
   return dataUrlToBlob(imageDataUrl);
 }
 
@@ -8203,6 +8217,7 @@ async function renderBatchDeconvTicWindow(sample, ticPlotId) {
   try {
     const tic = await getBatchDeconvTic(sample.path);
     if (!tic) throw new Error('No TIC data');
+    ticPlotEl.innerHTML = '';
     charts.plotChromatogramWithWindow(ticPlotId, tic.times, tic.intensities, {
       title: 'TIC',
       color: '#ff7f0e',
@@ -8412,11 +8427,11 @@ function renderBatchDeconvolution(data) {
     section.insertAdjacentHTML('beforeend', `
       <div class="batch-deconv-sample-layout">
         <div class="batch-deconv-interactive">
-          <div id="${plotId}" class="batch-deconv-interactive-plot"></div>
+          <div id="${plotId}" class="batch-deconv-interactive-plot" data-fixed-plot-height="340"></div>
         </div>
         <div class="batch-deconv-tic-wrap">
           <div class="batch-deconv-tic">
-            <div id="${ticPlotId}" class="batch-deconv-tic-plot">
+            <div id="${ticPlotId}" class="batch-deconv-tic-plot" data-fixed-plot-height="340">
               <p class="muted" style="padding:8px 4px;">Loading TIC...</p>
             </div>
           </div>

@@ -978,15 +978,24 @@ body.sidebar-resizing .sidebar {
   flex-wrap: wrap;
 }
 
-/* Compact only the vertical separation of Single Sample cards. */
+/* Keep the analysis controls compact without shrinking their hit targets. */
 #tab-single > .tab-toolbar,
 #tab-single > .molecule-tools,
-#tab-single > .metrics-bar,
-#tab-single .plot-container { margin-bottom: 8px; }
+#tab-deconv > .tab-toolbar,
+#tab-progression > .tab-toolbar {
+  padding: 6px 12px;
+  row-gap: 6px;
+  margin-bottom: 8px;
+}
+#tab-single > .metrics-bar { margin-bottom: 6px; }
 #tab-single > .mz-toolbar { margin-bottom: 6px; }
 #tab-single > .metrics-bar { row-gap: 6px; }
-#tab-single .plot-stack { row-gap: 6px; }
-#single-results { row-gap: 8px; }
+#tab-single .plot-stack { row-gap: 4px; }
+#single-results { gap: 8px; }
+#single-results > .col { display: flex; flex-direction: column; gap: 6px; }
+#single-results .plot-container { padding: 0; margin-bottom: 0; }
+#single-results .single-eic-download-row { margin: 0; gap: 6px; }
+#single-results .plot-stack:empty { display: none; }
 #single-smiles-result:empty { display: none; }
 
 .molecule-tools-row label {
@@ -1458,7 +1467,8 @@ body.sidebar-resizing .sidebar {
 .col { min-width: 0; }
 
 /* Plot containers */
-.plot-container {
+/* Plotly also creates a .plot-container.plotly inside every graph. */
+.plot-container:not(.plotly) {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1615,11 +1625,11 @@ body.sidebar-resizing .sidebar {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 16px;
-  margin-bottom: 16px;
+  padding: 6px 12px;
+  margin-bottom: 8px;
 }
 .deconv-controls .input-row {
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 .toggle-expert {
   font-weight: 600;
@@ -1787,21 +1797,21 @@ body.sidebar-resizing .sidebar {
 .assignment-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .assignment-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 8px 10px;
 }
 .assignment-card.is-inactive {
   opacity: 0.72;
   border-style: dashed;
 }
 .assignment-card-head {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 .prog-active-toggle {
   display: inline-flex;
@@ -1862,6 +1872,37 @@ body.sidebar-resizing .sidebar {
   margin-bottom: 0;
   background: transparent;
 }
+
+#tab-progression .plot-stack { gap: 4px; }
+#tab-progression .plot-container { margin-bottom: 0; padding: 0; }
+#tab-progression .single-eic-download-row { margin: 0 0 4px; }
+.prog-role-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+.prog-role-toggle label { position: relative; flex: 1; min-width: 0; margin: 0; cursor: pointer; }
+.prog-role-toggle input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
+.prog-role-toggle span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 5px 6px;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  text-align: center;
+  font-size: 12px;
+  line-height: 16px;
+}
+.prog-role-toggle label:hover span { background: var(--accent-light); }
+.prog-role-toggle input:checked + span { background: var(--accent); color: #fff; }
+.prog-role-toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.prog-role-toggle input:disabled + span { cursor: default; }
 
 /* ===== Uptake Assay CC ===== */
 .uptake-assay-toolbar {
@@ -2013,13 +2054,13 @@ body.sidebar-resizing .sidebar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 6px 12px;
   cursor: pointer;
   font-weight: 500;
 }
 .eic-section-header:hover { background: rgba(255,255,255,0.03); }
 .eic-section-body {
-  padding: 0 14px 14px;
+  padding: 0 12px 8px;
   border-top: 1px solid var(--border);
 }
 .eic-section-body.collapsed { display: none; }
@@ -2028,7 +2069,7 @@ body.sidebar-resizing .sidebar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
+  padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   font-size: 13px;
 }
@@ -2039,8 +2080,8 @@ body.sidebar-resizing .sidebar {
 /* ===== Batch Deconvolution ===== */
 .batch-deconv-sample-layout {
   display: grid;
-  grid-template-columns: minmax(0, 60fr) minmax(0, 20fr) minmax(0, 20fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr);
+  gap: 8px;
   align-items: stretch;
 }
 .batch-deconv-interactive {
@@ -2048,7 +2089,7 @@ body.sidebar-resizing .sidebar {
   background: #ffffff;
   border: none !important;
   border-radius: var(--radius);
-  padding: 8px;
+  padding: 0;
   min-height: 340px;
   height: 340px;
   overflow: hidden;
@@ -2057,6 +2098,7 @@ body.sidebar-resizing .sidebar {
 }
 .batch-deconv-interactive-plot {
   width: 100%;
+  min-width: 0;
   min-height: 0;
   height: 100%;
 }
@@ -2072,7 +2114,7 @@ body.sidebar-resizing .sidebar {
   background: #ffffff;
   border: none !important;
   border-radius: var(--radius);
-  padding: 4px;
+  padding: 0;
   width: 100%;
   min-height: 340px;
   height: 340px;
@@ -2082,6 +2124,7 @@ body.sidebar-resizing .sidebar {
 }
 .batch-deconv-tic-plot {
   width: 100%;
+  min-width: 0;
   min-height: 0;
   height: 100%;
 }
@@ -2108,10 +2151,8 @@ body.sidebar-resizing .sidebar {
 }
 .batch-deconv-preview img {
   display: block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 .batch-deconv-download-row {

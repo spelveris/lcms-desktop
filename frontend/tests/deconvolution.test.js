@@ -11,7 +11,7 @@ test('peptide QTOF panel gap and intact control padding are compact without chan
   assert.match(css, /\.reference-masses-panel\s*\{[^}]*margin:\s*0 0 8px;/);
   assert.doesNotMatch(css, /#reference-masses-panel[^{}]*~\s*\.tab-panel/);
   assert.match(css, /\.tab-panel\s*\{[^}]*padding:\s*10px;/);
-  assert.match(css, /\.deconv-controls\s*\{[^}]*padding:\s*10px 16px;/);
+  assert.match(css, /\.deconv-controls\s*\{[^}]*padding:\s*6px 12px;/);
   assert.match(css, /\.deconv-controls\s*>\s*\.toggle-expert\s*\{\s*margin-bottom:\s*0;/);
   assert.doesNotMatch(html, /In Deconvolute mode, drag over UV or TIC/);
   for (const id of ['deconv-sample-select', 'deconv-background-select', 'btn-auto-detect-window',
@@ -47,14 +47,14 @@ function fixture() {
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
 
-test('Single Sample halves vertical card gaps without changing other tabs or control padding',()=>{
+test('Single Sample uses compact cards and preserves molecule controls',()=>{
   const css=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
-  assert.match(css,/#tab-single > \.tab-toolbar,[\s\S]*?#tab-single \.plot-container\s*\{ margin-bottom: 8px; \}/);
+  assert.match(css,/#tab-single > \.tab-toolbar,[\s\S]*?padding: 6px 12px;[\s\S]*?margin-bottom: 8px;/);
   assert.match(css,/#tab-single > \.mz-toolbar\s*\{ margin-bottom: 6px; \}/);
   assert.match(css,/#tab-single > \.metrics-bar\s*\{ row-gap: 6px; \}/);
-  assert.match(css,/#tab-single \.plot-stack\s*\{ row-gap: 6px; \}/);
-  assert.match(css,/#single-results\s*\{ row-gap: 8px; \}/);
+  assert.match(css,/#tab-single \.plot-stack\s*\{ row-gap: 4px; \}/);
+  assert.match(css,/#single-results\s*\{ gap: 8px; \}/);
   assert.match(css,/\.tab-toolbar\s*\{[^}]*margin-bottom: 16px;[^}]*padding: 12px 16px;/);
   assert.match(css,/\.mz-toolbar\s*\{[^}]*margin-bottom: 12px;[^}]*padding: 8px 16px;/);
   assert.doesNotMatch(html,/Enter SMILES or draw a molecule, then compute and add target m\/z automatically/);
@@ -66,6 +66,43 @@ test('Single Sample halves vertical card gaps without changing other tabs or con
   run('setSingleSmilesResult("Calculated m/z: 123.456", "success")');
   assert.equal(result.textContent,'Calculated m/z: 123.456');
   assert.equal(result.style.color,'var(--success)');
+});
+
+test('clearing automatic areas retains manual windows and the original auto peaks can be restored', () => {
+  const {run,context}=fixture();
+  const manual={start:1,end:2,type:'manual',selected:true,area:4};
+  const automatic={start:0,end:1,type:'auto',selected:true,area:2};
+  context.manual=manual;context.automatic=automatic;
+  run(`state.eicBatchData={targets:[{times:[0,1,2],intensities:[0,4,0],peaks:[automatic,manual,{start:2,end:3}]}]};
+    state.eicBatchOriginalData={targets:[{peaks:[automatic]}]};
+    reRenderEICBatch=()=>{};toast=()=>{};`);
+  run('clearTargetAutoPeaks(0)');
+  assert.equal(run('state.eicBatchData.targets[0].peaks.length'),1);
+  assert.equal(run('state.eicBatchData.targets[0].peaks[0]'),manual);
+  assert.equal(run('state.eicBatchOriginalData.targets[0].peaks.length'),1);
+  run('resetTargetToAutoPeaks(0)');
+  assert.equal(run('state.eicBatchData.targets[0].peaks.length'),1);
+  assert.equal(run('state.eicBatchData.targets[0].peaks[0].type'),'auto');
+  assert.equal(run('state.eicBatchData.targets[0].peaks[0].start'),0);
+});
+
+test('progression role buttons update automatic labels while preserving custom labels and colours', () => {
+  const {run,context}=fixture();
+  run(`state.selectedFiles=[{path:'/a.D'},{path:'/b.D'},{path:'/c.D'}];
+    state.progressionAssignments={'/a.D':{role:'initial'},'/b.D':{role:'mid'},'/c.D':{role:'final'}};`);
+  const node=(path,value)=>({dataset:{path},value});
+  const nodes={
+    '.prog-role:checked':[node('/a.D','initial'),node('/b.D','final'),node('/c.D','final')],
+    '.prog-label':[node('/a.D','Initial'),node('/b.D','Mid'),node('/c.D','My final sample')],
+    '.prog-color':[node('/c.D','#123456')],
+  };
+  context.document.querySelectorAll=selector=>nodes[selector]||[];
+  run('readProgressionAssignmentsFromDOM()');
+  assert.equal(run('state.progressionAssignments["/b.D"].role'),'final');
+  assert.equal(run('state.progressionAssignments["/b.D"].userLabel'),false);
+  assert.equal(run('getProgressionSamples()[1].label'),'Final 1');
+  assert.equal(run('getProgressionSamples()[2].label'),'My final sample');
+  assert.equal(run('getProgressionSamples()[2].color'),'#123456');
 });
 
 function denseFixture(shift = 0) {
@@ -552,6 +589,28 @@ test('existing download controls and all export formats are preserved', () => {
   const formats = [...section.matchAll(/btn-export-deconv-masses" data-format="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(formats.sort(), ['pdf', 'pdf-dense', 'pdf-side-by-side', 'pdf-wide', 'png', 'svg']);
   assert.equal((section.match(/btn-export-ion-selection"/g) || []).length, 3);
+});
+
+test('batch preview uses SVG vectors and downloads still request the selected file format', async () => {
+  const {run,context,elements}=fixture();
+  const requests=[];
+  context.api={exportDeconvolutedMasses:async payload=>{requests.push(JSON.parse(JSON.stringify(payload)));return {};}};
+  elements.set('export-dpi',{value:'300'});
+  run(`buildCurrentDeconvStyle=()=>({fig_width:6,deconv_x_min_da:1000,deconv_x_max_da:50000});
+    backendResponseToBlob=async()=> 'vector';downloadBlob=()=>{};showLoading=hideLoading=toast=()=>{};`);
+  await run('fetchBatchDeconvPreviewBlob({name:"sample.D"},[{mass:37158.511,intensity:100}])');
+  assert.equal(requests[0].format,'svg');
+  for(const format of ['png','svg','pdf']) {
+    await run(`exportBatchDeconvWebappStyle({name:"sample.D"},[{mass:37158.511,intensity:100}],"${format}","plot")`);
+    assert.equal(requests.at(-1).format,format);
+    assert.deepEqual(requests.at(-1).components,requests[0].components);
+    assert.deepEqual(requests.at(-1).style,requests[0].style);
+  }
+  elements.set('plot',{classList:{contains:()=>true}});
+  const images=[];context.captureImage=(...args)=>{images.push(args);return '<svg/>';};
+  run('getExportDimensions=()=>({width:600,height:340});buildExportImage=captureImage;dataUrlToBlob=value=>value;');
+  assert.equal(await run('buildBatchDeconvPreviewFallbackBlob("plot")'),'<svg/>');
+  assert.equal(images[0][1],'svg');
 });
 
 test('mass-spectrum PDF payload remains clean, with no screen-only guides or colours', async () => {
