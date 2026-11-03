@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.66">
+  <link rel="stylesheet" href="css/style.css?v=0.2.67">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -420,8 +420,10 @@
         </div>
       </div>
       <div class="mz-toolbar">
-        <label>m/z Window: <span id="mz-window-val">0.5</span>
-          <input type="range" id="mz-window" min="0.1" max="2.0" value="0.5" step="0.1">
+        <label class="mz-window-control">m/z Window: ±
+          <input type="number" id="mz-window-number" min="0" value="0.5" step="0.1" aria-label="m/z window in Da">
+          Da
+          <input type="range" id="mz-window" min="0" max="1" value="0.5" step="0.1" aria-label="m/z window slider" title="Slider: 0–1 Da. Enter a larger window in the number field.">
         </label>
         <input type="number" id="single-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
         <select id="mz-add-polarity" class="mz-polarity-sel" title="Ionization mode for this m/z">
@@ -521,6 +523,9 @@
       <div class="tab-toolbar uptake-assay-toolbar">
         <label>Target m/z
           <input type="number" id="uptake-assay-mz" value="424.19" step="0.01" min="0">
+        </label>
+        <label class="uptake-assay-mz-window">m/z window: <span id="uptake-assay-mz-window-value">Exact</span>
+          <input type="range" id="uptake-assay-mz-window" min="0" max="1" value="0" step="0.1" title="Include target m/z ± this value. At 0, only exactly matching recorded m/z values are included.">
         </label>
         <label>Polarity
           <select id="uptake-assay-polarity">
@@ -763,6 +768,12 @@
         <button id="btn-export-timechange-tic-pdf" class="btn btn-sm" title="Generate TIC if needed, then export the diagonal Time Change TIC plot">PDF TIC</button>
         <div class="timechange-eic-controls">
           <label>EIC m/z<input type="number" id="timechange-eic-mz" step="0.01" min="0.01" placeholder="e.g. 203.00"></label>
+          <label class="timechange-eic-window-control">m/z Window (± Da)
+            <span class="timechange-eic-window-inputs">
+              <input type="number" id="timechange-eic-window-number" min="0" value="0.5" step="0.1" aria-label="Time Change m/z window in Da">
+              <input type="range" id="timechange-eic-window" min="0" max="1" value="0.5" step="0.1" aria-label="Time Change m/z window slider" title="Slider: 0–1 Da. Enter a larger window in the number field.">
+            </span>
+          </label>
           <label>Polarity
             <select id="timechange-eic-polarity">
               <option value="positive">Positive (+)</option>
@@ -970,10 +981,10 @@
     <div id="tab-run-router" class="tab-panel hidden">
       <div class="tab-toolbar router-toolbar">
         <label class="router-field router-field-wide">Read-only source folder
-          <input type="text" id="router-source-path" placeholder="\\\\169.254.107.1\\1\\Data or /Volumes/1/Data" spellcheck="false">
+          <input type="text" id="router-source-path" placeholder="Instrument data folder" spellcheck="false">
         </label>
         <label class="router-field router-field-wide">Initials folders root
-          <input type="text" id="router-initials-root" placeholder="\\\\nas22.ethz.ch\\chab_loc_lang_s1\\Group\\LC-MS Agilent data" spellcheck="false">
+          <input type="text" id="router-initials-root" placeholder="Shared LC-MS data folder" spellcheck="false">
         </label>
       </div>
       <div class="tab-toolbar router-toolbar">
@@ -1030,13 +1041,13 @@
 
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=0.2.63"></script>
-  <script src="js/charts.js?v=0.2.63"></script>
+  <script src="js/charts.js?v=0.2.67"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.63"></script>
+  <script src="js/app.js?v=0.2.67"></script>
 </body>
 </html>

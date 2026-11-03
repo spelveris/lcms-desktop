@@ -14,6 +14,7 @@ app_path="$2"
 receipt="$3"
 relaunch_arg="$4"
 log_file="$5"
+expected_version="$6"
 
 log_relaunch() {
   printf '%s %s\\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$log_file"
@@ -23,21 +24,29 @@ while kill -0 "$helper_pid" 2>/dev/null; do
   /bin/sleep 0.25
 done
 
-# LaunchServices can briefly retain the updater's CATrupole process identity.
-# Give it time to clear. A process name is not proof that a window opened:
-# wait for a receipt written after the main window is rendered and revealed.
+# Execute the newly installed bundle directly: LaunchServices can retain the
+# replaced application's identity/version. Confirm its visible main window.
 /bin/sleep 2
 attempt=1
 while [ "$attempt" -le 3 ]; do
   log_relaunch "Reopening CATrupole (attempt $attempt)."
-  /usr/bin/open -n "$app_path" --args "$relaunch_arg" >> "$log_file" 2>&1
+  if [ "$attempt" -eq 1 ]; then
+    "$app_path/Contents/MacOS/CATrupole" "$relaunch_arg" >> "$log_file" 2>&1 &
+  else
+    /usr/bin/open -n "$app_path" --args "$relaunch_arg" >> "$log_file" 2>&1
+  fi
   elapsed=0
   while [ "$elapsed" -lt 90 ]; do
     if [ -s "$receipt" ]; then
       details=$(/bin/cat "$receipt")
-      log_relaunch "CATrupole main window reopened successfully: $details"
+      version=$(/usr/bin/plutil -extract version raw -o - "$receipt" 2>/dev/null)
       /bin/rm -f "$receipt"
-      exit 0
+      if [ "$version" = "$expected_version" ]; then
+        log_relaunch "CATrupole main window reopened successfully: $details"
+        exit 0
+      fi
+      log_relaunch "Ignored main-window receipt for unexpected version: $details"
+      break
     fi
     /bin/sleep 1
     elapsed=$((elapsed + 1))
@@ -94,7 +103,11 @@ function runChecked(command, args) {
   return String(result.stdout || "").trim();
 }
 
-function scheduleRelaunchAfterHelperExit(appPath, spawnProcess = spawn) {
+function scheduleRelaunchAfterHelperExit(appPath, expectedVersion, spawnProcess = spawn) {
+  const version = normalizeVersion(expectedVersion);
+  if (!/^\d+\.\d+\.\d+(?:[-+].+)?$/.test(version)) {
+    throw new Error("A valid installed version is required to confirm relaunch.");
+  }
   const token = randomBytes(16).toString("hex");
   fs.mkdirSync(LOG_DIR, { recursive: true });
   const relauncher = spawnProcess("/bin/sh", [
@@ -106,6 +119,7 @@ function scheduleRelaunchAfterHelperExit(appPath, spawnProcess = spawn) {
     receiptPath(token),
     `${RELAUNCH_ARG}${token}`,
     LOG_FILE,
+    version,
   ], {
     detached: true,
     stdio: "ignore",
@@ -202,7 +216,7 @@ async function installUpdate(parentPid, zipPath, appPath, expectedVersion) {
     previousAppMoved = true;
     fs.renameSync(stagedAppPath, request.appPath);
 
-    scheduleRelaunchAfterHelperExit(request.appPath);
+    scheduleRelaunchAfterHelperExit(request.appPath, request.expectedVersion);
 
     fs.rmSync(backupPath, { recursive: true, force: true });
     previousAppMoved = false;
@@ -211,7 +225,8 @@ async function installUpdate(parentPid, zipPath, appPath, expectedVersion) {
     log(`Update failed: ${error.message}`);
     if (previousAppMoved) restorePreviousApp(request.appPath, backupPath, stagingRoot);
     try {
-      scheduleRelaunchAfterHelperExit(request.appPath);
+      scheduleRelaunchAfterHelperExit(request.appPath,
+        readBundleValue(request.appPath, "CFBundleShortVersionString"));
     } catch (_) {
       // The updater log preserves the original failure for support.
     }

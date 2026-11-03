@@ -46,6 +46,60 @@ const uv = [{nm: 278, wavelength: 278, times: [0, .1234567890123, 1], intensitie
 const tic = {times: [0, .1, .2], intensities: [3, 4, 5], has_dual_polarity: true,
   times_pos: [0, .1, .2], intensities_pos: [3, 4, 5], times_neg: [.02, .14], intensities_neg: [7, 9]};
 
+function windowControls(nodes) {
+  for (const id of ['mz-window', 'mz-window-number']) {
+    nodes.set(id, { value: '.5', listeners: {},
+      addEventListener(event, callback) { this.listeners[event] = callback; } });
+  }
+  return { slider: nodes.get('mz-window'), number: nodes.get('mz-window-number') };
+}
+
+test('Single Sample EIC slider covers zero to one while the numeric field accepts larger windows', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  assert.match(html, /id="mz-window" min="0" max="1" value="0.5" step="0.1"/);
+  assert.doesNotMatch(html.match(/<input[^>]+id="mz-window-number"[^>]*>/)[0], /\bmax=/);
+  const {run, nodes} = fixture();
+  const {slider, number} = windowControls(nodes);
+  run('initMzWindowControls()');
+  for (let step = 0; step <= 10; step += 1) {
+    slider.value = String(step / 10); slider.listeners.input();
+    assert.equal(Number(number.value), step / 10);
+    assert.equal(run('getMzWindow()'), step / 10);
+  }
+  number.value = '2.5'; number.listeners.input();
+  assert.equal(Number(slider.value), 1);
+  assert.equal(run('getMzWindow()'), 2.5);
+  slider.value = '.3'; slider.listeners.input();
+  assert.equal(run('getMzWindow()'), .3);
+});
+
+test('zero and manually entered EIC windows reach Single Sample analysis and PDF exports unchanged', async () => {
+  for (const width of [0, 2.5]) {
+    const {context, run, nodes, requests, response} = fixture();
+    const {number} = windowControls(nodes); number.value = String(width);
+    nodes.set('uv-smoothing', {value:'1'}); nodes.set('eic-smoothing', {value:'1'});
+    context.document.querySelector = () => ({value:'positive'});
+    context.api.getSingleSampleData = async payload => { requests.push(payload); return {}; };
+    context.api.exportSingleSample = async payload => { requests.push(payload); return response(); };
+    run(`getSelectedWavelengths=()=>[];renderSingleSample=()=>{};
+      renderReportSummary=()=>{};getReportSettingsPayload=()=>({});`);
+    await run('loadSingleSample()');
+    // Edits after generation must not silently change the exported EIC.
+    number.value = width === 0 ? '1' : '0';
+    nodes.get('single-sample-select').value = '/data/other.sirslt';
+    nodes.get('eic-smoothing').value = '9';
+    await run('exportSingle("pdf")');
+    await run('exportSingleCombinedEic("pdf")');
+    assert.equal(requests.length, 3);
+    assert.equal(requests[0].mzWindow, width);
+    assert.equal(requests[1].mz_window, width);
+    assert.equal(requests[2].mz_window, width);
+    assert.equal(requests[1].path, '/data/first.sirslt');
+    assert.equal(requests[2].path, '/data/first.sirslt');
+    assert.equal(requests[1].settings.eic_smoothing, 1);
+  }
+});
+
 test('UV and each TIC have their own downloads directly beneath the corresponding graph', () => {
   const {context, run, nodes} = fixture(); context.data = {uv: {wavelengths: uv}, tic};
   run('renderSingleSample(data)');

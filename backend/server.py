@@ -2587,7 +2587,8 @@ def _build_residual_ms_channel(
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": lcms_config.APP_VERSION}
+    return {"status": "ok", "version": lcms_config.APP_VERSION,
+            "instance_id": os.environ.get("LCMS_INSTANCE_ID", "")}
 
 
 @app.get("/api/config")
@@ -3869,6 +3870,13 @@ def export_single_chromatogram(payload: dict = Body(...)):
                     headers={'Content-Disposition': f'attachment; filename="{name}.{export_format}"'})
 
 
+def _eic_pdf_metadata(settings):
+    if not isinstance(settings, dict):
+        return None
+    return {"Subject": "CATrupole EIC extraction settings",
+            "Keywords": json.dumps(settings, ensure_ascii=True, separators=(",", ":"))}
+
+
 @app.post("/api/export-single-sample")
 def export_single_sample(payload: dict = Body(...)):
     """Export Simple Sample views through the backend for true vector PDF output."""
@@ -3944,7 +3952,9 @@ def export_single_sample(payload: dict = Body(...)):
             content = plotting.export_figure_svg(fig)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
-            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False,
+                metadata=_eic_pdf_metadata({"mz_window": mz_window, "targets": mz_targets,
+                                            "smoothing": eic_smoothing}))
             media_type = "application/pdf"
         else:
             content = plotting.export_figure(fig, dpi=dpi, format="png")
@@ -4109,7 +4119,8 @@ def export_uptake_assay_cc(payload: dict = Body(...)):
             content = plotting.export_figure_svg(fig, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
-            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False,
+                metadata=_eic_pdf_metadata(payload.get("eic_settings")))
             media_type = "application/pdf"
         else:
             content = plotting.export_figure(fig, dpi=dpi, format="png", tight=False)
@@ -4273,7 +4284,8 @@ def export_time_change(payload: dict = Body(...)):
             content = plotting.export_figure_pdf_matching_svg(fig, dpi=dpi, tight=False)
             media_type = "image/svg+xml"
         elif export_format == "pdf":
-            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False)
+            content = plotting.export_figure_pdf(fig, dpi=dpi, tight=False,
+                metadata=_eic_pdf_metadata(payload.get("eic_settings")))
             media_type = "application/pdf"
         else:
             content = plotting.export_figure(fig, dpi=dpi, format="png", tight=False)

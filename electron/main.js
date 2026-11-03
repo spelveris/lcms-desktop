@@ -11,11 +11,12 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const http = require("http");
+const { randomBytes } = require("crypto");
 const { autoUpdater } = require("electron-updater");
 const { fetchLatestRelease, isNewerVersion } = require("./update-checker");
 const { relaunchTokens, acknowledgeRelaunch } = require("./mac-relaunch");
 const { createStartupUpdateCleanup } = require("./update-cache");
+const { waitForPortRelease, waitForBackend, stopBackendProcess } = require("./backend-lifecycle");
 const pendingRelaunchTokens = new Set(relaunchTokens(process.argv));
 let confirmSuccessfulStartup;
 const cleanupStartupUpdates = createStartupUpdateCleanup({
@@ -32,6 +33,8 @@ const RELEASES_URL = "https://github.com/spelveris/lcms-desktop/releases";
 let mainWindow = null;
 let splashWindow = null;
 let backendProcess = null;
+let backendShutdownPromise = null;
+const backendInstanceId = randomBytes(16).toString("hex");
 let isQuitting = false;
 let backendReady = false;
 let mainWindowReady = false;
@@ -294,7 +297,7 @@ ipcMain.handle("updates:perform-action", async () => {
 
     sendUpdateStatus({ state: "installing", available: true, installable: true });
     isQuitting = true;
-    stopBackend();
+    await stopBackend();
     setImmediate(() => {
       if (process.platform === "darwin") app.quit();
       else autoUpdater.quitAndInstall(true, true);
@@ -375,6 +378,7 @@ function startBackend() {
     ...process.env,
     LCMS_PORT: String(BACKEND_PORT),
     LCMS_APP_VERSION: String(app.getVersion()),
+    LCMS_INSTANCE_ID: backendInstanceId,
     LCMS_USER_DATA_DIR: app.getPath("userData"),
   };
 
@@ -389,52 +393,49 @@ function startBackend() {
     backendEnv.LCMS_NODE = process.execPath;
   }
 
-  backendProcess = spawn(backendCmd.cmd, backendCmd.args, {
+  const child = spawn(backendCmd.cmd, backendCmd.args, {
     cwd: backendCmd.cwd,
     env: backendEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  backendProcess = child;
 
-  backendProcess.stdout.on("data", (data) => {
+  child.stdout.on("data", (data) => {
     console.log(`[backend] ${data.toString().trim()}`);
   });
 
-  backendProcess.stderr.on("data", (data) => {
+  child.stderr.on("data", (data) => {
     console.error(`[backend] ${data.toString().trim()}`);
+    logStartup(`Backend: ${data.toString().trim()}`);
   });
 
-  backendProcess.on("close", (code) => {
+  child.on("error", error => {
+    logStartup(`Backend launch failed: ${error.message}`);
+    if (backendProcess === child) backendProcess = null;
+  });
+  child.on("close", (code) => {
     console.log(`[backend] exited with code ${code}`);
-    backendProcess = null;
+    logStartup(`Backend exited with code ${code}.`);
+    if (backendProcess === child) backendProcess = null;
   });
 }
 
 function stopBackend() {
-  if (backendProcess) {
-    backendProcess.kill("SIGTERM");
-    backendProcess = null;
-  }
+  if (backendShutdownPromise) return backendShutdownPromise;
+  const child = backendProcess;
+  backendShutdownPromise = stopBackendProcess(child).finally(() => {
+    if (backendProcess === child) backendProcess = null;
+    backendShutdownPromise = null;
+  });
+  return backendShutdownPromise;
 }
 
-/** Poll /api/health until the backend responds. */
-function waitForBackend(retries = 120, interval = 500) {
-  return new Promise((resolve, reject) => {
-    let attempts = 0;
-    const check = () => {
-      attempts++;
-      http
-        .get(`${BACKEND_URL}/api/health`, (res) => {
-          if (res.statusCode === 200) return resolve();
-          if (attempts < retries) return setTimeout(check, interval);
-          reject(new Error("Backend did not become healthy"));
-        })
-        .on("error", () => {
-          if (attempts < retries) return setTimeout(check, interval);
-          reject(new Error("Backend did not start"));
-        });
-    };
-    check();
-  });
+function logStartup(message) {
+  try {
+    const directory = app.getPath("logs");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.appendFileSync(path.join(directory, "startup.log"), `${new Date().toISOString()} ${message}\n`);
+  } catch (_) { /* Diagnostics must not prevent startup. */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -612,23 +613,33 @@ function restoreOrCreateMainWindow() {
 
 if (gotSingleInstanceLock) {
   app.on("second-instance", (_event, argv) => {
+    if (isQuitting) return;
     relaunchTokens(argv).forEach((token) => pendingRelaunchTokens.add(token));
     restoreOrCreateMainWindow();
     confirmRelaunchIfReady();
   });
 
   app.whenReady().then(async () => {
+    logStartup(`Starting CATrupole ${app.getVersion()}, pid ${process.pid}, executable ${process.execPath}.`);
     createSplashWindow();
-    startBackend();
 
     try {
-      await waitForBackend();
+      await waitForPortRelease(BACKEND_PORT);
+      if (isQuitting) return;
+      startBackend();
+      await waitForBackend({ url: BACKEND_URL, version: String(app.getVersion()),
+        instanceId: backendInstanceId, isRunning: () => Boolean(backendProcess)
+          && backendProcess.exitCode == null && backendProcess.signalCode == null });
+      if (isQuitting) return;
       backendReady = true;
+      logStartup("Current backend is ready.");
     } catch (err) {
+      if (isQuitting) return;
+      logStartup(`Startup failed: ${err.message}`);
       closeSplashWindow();
       dialog.showErrorBox(
         "Backend Error",
-        "Could not start the CATrupole backend.\nIf this is the first launch after an update, wait a moment and try opening the app again.\n\n" +
+        "Could not start the CATrupole backend.\n\n" +
           err.message
       );
       app.quit();
@@ -636,17 +647,17 @@ if (gotSingleInstanceLock) {
     }
 
     createWindow();
+    logStartup("Opening the main window.");
     startUpdateChecks();
   });
 
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
-      stopBackend();
       app.quit();
     }
   });
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
     if (process.platform === "darwin" && updateStatus.state === "ready" && !macUpdateHelperStarted) {
       try {
         launchMacUpdateHelper();
@@ -660,10 +671,14 @@ if (gotSingleInstanceLock) {
       updateCheckTimer = null;
     }
     closeSplashWindow();
-    stopBackend();
+    if (backendProcess || backendShutdownPromise) {
+      event.preventDefault();
+      stopBackend().finally(() => app.quit());
+    }
   });
 
   app.on("activate", () => {
+    if (isQuitting) return;
     restoreOrCreateMainWindow();
   });
 }

@@ -1164,6 +1164,8 @@ def export_figure(
     dpi: int = config.EXPORT_DPI,
     format: str = 'png',
     tight: bool = True,
+    *,
+    metadata: Optional[dict] = None,
 ) -> bytes:
     """
     Export figure to bytes in specified format with transparent background.
@@ -1191,6 +1193,7 @@ def export_figure(
         facecolor='none',
         edgecolor='none',
         transparent=True,
+        **({'metadata': metadata} if metadata is not None else {}),
     )
     buf.seek(0)
     return buf.getvalue()
@@ -1461,9 +1464,11 @@ def export_figure_pdf(
     fig: matplotlib.figure.Figure,
     dpi: int = config.EXPORT_DPI,
     tight: bool = True,
+    *,
+    metadata: Optional[dict] = None,
 ) -> bytes:
     """Export figure to PDF bytes."""
-    return export_figure(fig, dpi=dpi, format='pdf', tight=tight)
+    return export_figure(fig, dpi=dpi, format='pdf', tight=tight, metadata=metadata)
 
 
 def export_figure_to_file(fig: matplotlib.figure.Figure, filepath: str, dpi: int = config.EXPORT_DPI) -> None:

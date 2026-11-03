@@ -8,6 +8,38 @@ Starting with version `0.2.43`, CATrupole checks GitHub when it starts and once 
 
 Version `0.2.43` is the one-time bridge and must be installed manually. Later versions can update from inside CATrupole.
 
+### Restart handoff and startup (v0.2.67)
+
+CATrupole waits for its backend to exit before quitting for installation. The
+next launch waits for the previous backend port to be released and confirms
+both the backend version and a unique launch identifier, with bounded health
+requests. On macOS, the helper first executes the newly installed app directly,
+retains LaunchServices as a fallback, and accepts a visible-window receipt only
+for the installed version. Startup diagnostics are saved locally in the app's
+logs directory. The startup animation retains its moving dots without the
+outer blue ring.
+
+Uptake Assay CC has a compact Calibration/Sample role toggle and its own
+target m/z window slider, from 0 to ±1 Da in 0.1 Da steps (default 0, Exact).
+The selected window is used for EICs, automatic time-window detection, and
+calibration/sample areas. Zero includes only exactly matching recorded m/z
+values; it does not select the nearest mass or substitute the default window.
+
+Single Sample uses a 0–1 Da EIC window slider in 0.1 Da steps, with a numeric
+field for larger windows. Time Change has the same controls beside its EIC
+target, independent of Single Sample. Zero remains zero in analysis and exports.
+Generated data retain the extraction settings; Single Sample PDFs reuse that
+snapshot, and the Time Change PDF EIC button regenerates when its window changes.
+PDF metadata and session JSON retain the EIC settings, including Uptake Assay
+results. Graph hover labels show up to 25 characters of the trace name, ten more
+than before.
+
+The charge-series check also requires one consecutive supporting run to carry
+at least 60% of the candidate's significant per-charge intensity. A long list
+of weak matches can no longer validate stronger, disconnected assignments.
+This applies in both charge-envelope passes, without excluding fixed m/z values
+or changing the raw spectrum. It is an evidence filter, not proof of identity.
+
 ## Single Sample chromatogram downloads (v0.2.66)
 
 Each UV plot and positive/negative TIC has its own **Download CSV**, **Download

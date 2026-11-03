@@ -26,7 +26,7 @@ const WEBAPP_LAYOUT = {
   xaxis: { gridcolor: 'rgba(0,0,0,0.3)', zeroline: false, color: '#000000', linecolor: '#000000', mirror: false, showline: true, automargin: true },
   yaxis: { gridcolor: 'rgba(0,0,0,0.3)', zeroline: false, color: '#000000', linecolor: '#000000', mirror: false, showline: true, exponentformat: 'e', showexponent: 'all', automargin: true },
   legend: { bgcolor: 'rgba(0,0,0,0)', borderwidth: 0, font: { color: '#000000', size: 8 } },
-  hoverlabel: { bgcolor: '#ffffff', bordercolor: '#999999', font: { color: '#000000', size: 9 } },
+  hoverlabel: { bgcolor: '#ffffff', bordercolor: '#999999', namelength: 25, font: { color: '#000000', size: 9 } },
   modebar: { bgcolor: 'rgba(255,255,255,0.9)', color: '#444444', activecolor: '#1f77b4' },
 };
 

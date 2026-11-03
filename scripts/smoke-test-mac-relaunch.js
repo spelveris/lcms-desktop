@@ -15,7 +15,7 @@ async function main() {
   const expectedVersion = require('../package.json').version;
   const logFile = path.join(os.homedir(), 'Library/Logs/CATrupole/updater.log');
   const before = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').length : 0;
-  const child = spawn(executable, ['-e', `require(${JSON.stringify(helper)}).scheduleRelaunchAfterHelperExit(${JSON.stringify(appPath)})`], {
+  const child = spawn(executable, ['-e', `require(${JSON.stringify(helper)}).scheduleRelaunchAfterHelperExit(${JSON.stringify(appPath)}, ${JSON.stringify(expectedVersion)})`], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit',
   });
   await new Promise((resolve, reject) => {

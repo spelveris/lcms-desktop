@@ -1343,12 +1343,27 @@ function initTabs() {
 }
 
 // ===== Settings =====
+function getMzWindow(prefix = 'mz-window') {
+  const field = document.getElementById(`${prefix}-number`) || document.getElementById(prefix);
+  const value = parseFloat(field?.value);
+  return Number.isFinite(value) ? Math.max(0, value) : 0.5;
+}
+
+function initMzWindowControls(prefix = 'mz-window') {
+  const slider = document.getElementById(prefix);
+  const number = document.getElementById(`${prefix}-number`);
+  if (!slider || !number) return;
+  slider.addEventListener('input', () => { number.value = slider.value; });
+  const syncSlider = () => { slider.value = String(Math.min(1, getMzWindow(prefix))); };
+  number.addEventListener('input', syncSlider);
+  syncSlider();
+}
+
 function initSettings() {
   // Slider value displays
   const sliderMap = {
     'uv-smoothing': 'uv-smooth-val',
     'eic-smoothing': 'eic-smooth-val',
-    'mz-window': 'mz-window-val',
     'export-dpi': 'dpi-val',
     'fig-width': 'fig-width-val',
     'line-width': 'line-width-val',
@@ -1362,12 +1377,7 @@ function initSettings() {
     }
   });
 
-  // m/z window slider (now in Single Sample tab toolbar)
-  const mzWindowSlider = document.getElementById('mz-window');
-  const mzWindowVal = document.getElementById('mz-window-val');
-  if (mzWindowSlider && mzWindowVal) {
-    mzWindowSlider.addEventListener('input', () => { mzWindowVal.textContent = mzWindowSlider.value; });
-  }
+  initMzWindowControls();
 
   // Clear all m/z buttons
   const clearMzBtn = document.getElementById('btn-clear-mz');
@@ -1783,7 +1793,7 @@ async function initializeBrowsePath() {
     // Ignore and keep fallbacks below.
   }
 
-  candidates.push('/Users/dspelveris', '/Volumes', '/');
+  candidates.push('/Volumes', '/');
 
   const seen = new Set();
   for (const p of candidates) {
@@ -2300,7 +2310,7 @@ async function loadBackgroundSubtraction() {
   const wavelengths = getSelectedWavelengths();
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value, 10);
   const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value, 10);
-  const mzWindow = parseFloat(document.getElementById('mz-window').value);
+  const mzWindow = getMzWindow();
 
   state.backgroundSubtractInFlight = true;
   showLoading('Subtracting background...');
@@ -2975,24 +2985,19 @@ async function loadSingleSample(options = {}) {
   const ionMode = document.querySelector('input[name="ion-mode"]:checked').value;
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value);
   const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value);
-  const mzWindow = parseFloat(document.getElementById('mz-window').value);
+  const mzWindow = getMzWindow();
 
   state.singleLoadInFlight = true;
+  const analysisSettings = {
+    path: samplePath, wavelengths: [...wavelengths], ionMode, uvSmoothing, eicSmoothing,
+    mzWindow, mzTargets: state.mzTargets.map(target => typeof target === 'object' ? {...target} : target),
+  };
   showLoading('Analyzing sample...');
   try {
     state.singleSpectrumSelections = {};
-    const data = await api.getSingleSampleData({
-      path: samplePath,
-      wavelengths,
-      ionMode,
-      uvSmoothing,
-      eicSmoothing,
-      mzTargets: state.mzTargets,
-      mzWindow,
-    });
-
-    state.singleSampleData = data;
-    renderSingleSample(data);
+    const data = await api.getSingleSampleData(analysisSettings);
+    state.singleSampleData = { ...data, analysisSettings };
+    renderSingleSample(state.singleSampleData);
     renderReportSummary();
     toast('Sample loaded successfully', 'success');
   } catch (err) {
@@ -3287,7 +3292,8 @@ async function exportSingle(format) {
   }
   const fileBase = getSingleSampleFilenameBase('single_sample');
   if (format === 'pdf') {
-    const samplePath = document.getElementById('single-sample-select')?.value || '';
+    const exportContext = getSingleSampleExportContext();
+    const samplePath = exportContext.path;
     if (!samplePath) {
       toast('Select a sample first', 'warning');
       return;
@@ -3300,9 +3306,7 @@ async function exportSingle(format) {
         kind: 'overview',
         format: 'pdf',
         dpi,
-        mz_window: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
-        mz_targets: state.mzTargets,
-        settings: getReportSettingsPayload(),
+        ...exportContext,
       });
       const blob = await response.blob();
       const filename = getFilenameFromContentDisposition(
@@ -3327,11 +3331,27 @@ async function exportSingle(format) {
 }
 
 function getSingleSampleFilenameBase(fallback = 'single_sample') {
-  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const samplePath = state.singleSampleData?.analysisSettings?.path || document.getElementById('single-sample-select')?.value || '';
   const selected = state.selectedFiles.find((f) => f.path === samplePath);
   let sampleName = selected?.name || (samplePath ? samplePath.split(/[\\/]/).pop() : '') || fallback;
   if (sampleName.toLowerCase().endsWith('.d')) sampleName = sampleName.slice(0, -2);
   return sanitizeFilename(sampleName || fallback);
+}
+
+function getSingleSampleExportContext() {
+  const saved = state.singleSampleData?.analysisSettings;
+  const settings = getReportSettingsPayload();
+  if (saved) {
+    settings.uv_wavelengths = saved.wavelengths;
+    settings.uv_smoothing = saved.uvSmoothing;
+    settings.eic_smoothing = saved.eicSmoothing;
+  }
+  return {
+    path: saved?.path || document.getElementById('single-sample-select')?.value || '',
+    mz_window: saved?.mzWindow ?? getMzWindow(),
+    mz_targets: saved?.mzTargets ?? state.mzTargets,
+    settings,
+  };
 }
 
 async function exportSingleCombinedEic(format) {
@@ -3341,7 +3361,8 @@ async function exportSingleCombinedEic(format) {
   }
   const fileBase = `${getSingleSampleFilenameBase('single_sample')}_extracted_ion_chromatograms`;
   if (format === 'pdf') {
-    const samplePath = document.getElementById('single-sample-select')?.value || '';
+    const exportContext = getSingleSampleExportContext();
+    const samplePath = exportContext.path;
     if (!samplePath) {
       toast('Select a sample first', 'warning');
       return;
@@ -3354,9 +3375,7 @@ async function exportSingleCombinedEic(format) {
         kind: 'eic-overlay',
         format: 'pdf',
         dpi,
-        mz_window: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
-        mz_targets: state.mzTargets,
-        settings: getReportSettingsPayload(),
+        ...exportContext,
       });
       const blob = await response.blob();
       const filename = getFilenameFromContentDisposition(
@@ -4730,12 +4749,13 @@ function getUptakeAssaySamples(options = {}) {
 }
 
 function getUptakeAssaySettings() {
+  const windowValue = parseFloat(document.getElementById('uptake-assay-mz-window')?.value ?? '0');
   return {
     mz: parseFloat(document.getElementById('uptake-assay-mz')?.value),
     polarity: document.getElementById('uptake-assay-polarity')?.value === 'negative' ? 'negative' : 'positive',
     start: parseFloat(document.getElementById('uptake-assay-start')?.value),
     end: parseFloat(document.getElementById('uptake-assay-end')?.value),
-    mzWindow: parseFloat(document.getElementById('mz-window')?.value || '0.5') || 0.5,
+    mzWindow: Number.isFinite(windowValue) ? Math.max(0, Math.min(1, windowValue)) : 0,
     smooth: parseInt(document.getElementById('eic-smoothing')?.value, 10) || 0,
   };
 }
@@ -4995,10 +5015,16 @@ function renderUptakeAssayEntries() {
         <div class="uptake-assay-sample-path">${escapeHtml(file.path)}</div>
       </td>
       <td>
-        <select class="uptake-assay-role uptake-assay-role-select" data-path="${escapeAttr(file.path)}">
-          <option value="calibration" ${role === 'calibration' ? 'selected' : ''}>Calibration</option>
-          <option value="sample" ${role === 'sample' ? 'selected' : ''}>Assay Sample</option>
-        </select>
+        <div class="uptake-assay-role-toggle" role="radiogroup" aria-label="Role for ${escapeAttr(stripUptakeAssayBundleSuffix(String(file.name || '')))}">
+          <label>
+            <input type="radio" class="uptake-assay-role" name="uptake-assay-role-${index}" data-path="${escapeAttr(file.path)}" value="calibration" ${role === 'calibration' ? 'checked' : ''}>
+            <span>Calibration</span>
+          </label>
+          <label>
+            <input type="radio" class="uptake-assay-role" name="uptake-assay-role-${index}" data-path="${escapeAttr(file.path)}" value="sample" ${role === 'sample' ? 'checked' : ''}>
+            <span>Sample</span>
+          </label>
+        </div>
       </td>
       <td class="uptake-assay-concentration-cell"><input type="number" class="uptake-assay-concentration" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.concentration ?? '')}" step="0.01" min="0" ${role === 'calibration' ? '' : 'disabled'}></td>
       <td class="uptake-assay-label-cell"><input type="text" class="uptake-assay-label" data-path="${escapeAttr(file.path)}" value="${escapeAttr(entry.assayLabel ?? stripUptakeAssayBundleSuffix(String(file.name || '')))}" ${role === 'sample' ? '' : 'disabled'}></td>
@@ -5025,6 +5051,7 @@ function renderUptakeAssayEntries() {
 
   container.querySelectorAll('.uptake-assay-role').forEach((input) => {
     input.addEventListener('change', () => {
+      if (!input.checked) return;
       const path = input.dataset.path;
       if (!path) return;
       const entry = state.uptakeAssayEntries[path] || {};
@@ -5043,6 +5070,7 @@ function renderUptakeAssayEntries() {
       } else {
         renderUptakeAssayEntries();
       }
+      container.querySelector(`input[name="${input.name}"]:checked`)?.focus({ preventScroll: true });
     });
   });
 
@@ -5238,6 +5266,7 @@ async function runUptakeAssayCC() {
       start: settings.start,
       end: settings.end,
       mzWindow: settings.mzWindow,
+      smoothing: settings.smooth,
       samples: sampleResults,
     };
     renderUptakeAssayData(state.uptakeAssayData);
@@ -5269,6 +5298,9 @@ async function exportUptakeAssayCCPdf() {
   showLoading('Exporting PDF...');
   try {
     const response = await api.exportUptakeAssayCC({
+      eic_settings: { target_mz: state.uptakeAssayData.mz, mz_window: state.uptakeAssayData.mzWindow,
+        ion_mode: state.uptakeAssayData.polarity, smoothing: state.uptakeAssayData.smoothing,
+        start: state.uptakeAssayData.start, end: state.uptakeAssayData.end },
       points,
       fit,
       title: buildUptakeAssayCurveTitle(state.uptakeAssayData),
@@ -5293,6 +5325,16 @@ async function exportUptakeAssayCCPdf() {
 }
 
 function initUptakeAssayCC() {
+  const windowSlider = document.getElementById('uptake-assay-mz-window');
+  const windowLabel = document.getElementById('uptake-assay-mz-window-value');
+  const updateWindowLabel = () => {
+    const width = getUptakeAssaySettings().mzWindow;
+    const text = width === 0 ? 'Exact' : `±${width.toFixed(1)} Da`;
+    if (windowLabel) windowLabel.textContent = text;
+    windowSlider?.setAttribute('aria-valuetext', width === 0 ? 'Exact recorded m/z only' : text);
+  };
+  windowSlider?.addEventListener('input', updateWindowLabel);
+  updateWindowLabel();
   document.getElementById('btn-uptake-assay-auto-window')?.addEventListener('click', autoDetectUptakeAssayWindow);
   document.getElementById('btn-uptake-assay-run')?.addEventListener('click', runUptakeAssayCC);
   document.getElementById('btn-uptake-assay-export-pdf')?.addEventListener('click', exportUptakeAssayCCPdf);
@@ -5398,7 +5440,7 @@ async function loadProgression() {
   const wavelengths = getSelectedWavelengths();
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value);
   const eicSmoothing = parseInt(document.getElementById('eic-smoothing').value);
-  const mzWindow = parseFloat(document.getElementById('mz-window').value);
+  const mzWindow = getMzWindow();
 
   state.progressionLoadInFlight = true;
   showLoading('Generating progression...');
@@ -5787,7 +5829,7 @@ async function runEICBatch() {
       data = await api.runEICBatch({
         path: samplePath,
         targets: state.mzTargets,
-        mz_window: parseFloat(document.getElementById('mz-window').value),
+        mz_window: getMzWindow(),
         smoothing: parseInt(document.getElementById('eic-smoothing').value, 10),
       });
       data.mode = 'eic';
@@ -8491,6 +8533,7 @@ function exportBatchDeconvCSV() {
 
 // ===== Time Change Tab =====
 function initTimeChangeMS() {
+  initMzWindowControls('timechange-eic-window');
   document.getElementById('btn-run-time-change-ms').addEventListener('click', () => runTimeChangeMS('ms'));
   document.getElementById('btn-run-time-change-tic')?.addEventListener('click', () => runTimeChangeMS('tic'));
   document.getElementById('btn-run-time-change-eic')?.addEventListener('click', () => runTimeChangeMS('eic'));
@@ -8561,7 +8604,7 @@ function getTimeChangeEICSettings() {
   return {
     mz,
     ionMode,
-    mzWindow: parseFloat(document.getElementById('mz-window')?.value) || 0.5,
+    mzWindow: getMzWindow('timechange-eic-window'),
     smoothing: parseInt(document.getElementById('eic-smoothing')?.value, 10) || 0,
   };
 }
@@ -8743,6 +8786,7 @@ async function runTimeChangeMS(kind = 'ms') {
       targetMz: eicSettings?.mz ?? null,
       ionMode: eicSettings?.ionMode ?? null,
       mzWindow: eicSettings?.mzWindow ?? null,
+      smoothing: eicSettings?.smoothing ?? null,
       spectra,
     };
     renderTimeChangeMS(state.timeChangeMSData);
@@ -8999,6 +9043,9 @@ async function exportTimeChangeOffset(format) {
   showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
   try {
     const response = await api.exportTimeChange({
+      eic_settings: kind === 'eic' ? { target_mz: state.timeChangeMSData.targetMz,
+        mz_window: state.timeChangeMSData.mzWindow, ion_mode: state.timeChangeMSData.ionMode,
+        smoothing: state.timeChangeMSData.smoothing } : null,
       format,
       dpi,
       filename_base: filenameBase,
@@ -9058,7 +9105,8 @@ async function exportTimeChangeEICPdf() {
   const matchesCurrent = current?.kind === 'eic'
     && Math.abs(Number(current.targetMz) - requested.mz) < 1e-9
     && current.ionMode === requested.ionMode
-    && Math.abs(Number(current.mzWindow) - requested.mzWindow) < 1e-9;
+    && Math.abs(Number(current.mzWindow) - requested.mzWindow) < 1e-9
+    && Number(current.smoothing) === requested.smoothing;
   if (!matchesCurrent) {
     const generated = await runTimeChangeMS('eic');
     if (!generated) return;
@@ -9151,6 +9199,7 @@ function exportSessionJSON() {
     mz_targets: state.mzTargets,
     analyses: {
       single_sample: state.singleSampleData,
+      uptake_assay: state.uptakeAssayData ? { ...state.uptakeAssayData, assignments: state.uptakeAssayEntries } : null,
       progression: state.progressionData,
       area_calculation: state.eicBatchData,
       eic_batch: state.eicBatchData,

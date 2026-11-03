@@ -39,6 +39,23 @@ class ChargeSeriesTests(unittest.TestCase):
         self.assertFalse(supported(ions([5, 10, 11, 17, 23, 27, 31, 40], [1000]*8)))
         self.assertFalse(supported(ions([5, 6, 7, 10, 15], [1000]*5)))
 
+    def test_weak_consecutive_core_cannot_validate_stronger_disconnected_assignments(self):
+        # Six consecutive charges satisfy count and effective-charge tests,
+        # but the isolated spike still carries most of the measured intensity.
+        for mass in [8100., 16800., 43500.]:
+            points = ions([8, 9, 10, 11, 12, 13, 19, 21],
+                          [6000, 8000, 14000, 10000, 6000, 4000, 5000, 64000], mass)
+            self.assertFalse(supported(points))
+            self.assertEqual(analysis._supported_charge_series(
+                points, min_peaks=3, contig_min=3, noise_cutoff=100., abundance_cutoff=.05), [])
+
+    def test_supported_series_can_include_weak_disconnected_tail_charges(self):
+        self.assertTrue(supported(ions([8, 9, 10, 11, 12, 13, 19, 21],
+                                      [6000, 8000, 14000, 10000, 6000, 4000, 1000, 900])))
+
+    def test_dominant_peak_with_real_adjacent_support_is_retained(self):
+        self.assertTrue(supported(ions(range(8, 14), [1000, 1500, 5500, 1000, 500, 500])))
+
     def test_weak_coherent_series_is_accepted_independently_of_other_species(self):
         self.assertTrue(supported(ions([8, 9, 10, 11], [300, 500, 450, 280])))
 

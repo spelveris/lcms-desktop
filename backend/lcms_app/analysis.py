@@ -886,15 +886,26 @@ def _has_supported_charge_series(
         return False
 
     longest = current = 1
+    run_intensity = supported[0][1]
+    supported_run_intensity = run_intensity if contig_min <= 1 else 0.0
     for previous, following in zip(supported, supported[1:]):
-        current = current + 1 if following[0] == previous[0] + 1 else 1
+        consecutive = following[0] == previous[0] + 1
+        current = current + 1 if consecutive else 1
+        run_intensity = run_intensity + following[1] if consecutive else following[1]
         longest = max(longest, current)
+        if current >= contig_min:
+            supported_run_intensity = max(supported_run_intensity, run_intensity)
     if longest < contig_min:
         return False
     # Preserve the main pass's existing ladder requirements in both passes.
     count = len(supported)
     required = 6 if count >= 8 else 4 if count >= 4 else contig_min
     if count >= 4 and (longest < max(contig_min, required) or longest / count < .60):
+        return False
+    # Counting weak coincidences is insufficient when most signal belongs to
+    # disconnected charge assignments. A consecutive supporting series must
+    # also carry most of the candidate's significant per-charge intensity.
+    if supported_run_intensity < .60 * sum(y for _, y in supported):
         return False
     return True
 

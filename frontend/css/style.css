@@ -868,6 +868,9 @@ body.sidebar-resizing .sidebar {
 .timechange-eic-controls input[type="number"] {
   width: 100px;
 }
+.timechange-eic-window-inputs { display: inline-flex; align-items: center; gap: 6px; }
+.timechange-eic-window-inputs input[type="range"] { width: 100px; }
+.timechange-eic-window-inputs input[type="number"] { width: 70px; }
 
 .tab-toolbar .timechange-eic-controls select {
   min-width: 116px;
@@ -923,6 +926,9 @@ body.sidebar-resizing .sidebar {
 }
 .mz-toolbar input[type="number"] {
   width: 120px;
+}
+.mz-toolbar .mz-window-control input[type="number"] {
+  width: 70px;
 }
 .masscalc-query-label {
   display: flex;
@@ -1869,6 +1875,9 @@ body.sidebar-resizing .sidebar {
 .uptake-assay-toolbar select {
   width: 100%;
 }
+.uptake-assay-toolbar .uptake-assay-mz-window {
+  width: 170px;
+}
 .uptake-assay-samples {
   margin-bottom: 12px;
 }
@@ -1929,8 +1938,46 @@ body.sidebar-resizing .sidebar {
 .uptake-assay-label-cell input[disabled] {
   opacity: 0.5;
 }
-.uptake-assay-role-select {
-  min-width: 130px;
+.uptake-assay-role-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  white-space: nowrap;
+}
+.uptake-assay-role-toggle label {
+  position: relative;
+  margin: 0;
+  cursor: pointer;
+}
+.uptake-assay-role-toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+}
+.uptake-assay-role-toggle span {
+  display: block;
+  padding: 5px 8px;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.uptake-assay-role-toggle label:hover span {
+  background: var(--accent-light);
+}
+.uptake-assay-role-toggle input:checked + span {
+  background: var(--accent);
+  color: #fff;
+}
+.uptake-assay-role-toggle input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .uptake-assay-calc {
   font-family: var(--font-mono);
