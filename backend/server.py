@@ -48,6 +48,7 @@ if LCMS_APP_DIR and os.path.isdir(LCMS_APP_DIR):
 # Import existing modules
 import qtof_deconvolution
 import qtof_profile_fit
+import charge_profile
 from data_reader import (
     OLAX_CONTAINER_SUFFIX,
     RSLT_CONTAINER_SUFFIX,
@@ -863,6 +864,24 @@ def _sum_agilent_centroid_cdf_spectra(path_str: str, start: float, end: float) -
             summed += np.interp(base_mz, mz, intensity, left=0.0, right=0.0)
 
     return base_mz, summed
+
+
+def _deconvolution_family(sample, path):
+    """Give instrument metadata priority; QTOF and Pro iQ can both be .sirslt."""
+    if getattr(sample, 'qtof_info', None) is not None:
+        return 'qtof'
+    base, _ = split_virtual_sample_path(str(path))
+    if Path(base).suffix.lower() == '.d':
+        return 'legacy'
+    if (getattr(sample, '_debug_info', {}) or {}).get('sirslt_ms_source') in {'MSProfile.bin', 'MSPeak.bin'}:
+        return 'proiq'
+    return 'unknown'
+
+
+def _charge_profile_available(sample, path):
+    return _deconvolution_family(sample, path) == 'proiq' and (
+        (getattr(sample, '_debug_info', {}) or {}).get('sirslt_ms_source') == 'MSProfile.bin'
+        or _find_agilent_centroid_cdf_path(path) is not None)
 
 
 def _sanitize_filename(name: str, fallback: str = "sample") -> str:
@@ -2143,6 +2162,7 @@ def _serialize_deconvolution_components(components: list[dict]) -> list[dict]:
             "ion_intensities": comp.get("ion_intensities", []),
             **({'ion_display_peaks':comp['ion_display_peaks']} if 'ion_display_peaks' in comp else {}),
             **({'mass_display_decimals':comp['mass_display_decimals']} if 'mass_display_decimals' in comp else {}),
+            **({key:comp[key] for key in ('charge_profile','profile_agreement','reconstruction_kind') if key in comp} if comp.get('charge_profile') else {}),
             **({key:comp.get(key) for key in ('isotope_aware','fit_score','scan_count','ion_mono_mzs','envelopes','isotope_ambiguous')} if comp.get('isotope_aware') else {}),
         })
     return results
@@ -2201,7 +2221,15 @@ def _run_report_deconvolution(
         smoothing_reference_step=0.01 if qtof else None,
     )
 
-    if bool(params["include_singly_charged"]) and int(params["min_charge"]) <= 1:
+    if params['intact_method'] == 'charge-profile':
+        components = charge_profile.reconstruct(mz_arr, intensity_arr, components,
+            pwhh=float(params['pwhh']), min_peaks=int(params['min_peaks']),
+            contig_min=int(params['contig_min']), mw_agreement=float(params['mw_agreement']),
+            centroid_cutoff=float(params['mw_assign_cutoff']), profile_agreement=float(params['envelope_cutoff']),
+            noise_cutoff=float(params['noise_cutoff']), abundance_cutoff=float(params['abundance_cutoff']),
+            use_monoisotopic=bool(params['use_monoisotopic']))['components']
+
+    if params['intact_method'] != 'charge-profile' and bool(params["include_singly_charged"]) and int(params["min_charge"]) <= 1:
         exclude_ranges = []
         for comp in components:
             mzs = comp.get("ion_mzs", [])
@@ -2241,7 +2269,8 @@ def _format_deconvolution_parameters_for_report(raw_params: Optional[dict]) -> d
         "MW agreement": f"{float(params['mw_agreement']) * 100:.2f}%",
         "Contiguity min": str(int(params["contig_min"])),
         "Abundance cutoff": f"{float(params['abundance_cutoff']) * 100:.1f}%",
-        "Envelope R²": f"{float(params['envelope_cutoff']) * 100:.1f}%",
+        ("Shape agreement (profiles only)" if params['intact_method'] == 'charge-profile' else "Envelope R²"): f"{float(params['envelope_cutoff']) * 100:.1f}%",
+        **({'Centroid height cutoff':f"{float(params['mw_assign_cutoff']) * 100:.1f}%", 'Intact analysis':'Agilent-style deconvolution'} if params['intact_method'] == 'charge-profile' else {}),
         "Peak width FWHM": f"{float(params['pwhh']):.2f}",
         "Minimum input m/z": f"{float(params['min_input_mz']):.0f}",
         "Noise cutoff": f"{float(params['noise_cutoff']):,.0f} counts",
@@ -2703,6 +2732,9 @@ def load_sample(path: str = Query(..., description="Path to a supported sample f
         "acq_info": sample.acq_info,
         "qtof": sample.qtof_info,
         "isotope_aware_intact": qtof_deconvolution.is_intact_qtof(sample),
+        "deconvolution_family": _deconvolution_family(sample, normalized_path),
+        "charge_profile_available": _charge_profile_available(sample, normalized_path),
+        "agilent_input_kind": 'profile' if _charge_profile_available(sample, normalized_path) else 'centroid',
         "has_uv": sample.uv_data is not None,
         "has_ms": sample.ms_scans is not None,
         "has_ms_pos": sample.ms_times_pos is not None,
@@ -3313,10 +3345,15 @@ def deconvolute(
 ):
     """Run deconvolution on summed spectrum and return detected components."""
     request_arguments = locals().copy()
+    precision = intact_method == 'charge-profile'
     sample = _get_sample(path)
     if sample.ms_scans is None:
         raise HTTPException(status_code=404, detail="No MS data")
-    normalized_mw_algorithm = _normalize_deconvolution_mw_algorithm(mw_algorithm, path)
+    family = _deconvolution_family(sample, path)
+    reconstruction_kind = 'profile' if _charge_profile_available(sample, path) else 'centroid'
+    if precision and family not in {'proiq','legacy','qtof'}:
+        raise HTTPException(status_code=400, detail='Agilent-style deconvolution requires a supported quadrupole, Pro iQ or QTOF run')
+    normalized_mw_algorithm = _normalize_deconvolution_mw_algorithm('centroid' if precision else mw_algorithm, path)
     spectrum_source = "sample"
     background = None
     normalized_background_path = ""
@@ -3331,6 +3368,9 @@ def deconvolute(
         background = _get_sample(normalized_background_path)
         if background.ms_scans is None:
             raise HTTPException(status_code=404, detail="No MS data in background sample")
+        if precision and (_deconvolution_family(background, normalized_background_path) != family
+                or (reconstruction_kind == 'profile' and not _charge_profile_available(background, normalized_background_path))):
+            raise HTTPException(status_code=400, detail='Choose a background from the same instrument family and with compatible spectrum storage')
 
     if intact_method == 'profile':
         try:
@@ -3346,7 +3386,7 @@ def deconvolute(
         return {**result, 'background_path': normalized_background_path or None}
 
     try:
-        isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, intact_method)
+        isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, 'envelope' if precision else intact_method)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isotope_mode:
@@ -3436,7 +3476,38 @@ def deconvolute(
     )
 
     # Optionally detect singly charged species
-    if include_singly_charged and min_charge <= 1:
+    reconstructed = None
+    if precision:
+        try:
+            if reconstruction_kind == 'centroid':
+                exact_mz, exact_y = charge_profile.sum_centroids(sample, start, end)
+                raw_mz_arr, raw_intensity_arr = _filter_spectrum_by_min_input_mz(exact_mz, exact_y, min_input_mz)
+                exact_mz, exact_y = raw_mz_arr, raw_intensity_arr.copy()
+                if background is not None:
+                    bx, by = charge_profile.sum_centroids(background, start, end)
+                    bg_plot_mz_arr, bg_plot_intensity_arr = _filter_spectrum_by_min_input_mz(bx, by, min_input_mz)
+                    if family == 'qtof':
+                        corrected = qtof_deconvolution.subtract_centroids(np.column_stack([exact_mz,exact_y]),
+                            np.column_stack([bg_plot_mz_arr,bg_plot_intensity_arr]))
+                        exact_y = corrected[:,1]
+                    else:
+                        exact_mz,exact_y = _subtract_spectra(exact_mz,exact_y,bg_plot_mz_arr,bg_plot_intensity_arr)
+                        exact_y = np.maximum(exact_y,0.)
+                mz_arr,intensity_arr = exact_mz,exact_y
+                spectrum_source = 'acquired-centroid-coordinates'
+            method = charge_profile.reconstruct_centroids if reconstruction_kind == 'centroid' else charge_profile.reconstruct
+            reconstructed = method(mz_arr, intensity_arr, components, pwhh=pwhh,
+                min_peaks=max(2, min(10, int(min_peaks))), contig_min=contig_min,
+                mw_agreement=mw_agreement, centroid_cutoff=mw_assign_cutoff,
+                profile_agreement=envelope_cutoff, noise_cutoff=noise_cutoff, abundance_cutoff=abundance_cutoff,
+                use_monoisotopic=use_monoisotopic)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        components = reconstructed['components']
+        if not components:
+            reconstructed['fitted_profile']['range'] = [float(low_mw), float(high_mw)]
+
+    if not precision and include_singly_charged and min_charge <= 1:
         # Exclude m/z ranges already claimed by multi-charge envelopes
         exclude_ranges = []
         for comp in components:
@@ -3477,13 +3548,18 @@ def deconvolute(
 
     return {
         "components": results,
-        "workflow": {"id": "qtof-envelope", "method": "envelope"} if intact_qtof else None,
+        "workflow": ({"id": "charge-profile", "method": "charge-profile", "input_kind":reconstruction_kind,
+            "unexplained_fraction": reconstructed['unexplained_fraction'],
+            "description": "Masses reconstructed from supported charge assignments; unassigned signal is retained."}
+            if precision else {"id": "qtof-envelope", "method": "envelope"} if intact_qtof else None),
+        "fit_check": reconstructed['fit_check'] if precision else None,
         "measured_spectrum": qtof_deconvolution.measured_window_spectrum(sample, start, end, min_input_mz) if intact_qtof else None,
         "spectrum": {
             "mz": _ndarray_to_list(mz_arr),
             "intensities": _ndarray_to_list(intensity_arr),
-            "mz_grid_step": analysis.QTOF_SUM_GRID_STEP if qtof else None,
-            "representation": "summed calibrated centroids" if qtof else None,
+            "mz_grid_step": None if precision and reconstruction_kind == 'centroid' else analysis.QTOF_SUM_GRID_STEP if qtof else None,
+            "representation": "acquired centroid sticks" if precision and reconstruction_kind == 'centroid' else "summed calibrated centroids" if qtof else None,
+            **({'fitted_profile':reconstructed['fitted_profile']} if precision else {}),
         },
         "raw_spectrum": {
             "mz": _ndarray_to_list(raw_mz_arr),
@@ -4490,15 +4566,20 @@ def export_report_pdf(payload: dict = Body(...)):
 
     raw_deconv_parameters = payload.get("deconv_parameters")
     deconv_parameters = _normalize_deconvolution_parameters(raw_deconv_parameters)
+    if include_deconv and deconv_parameters['intact_method'] == 'charge-profile' and _deconvolution_family(sample, path) not in {'legacy','proiq','qtof'}:
+        raise HTTPException(status_code=400, detail='Agilent-style reports require a supported instrument family')
     if include_deconv and deconv_parameters['intact_method'] == 'profile':
         raise HTTPException(status_code=400, detail='Use the dense-profile Download PDF for the experimental profile fit, or switch to charge-envelope mode for the full report')
     if not include_deconv and deconv_parameters['intact_method'] == 'profile':
         deconv_parameters['intact_method'] = 'envelope'
     try:
-        isotope_mode = qtof_deconvolution.use_isotope_workflow(sample, deconv_parameters['intact_method'])
+        isotope_mode = qtof_deconvolution.use_isotope_workflow(sample,
+            'envelope' if deconv_parameters['intact_method'] == 'charge-profile' else deconv_parameters['intact_method'])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if deconv_results and any(bool(c.get('isotope_aware')) != isotope_mode for c in deconv_results):
+        raise HTTPException(status_code=400, detail='Run the selected analysis method before exporting its report')
+    if deconv_results and any(bool(c.get('charge_profile')) != (deconv_parameters['intact_method'] == 'charge-profile') for c in deconv_results):
         raise HTTPException(status_code=400, detail='Run the selected analysis method before exporting its report')
     if not isinstance(raw_deconv_parameters, dict) or not str(raw_deconv_parameters.get("mw_algorithm", "")).strip():
         deconv_parameters["mw_algorithm"] = _default_deconvolution_mw_algorithm_for_path(path)
@@ -4519,7 +4600,10 @@ def export_report_pdf(payload: dict = Body(...)):
             start, end = _detect_deconvolution_window_for_sample(sample)
             if end > start:
                 deconv_time_range = (start, end)
-        if not deconv_results and deconv_time_range is not None:
+        if not deconv_results and deconv_time_range is not None and deconv_parameters['intact_method'] == 'charge-profile':
+            deconv_results = deconvolute(path=path, start=deconv_time_range[0], end=deconv_time_range[1],
+                background_path=None, **deconv_parameters)['components']
+        if not deconv_results and deconv_time_range is not None and deconv_parameters['intact_method'] != 'charge-profile':
             report_sum = None
             if deconv_parameters["mw_algorithm"] == "centroid" and getattr(sample, 'qtof_info', None) is None:
                 report_sum = _sum_agilent_centroid_cdf_spectra(path, deconv_time_range[0], deconv_time_range[1])

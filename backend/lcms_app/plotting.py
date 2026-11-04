@@ -2006,7 +2006,7 @@ def _build_dense_zero_charge_profile(
     return centers, smooth_profile
 
 
-def _dense_profile_label_peaks(x_da, y_profile, mass_range, main_mass=None):
+def _dense_profile_label_peaks(x_da, y_profile, mass_range, main_mass=None, assigned_masses=None, stick_assignments=False):
     """Find prominent profile maxima, not new fitted/identified components.
 
     Match the interactive view's 4% height / 2% local prominence rules and
@@ -2026,18 +2026,34 @@ def _dense_profile_label_peaks(x_da, y_profile, mass_range, main_mass=None):
                             wlen=2 * radius + 1)
     peaks = [{'mass': float(x[i]), 'intensity': float(y[i]), 'main': False}
              for i in indices if visible[i]]
+    if assigned_masses is not None:
+        peaks = [{'mass':float(m), 'intensity':float(np.interp(m, x, y)), 'main':False}
+                 for m in assigned_masses if np.isfinite(m) and mass_range[0] <= m <= mass_range[1]
+                 and np.interp(m, x, y) >= maximum*.04]
+        if stick_assignments:
+            peaks=[]
+            ordered=sorted(m for m in assigned_masses if np.isfinite(m))
+            for n,m in enumerate(ordered):
+                width=max(2.,m*.0005)
+                left=max(m-width,(ordered[n-1]+m)/2 if n else m-width)
+                right=min(m+width,(ordered[n+1]+m)/2 if n+1<len(ordered) else m+width)
+                indices=np.flatnonzero(visible & (x>=left) & (x<=right))
+                if len(indices):
+                    i=indices[np.argmax(y[indices])]
+                    if y[i]>=maximum*.04:
+                        peaks.append({'mass':float(x[i]),'label_mass':float(m),'intensity':float(y[i]),'main':False})
     main_mass = _coerce_finite_float(main_mass, np.nan)
     if peaks:
         if np.isfinite(main_mass):
-            nearest = min(peaks, key=lambda p: abs(p['mass'] - main_mass))
-            if abs(nearest['mass'] - main_mass) <= max(10., main_mass * .0005):
+            nearest = min(peaks, key=lambda p: abs(p.get('label_mass',p['mass']) - main_mass))
+            if abs(nearest.get('label_mass',nearest['mass']) - main_mass) <= max(10., main_mass * .0005):
                 nearest['main'] = True
         else:
             max(peaks, key=lambda p: p['intensity'])['main'] = True
     return sorted(peaks, key=lambda p: (not p['main'], -p['intensity']))
 
 
-def _annotate_dense_profile_peaks(ax, x_da, y_profile, main_mass=None):
+def _annotate_dense_profile_peaks(ax, x_da, y_profile, main_mass=None, assigned_masses=None, stick_assignments=False):
     """Place editable two-decimal Da labels with non-colliding leader lines.
 
     Work in display coordinates for physical text spacing, then store anchors
@@ -2049,7 +2065,7 @@ def _annotate_dense_profile_peaks(ax, x_da, y_profile, main_mass=None):
     from matplotlib.path import Path as MplPath
 
     xlim = ax.get_xlim()
-    peaks = _dense_profile_label_peaks(x_da, y_profile, [v * 1000 for v in xlim], main_mass)
+    peaks = _dense_profile_label_peaks(x_da, y_profile, [v * 1000 for v in xlim], main_mass, assigned_masses, stick_assignments)
     if not peaks:
         return []
     fig = ax.figure
@@ -2069,7 +2085,7 @@ def _annotate_dense_profile_peaks(ax, x_da, y_profile, main_mass=None):
     for peak in peaks:
         if len(annotations) >= 12:
             break
-        label = f"{peak['mass']:,.2f} Da"
+        label = f"{peak.get('label_mass',peak['mass']):,.2f} Da"
         weight = 'bold' if peak['main'] else 'normal'
         font = FontProperties(size=6, weight=weight)
         width, height, descent = renderer.get_text_width_height_descent(label, font, False)
@@ -2141,7 +2157,7 @@ def create_dense_deconvoluted_mass_profile_figure(
     if isinstance(fitted_profile, dict):
         x_da = np.asarray(fitted_profile.get('mass', []), dtype=float)
         y_profile = np.asarray(fitted_profile.get('intensity', []), dtype=float)
-        if (x_da.ndim != 1 or y_profile.shape != x_da.shape or len(x_da) > 10000
+        if (x_da.ndim != 1 or y_profile.shape != x_da.shape or len(x_da) > 40000
                 or not np.isfinite(x_da).all() or not np.isfinite(y_profile).all()
                 or np.any(y_profile < 0) or np.any(np.diff(x_da) <= 0)):
             raise ValueError('Invalid experimental fitted profile')
@@ -2168,6 +2184,8 @@ def create_dense_deconvoluted_mass_profile_figure(
         y_norm = (y_profile / float(np.max(y_profile))) * 100.0
         if isinstance(isotope_profile,list):
             ax.vlines(x_da,0,y_norm,color='black',linewidth=max(.5,_coerce_finite_float(style.get('line_width',.8),.8)))
+        elif isinstance(fitted_profile,dict) and fitted_profile.get('sticks'):
+            ax.vlines(x_da/1000.,0,y_norm,color='black',linewidth=max(.5,_coerce_finite_float(style.get('line_width',.8),.8)))
         else:
             ax.plot(x_da / 1000.0,y_norm,color='black',linewidth=max(.5,_coerce_finite_float(style.get('line_width',.8),.8)))
     else:
@@ -2188,7 +2206,7 @@ def create_dense_deconvoluted_mass_profile_figure(
     ax.set_ylabel("Relative Intensity (%)")
     if show_title:
         title_y = 1.08 if subtitle else 1.03
-        ax.set_title("Experimental profile fit" if isinstance(fitted_profile,dict) else "Measured isotopes" if isinstance(isotope_profile,list) else "Deconvoluted Masses", fontweight='bold', y=title_y)
+        ax.set_title(("Charge-assigned centroid masses" if fitted_profile.get('sticks') else "Charge-constrained profile" if fitted_profile.get('method') == 'charge-profile' else "Experimental profile fit") if isinstance(fitted_profile,dict) else "Measured isotopes" if isinstance(isotope_profile,list) else "Deconvoluted Masses", fontweight='bold', y=title_y)
     if subtitle:
         sub_y = 1.02 if show_title else 1.03
         ax.text(
@@ -2205,7 +2223,9 @@ def create_dense_deconvoluted_mass_profile_figure(
         # Extra vertical room is presentation only. Keep all original bins,
         # normalization, smoothing, calculation limits and PDF axis dimensions.
         ax.set_ylim(0, 130)
-        _annotate_dense_profile_peaks(ax, x_da, y_norm, style.get('deconv_profile_selected_mass'))
+        _annotate_dense_profile_peaks(ax, x_da, y_norm, style.get('deconv_profile_selected_mass'),
+            fitted_profile.get('component_masses') if isinstance(fitted_profile,dict) and fitted_profile.get('method') == 'charge-profile' else None,
+            bool(fitted_profile.get('sticks')) if isinstance(fitted_profile,dict) else False)
     return fig
 
 

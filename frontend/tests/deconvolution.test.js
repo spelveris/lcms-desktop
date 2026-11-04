@@ -47,6 +47,92 @@ function fixture() {
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
 
+test('charge-profile mode is opt-in for Pro iQ and keeps its controls editable',()=>{
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  assert.match(html,/<select id="deconv-mw-algorithm">[\s\S]*?value="charge-profile"[^>]*>Agilent-style \(experimental\)<\/option>[\s\S]*?<\/select>/);
+  const {run,elements}=fixture();
+  elements.set('expert-mode-toggle',{checked:true});
+  elements.set('deconv-intact-method',{dataset:{samplePath:'legacy'},value:'envelope'});
+  elements.set('deconv-mw-algorithm',{dataset:{defaultKey:'legacy:apex',userEdited:'true'},value:'charge-profile'});
+  elements.set('deconv-method-wrap',{});elements.set('expert-envelope-params',{});
+  elements.set('deconv-centroid-wrap',{});elements.set('deconv-agreement-label',{});
+  elements.set('dp-profile-centroid',{value:'65'});elements.set('dp-r2',{value:'0'});
+  run("state.loadedSamples.legacy={deconvolution_family:'proiq',charge_profile_available:true};syncDeconvMwAlgorithmDefault('legacy')");
+  assert.equal(run("getIntactAnalysisMethod('legacy')"),'charge-profile');
+  assert.equal(elements.get('deconv-method-wrap').hidden,true);
+  assert.equal(elements.get('expert-envelope-params').hidden,false);
+  assert.equal(elements.get('deconv-centroid-wrap').hidden,false);
+  assert.equal(elements.get('deconv-agreement-label').textContent,'Minimum profile agreement %');
+  const params=run("getCurrentDeconvolutionParameters('legacy')");
+  assert.equal(params.mw_assign_cutoff,.65);assert.equal(params.r2_cutoff,0);
+  assert.equal(params.mw_algorithm,'centroid');
+  assert.equal(params.include_singly_charged,false);
+  elements.get('expert-mode-toggle').checked=false;
+  run("syncDeconvMwAlgorithmDefault('legacy')");
+  assert.equal(run("getIntactAnalysisMethod('legacy')"),'envelope');
+  assert.equal(elements.get('deconv-intact-method').value,'envelope');
+  assert.equal(elements.get('deconv-mw-algorithm').value,'apex');
+  elements.set('deconv-charge-profile-option',{});
+  run("state.loadedSamples.legacy.charge_profile_available=false;syncDeconvMwAlgorithmDefault('legacy')");
+  assert.equal(elements.get('deconv-charge-profile-option').disabled,false);
+  assert.equal(elements.get('deconv-charge-profile-option').hidden,false);
+});
+
+test('charge-profile graph and residual inspection retain supplied values and accurate labels',()=>{
+  const {run,context,plots}=fixture();
+  context.spectrum={mz:[1000],intensities:[100],fitted_profile:{method:'charge-profile',mass:[19999,20000,20001],intensity:[0,80,8],range:[19999,20001]}};
+  run('buildDenseZeroChargeProfile=()=>{throw new Error("must not reproject")};charts.plotDenseDeconvolutedMassProfile("charge",spectrum)');
+  assert.match(plots.get('charge').layout.title.text,/Charge-constrained profile/);
+  assert.deepEqual(Array.from(plots.get('charge').data[0].y),[0,100,10]);
+  context.Plotly.react=(id,data,layout)=>plots.set(id,{data,layout});
+  run('charts.plotQtofProfileFitCheck("assigned",{assigned:true,mz:[1,2],observed:[10,5],predicted:[8,0],residual:[2,5],usable:[true,true]})');
+  assert.equal(plots.get('assigned').data[1].name,'Assigned signal');
+  assert.equal(plots.get('assigned').data[2].name,'Unassigned signal');
+  assert.deepEqual(Array.from(plots.get('assigned').data[2].y),[2,5]);
+});
+
+test('one opt-in Agilent-style algorithm is available for all three instrument families',()=>{
+  const {run,elements}=fixture();
+  elements.set('expert-mode-toggle',{checked:true});
+  elements.set('deconv-intact-method',{dataset:{samplePath:'old.D'},value:'envelope'});
+  elements.set('deconv-mw-algorithm',{dataset:{},value:'apex'});
+  elements.set('deconv-method-wrap',{});elements.set('deconv-charge-profile-option',{});
+  elements.set('deconv-agreement-wrap',{});
+  for(const [path,family] of [['old.D','legacy'],['new.sirslt','proiq'],['qtof.sirslt','qtof']]){
+    run(`state.loadedSamples[${JSON.stringify(path)}]={deconvolution_family:${JSON.stringify(family)},charge_profile_available:false,agilent_input_kind:'centroid',isotope_aware_intact:${family==='qtof'}};syncDeconvMwAlgorithmDefault(${JSON.stringify(path)})`);
+    assert.equal(run(`getIntactAnalysisMethod(${JSON.stringify(path)})`),'envelope');
+    assert.equal(elements.get('deconv-charge-profile-option').disabled,false);
+    assert.equal(elements.get('deconv-charge-profile-option').hidden,false);
+    elements.get('deconv-mw-algorithm').value='charge-profile';
+    elements.get('deconv-mw-algorithm').dataset.userEdited='true';
+    run(`syncDeconvMwAlgorithmDefault(${JSON.stringify(path)})`);
+    assert.equal(run(`getIntactAnalysisMethod(${JSON.stringify(path)})`),'charge-profile');
+    assert.equal(elements.get('deconv-agreement-wrap').hidden,true);
+  }
+  elements.get('deconv-intact-method').value='isotope';run("syncDeconvMwAlgorithmDefault('qtof.sirslt')");
+  assert.equal(run("getIntactAnalysisMethod('qtof.sirslt')"),'isotope');
+});
+
+test('zero profile-agreement threshold is sent as zero instead of the backend default',async()=>{
+  const {run,context}=fixture();let endpoint;
+  context.recordEndpoint=value=>{endpoint=value;return {};};
+  vm.runInContext(fs.readFileSync(path.join(root,'js/api.js'),'utf8'),context);
+  await run('apiFetch=async value=>recordEndpoint(value);api.runDeconvolution({path:"x.sirslt",start:0,end:2,r2_cutoff:0,mw_assign_cutoff:.4,include_singly_charged:false,intact_method:"charge-profile"})');
+  assert.match(endpoint,/envelope_cutoff=0(?:&|$)/);
+  assert.match(endpoint,/mw_assign_cutoff=0.4(?:&|$)/);
+  assert.match(endpoint,/include_singly_charged=false(?:&|$)/);
+});
+
+test('centroid reconstruction plots measured sticks and labels the fitted component centroids',()=>{
+  const {run,context,plots}=fixture();
+  context.spectrum={fitted_profile:{method:'charge-profile',sticks:true,
+    mass:[19999.7,19999.8,20000.5,20054],intensity:[0,100,0,10],component_masses:[20000,20054],range:[19990,20060]}};
+  run('charts.plotDenseDeconvolutedMassProfile("centroids",spectrum,{style:{deconv_x_min_da:19990,deconv_x_max_da:20060,deconv_mass_decimals:2}})');
+  assert.deepEqual(Array.from(plots.get('centroids').data[0].y),[0,0,null,0,100,null,0,0,null,0,10,null]);
+  assert.match(plots.get('centroids').layout.title.text,/Charge-assigned centroid masses/);
+  assert.ok(plots.get('centroids').layout.annotations.some(a=>a.text.includes('20,000.00 Da')));
+});
+
 test('Single Sample uses compact cards and preserves molecule controls',()=>{
   const css=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');

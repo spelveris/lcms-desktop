@@ -275,7 +275,22 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
   const binDa = (x[1] - x[0]) * 1000;
   const radius = Math.max(1, Math.ceil(8 / Math.max(0.01, binDa)));
   const candidates = [];
-  for (let i = 1; i < x.length - 1; i++) {
+  if(Array.isArray(profile.assignedMasses)){
+    const ordered=profile.assignedMasses.filter(Number.isFinite).slice().sort((a,b)=>a-b);
+    for(const [n,labelMass] of ordered.entries()){
+      let mass=labelMass,intensity=interpAt(x,y,mass/1000);
+      if(profile.stickAssignments){
+        const radius=Math.max(2,labelMass*.0005);
+        const left=Math.max(labelMass-radius,n?(ordered[n-1]+labelMass)/2:labelMass-radius);
+        const right=Math.min(labelMass+radius,n+1<ordered.length?(ordered[n+1]+labelMass)/2:labelMass+radius);
+        intensity=0;
+        for(let i=0;i<x.length;i++)if(x[i]*1000>=left && x[i]*1000<=right && y[i]>intensity){mass=x[i]*1000;intensity=y[i];}
+      }
+      if(labelMass>=rangeDa[0] && labelMass<=rangeDa[1] && intensity>=maximum*.04)
+        candidates.push({mass,labelMass,intensity,main:false});
+    }
+  }
+  for (let i = 1; !Array.isArray(profile.assignedMasses) && i < x.length - 1; i++) {
     const mass = x[i] * 1000, intensity = y[i];
     if (mass < rangeDa[0] || mass > rangeDa[1] || intensity < maximum * 0.04 || intensity < yRange[0] || intensity > yRange[1]) continue;
     if (!(intensity > y[i - 1] && intensity >= y[i + 1])) continue;
@@ -292,8 +307,8 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
     candidates.push({ mass, intensity, main: false });
   }
   const mainMass = Number(options.mainMass);
-  const nearest = candidates.reduce((best, c) => !best || Math.abs(c.mass - mainMass) < Math.abs(best.mass - mainMass) ? c : best, null);
-  if (nearest && Number.isFinite(mainMass) && Math.abs(nearest.mass - mainMass) <= Math.max(10, mainMass * 0.0005)) nearest.main = true;
+  const nearest = candidates.reduce((best, c) => !best || Math.abs((c.labelMass??c.mass) - mainMass) < Math.abs((best.labelMass??best.mass) - mainMass) ? c : best, null);
+  if (nearest && Number.isFinite(mainMass) && Math.abs((nearest.labelMass??nearest.mass) - mainMass) <= Math.max(10, mainMass * 0.0005)) nearest.main = true;
   candidates.sort((a, b) => Number(b.main) - Number(a.main) || b.intensity - a.intensity);
   const annotations = [], occupied = [];
   const leadersCross = (a, b) => {
@@ -324,7 +339,7 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
   for (const peak of candidates) {
     if (annotations.length >= 12) break;
     const digits = options.massDecimals === 2 ? 2 : 1;
-    const label = `${peak.mass.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })} Da`;
+    const label = `${(peak.labelMass??peak.mass).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })} Da`;
     const labelWidth = label.length * 5.6 + 8;
     const px = (peak.mass - rangeDa[0]) / (rangeDa[1] - rangeDa[0]) * width;
     const py = (yRange[1] - peak.intensity) / ySpan * height;
@@ -351,7 +366,7 @@ function buildDenseProfileAnnotations(profile, rangeDa, options = {}) {
       ax: box.cx - px, ay: box.cy - py, xanchor: 'center', yanchor: 'middle',
       font: { size: 10, color: peak.main ? '#215caf' : '#222222' },
       bgcolor: 'rgba(255,255,255,0.85)', borderpad: 1,
-      hovertext: 'Profile peak position; a label is not a chemical identification.',
+      hovertext: Array.isArray(profile.assignedMasses)?'Assigned component centroid; not a chemical identification.':'Profile peak position; a label is not a chemical identification.',
     });
   }
   return annotations;
@@ -1550,6 +1565,7 @@ const charts = {
     const profile = fitted ? {
       massKDa:fitted.mass.map(m=>m/1000),
       relativeIntensity:fitted.intensity.map(y=>fitMaximum>0?y/fitMaximum*100:0),
+      ...(fitted.method==='charge-profile'?{assignedMasses:fitted.component_masses || [],stickAssignments:!!fitted.sticks}:{}),
     } : buildDenseZeroChargeProfile(
       spectrum?.mz || [],
       spectrum?.intensities || [],
@@ -1571,7 +1587,7 @@ const charts = {
     const yRange = [0, (visibleMax || 100) * 1.3];
     const showTitle = style.deconv_show_title !== false;
     const layout = mergeLayout({
-      title: { text: showTitle ? (options.title || (fitted?'Experimental profile fit':'Deconvoluted Masses')) : '', font: { size: 14 } },
+      title: { text: showTitle ? (options.title || (fitted?.sticks?'Charge-assigned centroid masses':fitted?.method==='charge-profile'?'Charge-constrained profile':fitted?'Experimental profile fit':'Deconvoluted Masses')) : '', font: { size: 14 } },
       xaxis: {
         title: 'Mass (kDa)',
         range: viewRangeDa.map(v => v / 1000),
@@ -1626,15 +1642,15 @@ const charts = {
 
     const displayed = downsampleProfileEnvelope(profile.massKDa, profile.relativeIntensity, 80000);
     const trace = {
-      x: displayed.x,
-      y: displayed.y,
+      x: fitted?.sticks ? displayed.x.flatMap(x=>[x,x,null]) : displayed.x,
+      y: fitted?.sticks ? displayed.y.flatMap(y=>[0,y,null]) : displayed.y,
       type: displayed.x.length > 40000 ? 'scattergl' : 'scatter',
       mode: 'lines',
       line: {
         color: '#000000',
         width: Math.max(0.5, finiteNumber(style.line_width, getLineWidth())),
       },
-      customdata: Array.from(displayed.x, mass => mass * 1000),
+      customdata: fitted?.sticks ? displayed.x.flatMap(mass=>[mass*1000,mass*1000,null]) : Array.from(displayed.x, mass => mass * 1000),
       hovertemplate: `Mass: %{customdata:.${style.deconv_mass_decimals === 2 ? 2 : 1}f} Da<br>Relative Intensity: %{y:.2f}%<extra></extra>`,
       showlegend: false,
     };
@@ -1646,11 +1662,12 @@ const charts = {
 
   plotQtofProfileFitCheck(divId, fit) {
     if(!fit)return;
-    const traces=[['observed','Measured window mean','#222222'],['predicted','Fitted model','#215caf'],['residual','Measured − model','#b34d35']]
-      .map(([key,name,color])=>({x:fit.mz,y:fit[key].map((v,i)=>fit.usable[i]?v:null),
+    const traces=[['observed',fit.assigned?'Measured calculation spectrum':'Measured window mean','#222222'],['predicted',fit.assigned?'Assigned signal':'Fitted model','#215caf'],['residual',fit.assigned?'Unassigned signal':'Measured − model','#b34d35']]
+      .map(([key,name,color])=>({x:fit.centroid_sticks?fit.mz.flatMap(v=>[v,v,null]):fit.mz,
+        y:fit.centroid_sticks?fit[key].flatMap((v,i)=>fit.usable[i]?[0,v,null]:[null,null,null]):fit[key].map((v,i)=>fit.usable[i]?v:null),
         type:'scattergl',mode:'lines',name,line:{color,width:.8},connectgaps:false}));
     Plotly.react(divId,traces,mergeLayout({height:300,showlegend:true,
-      xaxis:{title:'m/z',automargin:true},yaxis:{title:'Mean profile intensity',autorange:true,zeroline:true,automargin:true},
+      xaxis:{title:'m/z',automargin:true},yaxis:{title:fit.assigned?'Intensity':'Mean profile intensity',autorange:true,zeroline:true,automargin:true},
       margin:{l:65,r:25,t:20,b:65},legend:{orientation:'h',y:1.13},
     }),PLOT_CONFIG);
   },

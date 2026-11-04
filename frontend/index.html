@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.68">
+  <link rel="stylesheet" href="css/style.css?v=0.2.69">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -624,7 +624,7 @@
           <label id="deconv-method-wrap" hidden>Intact analysis
             <select id="deconv-intact-method">
               <option value="envelope">Charge envelope (default)</option>
-              <option value="isotope">Isotope fitting (experimental)</option>
+              <option id="deconv-isotope-option" value="isotope">Isotope fitting (experimental)</option>
               <option id="deconv-profile-option" value="profile" disabled>Measured profile fit (experimental)</option>
             </select>
           </label>
@@ -636,10 +636,11 @@
             <span class="toolbar-note">For 2-charge species, set both Minimum Ions and Contiguity Min to 2 when needed.</span>
           </div>
           <div class="param-grid">
-            <label>MW Algorithm
+            <label id="deconv-mw-algorithm-wrap">MW Algorithm
               <select id="deconv-mw-algorithm">
                 <option value="apex">Apex</option>
                 <option value="centroid">Centroid MW</option>
+                <option id="deconv-charge-profile-option" value="charge-profile" hidden disabled>Agilent-style (experimental)</option>
               </select>
             </label>
             <label>Min Charge<input type="number" id="dp-min-charge" value="1" min="1" max="50"></label>
@@ -648,7 +649,8 @@
             <label>MW Agreement %<input type="number" id="dp-mw-agree" value="0.05" min="0.001" max="0.1" step="0.001"></label>
             <label>Contiguity Min<input type="number" id="dp-contig-min" value="3" min="2" max="10"></label>
             <label>Abundance Cutoff %<input type="number" id="dp-abundance" value="5" min="1" max="50"></label>
-            <label>Envelope R&sup2; %<input type="number" id="dp-r2" value="50" min="10" max="100"></label>
+            <label id="deconv-agreement-wrap"><span id="deconv-agreement-label">Envelope R&sup2; %</span><input type="number" id="dp-r2" value="50" min="0" max="100"></label>
+            <label id="deconv-centroid-wrap" hidden>Centroid height cutoff %<input type="number" id="dp-profile-centroid" value="40" min="1" max="99"></label>
             <label>Peak Width FWHM<input type="number" id="dp-fwhm" value="0.6" min="0.1" max="5.0" step="0.1"></label>
             <label>Minimum Input m/z<input type="number" id="dp-min-input-mz" value="100" min="0" max="5000" step="10"></label>
             <label>Mass Range Low<input type="number" id="dp-mass-low" placeholder="auto" step="100"></label>
@@ -724,7 +726,7 @@
         </div>
         <div id="deconv-results-table-container"></div>
         <details id="deconv-profile-check" class="deconv-plot-card" hidden>
-          <summary>Experimental profile fit: measured signal, model and signed residual</summary>
+          <summary id="deconv-profile-check-title">Experimental profile fit: measured signal, model and signed residual</summary>
           <div id="deconv-profile-check-plot" style="height:300px"></div>
         </details>
         <div id="deconv-ion-detail"></div>
@@ -1041,13 +1043,13 @@
 
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=0.2.63"></script>
-  <script src="js/charts.js?v=0.2.68"></script>
+  <script src="js/charts.js?v=0.2.69"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.68"></script>
+  <script src="js/app.js?v=0.2.69"></script>
 </body>
 </html>

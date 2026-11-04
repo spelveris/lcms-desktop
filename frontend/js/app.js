@@ -573,7 +573,8 @@ function syncDeconvExpertModeUI() {
 
 async function handleDeconvExpertModeChange() {
   const path = document.getElementById('deconv-sample-select')?.value || '';
-  const previousMethod = document.getElementById('deconv-intact-method')?.value || 'envelope';
+  const previousMethod = document.getElementById('deconv-mw-algorithm')?.value === 'charge-profile'
+    ? 'charge-profile' : document.getElementById('deconv-intact-method')?.value || 'envelope';
   syncDeconvExpertModeUI();
   if (previousMethod !== getIntactAnalysisMethod(path) && path) {
     // Leaving Expert Mode also leaves the experimental preset. Recalculate so
@@ -5385,8 +5386,8 @@ function renderProgressionAssignments() {
         </label>
       </div>
       <div class="prog-role-toggle" role="group" aria-label="Role for ${escapeAttr(file.name)}">
-        ${[['initial', 'Initial (t=0)'], ['mid', 'Mid Timepoint'], ['final', 'Overnight / Final']].map(([role, label]) => `
-          <label><input type="radio" class="prog-role" name="prog-role-${i}" data-path="${escapeAttr(file.path)}" value="${role}" ${defaultRole === role ? 'checked' : ''} ${isActive ? '' : 'disabled'}><span>${label}</span></label>
+        ${[['initial', 'Initial (t=0)', 'Initial (t=0)'], ['mid', 'Mid', 'Mid Timepoint'], ['final', 'Final', 'Overnight / Final']].map(([role, label, title]) => `
+          <label title="${title}"><input type="radio" class="prog-role" name="prog-role-${i}" data-path="${escapeAttr(file.path)}" value="${role}" ${defaultRole === role ? 'checked' : ''} ${isActive ? '' : 'disabled'}><span>${label}</span></label>
         `).join('')}
       </div>
       <label>Custom Label</label>
@@ -6729,8 +6730,24 @@ function getDefaultDeconvMwAlgorithmForPath(path) {
 }
 
 function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
-  const available=state.loadedSamples[samplePath]?.isotope_aware_intact===true;
+  const meta=state.loadedSamples[samplePath] || {};
+  const available=meta.isotope_aware_intact===true;
+  const proiq=meta.deconvolution_family==='proiq';
+  const agilentAvailable=['legacy','proiq','qtof'].includes(meta.deconvolution_family) && meta.has_ms!==false;
   const expertMode=document.getElementById('expert-mode-toggle')?.checked===true;
+  const select=document.getElementById('deconv-mw-algorithm');
+  if(select){
+    const defaultAlgorithm=getDefaultDeconvMwAlgorithmForPath(samplePath);
+    const defaultKey=`${String(samplePath || '')}:${defaultAlgorithm}`;
+    const qtofPreset=document.getElementById('deconv-intact-method');
+    const specialised=available && qtofPreset?.dataset.samplePath===samplePath && ['isotope','profile'].includes(qtofPreset.value);
+    const unavailableProfile=select.value==='charge-profile' && (!expertMode || !agilentAvailable || specialised);
+    if(options.force===true || select.dataset.defaultKey!==defaultKey || select.dataset.userEdited!=='true' || unavailableProfile){
+      select.value=defaultAlgorithm;
+      select.dataset.userEdited='';
+    }
+    select.dataset.defaultKey=defaultKey;
+  }
   const methodWrap=document.getElementById('deconv-method-wrap');
   if(methodWrap)methodWrap.hidden=!available;
   const method=document.getElementById('deconv-intact-method');
@@ -6740,34 +6757,47 @@ function syncDeconvMwAlgorithmDefault(samplePath = '', options = {}) {
   }
   const isotopeAware=getIntactAnalysisMethod(samplePath)==='isotope';
   const profileFit=getIntactAnalysisMethod(samplePath)==='profile';
+  const chargeProfile=getIntactAnalysisMethod(samplePath)==='charge-profile';
+  const chargeProfileOption=document.getElementById('deconv-charge-profile-option');
+  if(chargeProfileOption){
+    chargeProfileOption.hidden=!agilentAvailable;
+    chargeProfileOption.disabled=!agilentAvailable;
+    chargeProfileOption.title=meta.agilent_input_kind==='profile' || (proiq && meta.charge_profile_available)
+      ? 'Reconstruct from supported measured ion profiles.' : 'Reconstruct from charge-assigned measured centroid ions.';
+  }
+  const isotopeOption=document.getElementById('deconv-isotope-option');
+  if(isotopeOption){isotopeOption.disabled=!available;isotopeOption.hidden=!available;}
+  const agreementLabel=document.getElementById('deconv-agreement-label');
+  if(agreementLabel)agreementLabel.textContent=chargeProfile?'Minimum profile agreement %':'Envelope R² %';
+  const agreementWrap=document.getElementById('deconv-agreement-wrap');
+  if(agreementWrap)agreementWrap.hidden=chargeProfile && !(meta.agilent_input_kind==='profile' || (proiq && meta.charge_profile_available));
+  const centroidWrap=document.getElementById('deconv-centroid-wrap');
+  if(centroidWrap)centroidWrap.hidden=!chargeProfile;
   const profileOption=document.getElementById('deconv-profile-option');
-  if(profileOption)profileOption.disabled=!available || state.loadedSamples[samplePath]?.qtof?.profile_available!==true;
+  if(profileOption){
+    profileOption.disabled=!available || meta.qtof?.profile_available!==true;
+    profileOption.hidden=!available;
+  }
   const profileNotice=document.getElementById('deconv-profile-workflow');
   if(profileNotice)profileNotice.hidden=!profileFit;
   const isotopeNotice=document.getElementById('deconv-isotope-workflow');
   if(isotopeNotice)isotopeNotice.hidden=!isotopeAware;
   const envelopeParams=document.getElementById('expert-envelope-params');
   if(envelopeParams)envelopeParams.hidden=isotopeAware || profileFit;
-  const select = document.getElementById('deconv-mw-algorithm');
-  if (!select) return;
-
-  const defaultAlgorithm = getDefaultDeconvMwAlgorithmForPath(samplePath);
-  const defaultKey = `${String(samplePath || '')}:${defaultAlgorithm}`;
-  const shouldSync = options.force === true || select.dataset.defaultKey !== defaultKey || select.dataset.userEdited !== 'true';
-  if (shouldSync) {
-    select.value = defaultAlgorithm;
-    select.dataset.userEdited = '';
-  }
-  select.dataset.defaultKey = defaultKey;
 }
 
 function getIntactAnalysisMethod(samplePath) {
+  const mw=document.getElementById('deconv-mw-algorithm');
+  const meta=state.loadedSamples[samplePath] || {};
+  if(mw?.value==='charge-profile' && mw.dataset.defaultKey===`${String(samplePath || '')}:${getDefaultDeconvMwAlgorithmForPath(samplePath)}`
+    && document.getElementById('expert-mode-toggle')?.checked===true
+    && ['legacy','proiq','qtof'].includes(meta.deconvolution_family) && meta.has_ms!==false)return 'charge-profile';
   const select=document.getElementById('deconv-intact-method');
-  return state.loadedSamples[samplePath]?.isotope_aware_intact===true
+  return meta.isotope_aware_intact===true
     && document.getElementById('expert-mode-toggle')?.checked===true
     && select?.dataset.samplePath===samplePath
     ? select.value==='isotope' ? 'isotope'
-      : select.value==='profile' && state.loadedSamples[samplePath]?.qtof?.profile_available===true ? 'profile' : 'envelope'
+      : select.value==='profile' && meta.qtof?.profile_available===true ? 'profile' : 'envelope'
     : 'envelope';
 }
 
@@ -6836,6 +6866,12 @@ function getCurrentDeconvolutionParameters(samplePath = '') {
   if (Number.isFinite(massHigh)) params.mass_range_high = massHigh;
   if (Number.isFinite(noiseCutoff)) params.noise_cutoff = noiseCutoff;
   if (mwAlgorithm) params.mw_algorithm = mwAlgorithm;
+  if(params.intact_method==='charge-profile'){
+    const cutoff=Number(document.getElementById('dp-profile-centroid')?.value || 40);
+    params.mw_assign_cutoff=cutoff/100;
+    params.mw_algorithm='centroid';
+    params.include_singly_charged=false;
+  }
   params.monoisotopic = document.getElementById('dp-monoisotopic')?.checked === true;
 
   return params;
@@ -6866,6 +6902,7 @@ function restoreDefaultDeconvExpertSettings() {
     'dp-contig-min': DECONV_EXPERT_DEFAULTS.contigMin,
     'dp-abundance': DECONV_EXPERT_DEFAULTS.abundancePct,
     'dp-r2': DECONV_EXPERT_DEFAULTS.envelopePct,
+    'dp-profile-centroid': 40,
     'dp-fwhm': DECONV_EXPERT_DEFAULTS.fwhm,
     'dp-min-input-mz': DECONV_EXPERT_DEFAULTS.minInputMz,
     'dp-mass-low': DECONV_EXPERT_DEFAULTS.massLow,
@@ -7074,10 +7111,13 @@ function initDeconvolution() {
   document.getElementById('deconv-end').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
   document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
   document.getElementById('btn-deconv-mode-zoom')?.addEventListener('click', () => setDeconvInteractionMode('zoom'));
-  document.getElementById('deconv-mw-algorithm')?.addEventListener('change', () => {
+  document.getElementById('deconv-mw-algorithm')?.addEventListener('change', async () => {
     const mwAlgorithm = document.getElementById('deconv-mw-algorithm');
     if (mwAlgorithm) mwAlgorithm.dataset.userEdited = 'true';
+    const path=document.getElementById('deconv-sample-select')?.value || '';
+    syncDeconvMwAlgorithmDefault(path);
     state.deconvAutoRunSignature = '';
+    if(path)await runDeconvolution({useOverlay:false,silentSuccess:true});
   });
   document.querySelectorAll('.btn-export-deconv-masses').forEach((btn) => {
     btn.addEventListener('click', () => exportDeconvMasses(btn.dataset.format));
@@ -7500,11 +7540,15 @@ function renderDeconvResults(data) {
   syncDeconvBottomLayout();
   const isotopeAware=data.workflow?.id==='qtof-isotope-aware';
   const profileFit=data.workflow?.id==='qtof-profile';
+  const chargeProfile=data.workflow?.id==='charge-profile';
+  const chargeCentroids=chargeProfile && data.workflow?.input_kind==='centroid';
   const fitCheck=document.getElementById('deconv-profile-check');
+  const fitCheckTitle=document.getElementById('deconv-profile-check-title');
+  if(fitCheckTitle)fitCheckTitle.textContent=chargeProfile?'Assigned and unassigned measured signal':'Experimental profile fit: measured signal, model and signed residual';
   if(fitCheck){
-    fitCheck.hidden=!profileFit;
-    fitCheck.ontoggle=()=>{if(fitCheck.open && profileFit)charts.plotQtofProfileFitCheck('deconv-profile-check-plot',data.fit_check);};
-    if(fitCheck.open && profileFit)charts.plotQtofProfileFitCheck('deconv-profile-check-plot',data.fit_check);
+    fitCheck.hidden=!profileFit && !chargeProfile;
+    fitCheck.ontoggle=()=>{if(fitCheck.open && (profileFit || chargeProfile))charts.plotQtofProfileFitCheck('deconv-profile-check-plot',data.fit_check);};
+    if(fitCheck.open && (profileFit || chargeProfile))charts.plotQtofProfileFitCheck('deconv-profile-check-plot',data.fit_check);
   }
   const denseViewControls = document.getElementById('dense-profile-view-controls');
   if (denseViewControls) denseViewControls.hidden = isotopeAware;
@@ -7524,8 +7568,10 @@ function renderDeconvResults(data) {
   const measuredView=displayedSpectrum===data.measured_spectrum && !!displayedSpectrum;
   const profileDescription=document.getElementById('deconv-profile-description');
   if(profileDescription){
-    profileDescription.hidden=!isotopeAware && !profileFit;
-    profileDescription.textContent=profileFit
+    profileDescription.hidden=!isotopeAware && !profileFit && !chargeProfile;
+    profileDescription.textContent=chargeProfile
+      ? `Unassigned signal ${(data.workflow.unexplained_fraction*100).toFixed(1)}% · inspect under Profile check.`
+      : profileFit
       ? `${data.workflow.description} Unexplained signal ${(data.workflow.unexplained_fraction*100).toFixed(1)}%; model overshoot ${(data.workflow.overshoot_fraction*100).toFixed(1)}%.${data.workflow.converged?'':' Fit iteration limit reached—review before use.'}`
       : isotopeAware
       ? `${data.workflow.scans_analyzed} MS1 scans fitted. ${data.workflow.description}` : '';
@@ -7572,7 +7618,7 @@ function renderDeconvResults(data) {
         : measuredView ? 'Measured centroids · selected time window · before blank subtraction'
         : (hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum')
         + (isotopeAware ? ` · MS1 scan ${data.workflow.display_scan_id} (${data.workflow.display_time.toFixed(3)} min)` : data.spectrum.mz_grid_step ? ` · summed window · ${data.spectrum.mz_grid_step} m/z grid` : ''),
-      centroidSticks:isotopeAware || (measuredView && !profileFit),
+      centroidSticks:chargeCentroids || isotopeAware || (measuredView && !profileFit),
       primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
       mzGridStep: displayedSpectrum.mz_grid_step,
       primaryColor: '#1f77b4',
@@ -7605,7 +7651,7 @@ function renderDeconvResults(data) {
     const maxIntensity = Math.max(...components.map(c => Number(c.intensity || 0)));
     let html = `<div class="data-table-wrapper"><table class="data-table">
       <thead><tr>
-        <th>#</th><th>${isotopeAware?'Estimated monoisotopic mass (Da)':profileFit?'Envelope reference mass (Da)':'Mass (Da)'}</th><th>Charges</th><th>Num Ions</th><th>${isotopeAware?'Fit score':'R&sup2;'}</th><th>Rel. Intensity (%)</th>
+        <th>#</th><th>${isotopeAware?'Estimated monoisotopic mass (Da)':profileFit?'Envelope reference mass (Da)':'Mass (Da)'}</th><th>Charges</th><th>Num Ions</th><th>${chargeCentroids?'Mass SD (Da)':chargeProfile?'Profile agreement':isotopeAware?'Fit score':'R&sup2;'}</th><th>Rel. Intensity (%)</th>
       </tr></thead><tbody>`;
 
     components.forEach((m, i) => {
@@ -7616,7 +7662,7 @@ function renderDeconvResults(data) {
         <td>${m.mass.toFixed(componentMassDecimals(m, 1))}${m.isotope_ambiguous?' *':''}</td>
         <td style="font-family:var(--font);max-width:150px;overflow:hidden;text-overflow:ellipsis;">${chargeStr}</td>
         <td>${m.peaks_found || m.num_charges || '-'}</td>
-        <td>${m.isotope_aware?Number(m.fit_score).toFixed(2):m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
+        <td>${chargeCentroids?Number(m.mass_std).toFixed(3):m.charge_profile?Number(m.profile_agreement).toFixed(3):m.isotope_aware?Number(m.fit_score).toFixed(2):m.r2 != null ? m.r2.toFixed(4) : '-'}</td>
         <td>${relInt}</td>
       </tr>`;
     });
@@ -7670,7 +7716,7 @@ function applyDenseDeconvProfileStyle(style = {}, { includeView = true } = {}) {
   // Use the result's instrument metadata, never a filename or a grid preference.
   const qtof = state.deconvResults?.spectrum_source === 'qtof_centroid_grid'
     || ['qtof-envelope', 'qtof-isotope-aware', 'qtof-profile'].includes(state.deconvResults?.workflow?.id);
-  style.deconv_mass_decimals = qtof ? 2 : 1;
+  style.deconv_mass_decimals = qtof || state.deconvResults?.workflow?.id==='charge-profile' ? 2 : 1;
   style.deconv_profile_smooth_sigma_da = qtof ? 1.0 : 2.0;
   style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
   style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;

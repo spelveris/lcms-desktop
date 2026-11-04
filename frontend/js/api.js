@@ -191,7 +191,7 @@ const api = {
       mw_agreement: params.mw_agreement,
       contig_min: params.contig_min,
       abundance_cutoff: params.abundance_cutoff,
-      envelope_cutoff: params.r2_cutoff || params.envelope_cutoff,
+      envelope_cutoff: params.r2_cutoff ?? params.envelope_cutoff,
       max_overlap: params.max_overlap,
       pwhh: params.fwhm || params.pwhh,
       noise_cutoff: params.noise_cutoff,
