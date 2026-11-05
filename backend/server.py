@@ -12,6 +12,7 @@ import datetime
 import json
 import shutil
 import subprocess
+import unicodedata
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
@@ -3592,11 +3593,51 @@ def theoretical_mz(
     return {"mass": mass, "ions": results}
 
 
+def _macos_account_full_name() -> str:
+    import pwd
+
+    try:
+        return pwd.getpwuid(os.getuid()).pw_gecos.split(",", 1)[0]
+    except (KeyError, OSError):
+        return ""
+
+
+def _match_personal_initials_folder(root: Path, full_name: str) -> Optional[Path]:
+    def fold(value: str) -> str:
+        return "".join(
+            char for char in unicodedata.normalize("NFKD", value.casefold())
+            if not unicodedata.combining(char)
+        )
+
+    parts = fold(full_name).split()
+    if len(parts) != 2 or not all(len(part) >= 2 and part.isalpha() for part in parts):
+        return None
+    first, surname = parts
+    initials = first[0] + surname[0]
+    try:
+        family = []
+        for entry in root.iterdir():
+            key = fold(entry.name)
+            if (len(key) in (2, 3) and key.isalpha() and key.startswith(initials)
+                    and not entry.is_symlink() and entry.is_dir()):
+                family.append((key, entry))
+    except OSError:
+        return None
+
+    if len(family) == 1 and family[0][0] == initials:
+        return family[0][1]
+    # In a collision family, only an explicit surname prefix identifies a folder.
+    extended = first[0] + surname[:2]
+    matches = [entry for key, entry in family if key == extended]
+    return matches[0] if len(matches) == 1 else None
+
+
 @app.get("/api/volumes")
 def list_volumes():
     """List mounted volumes / drives for quick navigation."""
     import platform
     volumes = []
+    personal_folder = None
 
     def add_volume(name: str, path: Union[str, Path], *, pinned: bool = False) -> None:
         normalized = str(path)
@@ -3612,6 +3653,9 @@ def list_volumes():
         preferred = Path("/Volumes/chab_loc_lang_s1/Group/LC-MS Agilent data")
         if preferred.is_dir():
             add_volume("LC-MS Agilent data", preferred, pinned=True)
+            folder = _match_personal_initials_folder(preferred, _macos_account_full_name())
+            if folder is not None:
+                personal_folder = {"name": folder.name, "path": str(folder)}
         # macOS: list /Volumes
         vol_path = Path("/Volumes")
         if vol_path.exists():
@@ -3642,7 +3686,7 @@ def list_volumes():
         home = Path.home()
         add_volume(f"Home ({home.name})", home)
 
-    return {"volumes": volumes, "platform": system.lower()}
+    return {"volumes": volumes, "platform": system.lower(), "personal_folder": personal_folder}
 
 
 @app.delete("/api/cache")
@@ -3920,8 +3964,10 @@ def run_router_copy(payload: dict = Body(...)):
 def export_single_chromatogram(payload: dict = Body(...)):
     """Export the complete loaded plot data without reopening or resampling a run."""
     export_format = str(payload.get('format', 'pdf')).lower()
-    if export_format not in {'csv', 'pdf', 'png'}:
-        raise HTTPException(status_code=400, detail='format must be csv, pdf or png')
+    if export_format == 'jpeg':
+        export_format = 'jpg'
+    if export_format not in {'csv', 'pdf', 'png', 'jpg'}:
+        raise HTTPException(status_code=400, detail='format must be csv, pdf, png or jpg')
     try:
         prepared = prepare_chromatogram(payload)
     except ValueError as exc:
@@ -3940,7 +3986,7 @@ def export_single_chromatogram(payload: dict = Body(...)):
             content = plotting.export_figure(fig, dpi=dpi, format=export_format, tight=False)
         finally:
             plt.close(fig)
-        media_type = 'application/pdf' if export_format == 'pdf' else 'image/png'
+        media_type = 'application/pdf' if export_format == 'pdf' else 'image/jpeg' if export_format == 'jpg' else 'image/png'
     name = _sanitize_filename(str(payload.get('filename_base') or prepared['kind']), fallback='chromatogram')
     return Response(content=content, media_type=media_type,
                     headers={'Content-Disposition': f'attachment; filename="{name}.{export_format}"'})

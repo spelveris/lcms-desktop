@@ -60,7 +60,7 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .peptide-spectrum-card { min-width: 0; }
 /* The outer card owns padding/borders; the Plotly canvas keeps its full height. */
 .peptide-spectrum-canvas { width: 100%; max-width: 100%; min-width: 0; height: 430px; min-height: 430px; padding: 0; border: 0; }
-#peptide-chromatogram { width: 100%; min-width: 0; margin-top: 12px; }
+#peptide-chromatogram { width: 100%; min-width: 0; margin-top: 8px; }
 #peptide-chromatogram[hidden] { display: none; }
 .peptide-chromatogram-card { min-width: 0; }
 .peptide-chromatogram-canvas { width: 100%; max-width: 100%; min-width: 0; height: 300px; min-height: 300px; padding: 0; border: 0; }
@@ -79,7 +79,7 @@ input, select, textarea, button { font-family: inherit; font-size: inherit; }
 .database-search-table th, .database-search-table td { text-align: left; padding: 6px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .database-search-scroll { max-height: 360px; overflow: auto; margin: 8px 0; }
 .database-search-scroll th { position: sticky; top: 0; background: var(--bg-card); }
-.protein-databases { padding: 10px 12px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+.protein-databases { padding: 6px 12px; margin: 0 0 8px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
 .protein-databases .tab-toolbar { flex-wrap: wrap; margin-bottom: 6px; }
 .protein-databases .tab-toolbar label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 .protein-databases .tab-toolbar select { min-width: 180px; width: 330px; max-width: 100%; }
@@ -133,13 +133,13 @@ table.data-table.peptide-results-table th { letter-spacing: 0; text-transform: n
 .peptide-column-filter-editor label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 .tab-toolbar.peptide-column-filter-editor input { width: 150px; min-width: 0; max-width: 100%; }
 .peptide-results-table .btn { max-width: 100%; padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; }
-.peptide-table-filters { flex-wrap: wrap; margin: 12px 0; }
+.peptide-table-filters { flex-wrap: wrap; margin: 8px 0; }
 .peptide-table-filters label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 .tab-toolbar.peptide-table-filters input, .tab-toolbar.peptide-table-filters select { min-width: 0; max-width: 100%; }
 .peptide-table-filters input[type="search"] { width: 230px; }
 .peptide-sort-button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
 .peptide-sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.peptide-ion-sequence { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
+.peptide-ion-sequence { margin-top: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
 .peptide-ion-sequence[hidden] { display: none; }
 .peptide-ion-scroll { max-width: 100%; overflow-x: auto; margin: 8px 0; }
 .peptide-cleavage-map { display: block; background: #fff; border-radius: 4px; font-family: var(--font-mono); }
@@ -527,6 +527,7 @@ body.sidebar-resizing .sidebar {
   gap: 4px;
   margin-bottom: 8px;
 }
+.mount-buttons[hidden] { display: none; }
 .mount-btn {
   font-size: 11px;
   padding: 3px 8px;
@@ -547,6 +548,15 @@ body.sidebar-resizing .sidebar {
   background: #2d7edc;
   border-color: #68aaff;
   color: #fff;
+}
+.mount-btn.mount-btn-personal {
+  background: #9f3439;
+  border-color: #b24c51;
+  color: #fff;
+}
+.mount-btn.mount-btn-personal:hover {
+  background: #b63c43;
+  border-color: #c4595f;
 }
 
 .sort-bar {
@@ -802,27 +812,36 @@ body.sidebar-resizing .sidebar {
 /* Tab navigation */
 .tab-nav {
   display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
   background: var(--bg-sidebar);
   border-bottom: 2px solid var(--border);
-  padding: 0 8px;
+  padding: 4px 4px 0;
   flex-shrink: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  white-space: nowrap;
+  container-type: inline-size;
 }
 .tab-btn {
-  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 72px;
+  min-width: min-content;
+  min-height: 38px;
+  padding: 4px;
   background: transparent;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: var(--radius) var(--radius) 0 0;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 13px;
+  font-size: clamp(10px, 1cqw, 12px);
+  line-height: 14px;
   font-weight: 500;
+  white-space: normal;
+  overflow-wrap: normal;
+  text-wrap: balance;
   transition: all var(--transition);
-  margin: 6px 4px 0 0;
-  flex: 0 0 auto;
+  margin: 0;
 }
 .tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
 .tab-btn.active {
@@ -858,6 +877,13 @@ body.sidebar-resizing .sidebar {
   width: 84px;
 }
 
+.timechange-plot-card { min-width: 0; margin-bottom: 8px; }
+.timechange-plot-card > .plot-container { margin-bottom: 4px; }
+.timechange-plot-downloads { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.timechange-plot-downloads[hidden], .timechange-plot-downloads [hidden] { display: none; }
+.timechange-plot-downloads .btn { gap: 6px; max-width: 100%; white-space: normal; }
+.pdf-document-icon { width: 14px; height: 16px; flex: 0 0 14px; }
+
 .timechange-eic-controls {
   display: flex;
   align-items: center;
@@ -876,14 +902,14 @@ body.sidebar-resizing .sidebar {
   min-width: 116px;
 }
 
-/* Tab toolbar */
+/* Shared compact controls for every tab, including wrapped and nested rows. */
 .tab-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px 12px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
-  padding: 12px 16px;
+  margin-bottom: 8px;
+  padding: 6px 12px;
   background: var(--bg-card);
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -904,10 +930,10 @@ body.sidebar-resizing .sidebar {
 .mz-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
-  padding: 8px 16px;
+  margin-bottom: 6px;
+  padding: 6px 12px;
   background: var(--bg-card);
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -944,6 +970,8 @@ body.sidebar-resizing .sidebar {
   min-width: 520px;
 }
 .toolbar-note { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.tab-panel > .toolbar-note { margin-bottom: 6px; }
+.tab-toolbar-after-note { margin-top: 8px; }
 .deconv-mode-toggle {
   display: inline-flex;
   align-items: center;
@@ -961,32 +989,24 @@ body.sidebar-resizing .sidebar {
 }
 
 .molecule-tools {
-  margin-bottom: 16px;
-  padding: 12px 16px;
+  margin-bottom: 8px;
+  padding: 6px 12px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .molecule-tools-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   flex-wrap: wrap;
 }
 
-/* Keep the analysis controls compact without shrinking their hit targets. */
-#tab-single > .tab-toolbar,
-#tab-single > .molecule-tools,
-#tab-deconv > .tab-toolbar,
-#tab-progression > .tab-toolbar {
-  padding: 6px 12px;
-  row-gap: 6px;
-  margin-bottom: 8px;
-}
+/* Single Sample keeps its additional space-saving graph layout. */
 #tab-single > .metrics-bar { margin-bottom: 6px; }
 #tab-single > .mz-toolbar { margin-bottom: 6px; }
 #tab-single > .metrics-bar { row-gap: 6px; }
@@ -1026,7 +1046,7 @@ body.sidebar-resizing .sidebar {
 .sequence-mod-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(360px, 1fr);
-  gap: 16px;
+  gap: 6px 8px;
   align-items: start;
 }
 
@@ -1039,23 +1059,27 @@ body.sidebar-resizing .sidebar {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 4px;
   width: 100%;
   white-space: normal;
 }
 
 #seqmod-sequence-input {
   width: 100%;
-  min-height: 140px;
+  min-height: 90px;
   resize: vertical;
   font-family: var(--font-mono);
-  line-height: 1.5;
+  line-height: 1.4;
 }
+
+#tab-sequence-mod .molecule-tools { gap: 4px; }
+#tab-sequence-mod .molecule-tools-row { row-gap: 4px; }
+#tab-sequence-mod .molecule-tools > :last-child { margin-bottom: 0; }
 
 .sequence-mod-mode-switch {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
 .sequence-mod-mode-title {
@@ -1069,14 +1093,15 @@ body.sidebar-resizing .sidebar {
 .sequence-mod-mode-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 4px 6px;
 }
 
 .sequence-mod-mode-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-content: start;
+  gap: 3px 6px;
+  padding: 6px 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.02);
@@ -1085,7 +1110,7 @@ body.sidebar-resizing .sidebar {
 }
 
 .sequence-mod-mode-card input {
-  margin: 0;
+  margin: 2px 0 0;
   accent-color: #5fa8ff;
 }
 
@@ -1106,8 +1131,9 @@ body.sidebar-resizing .sidebar {
 }
 
 .sequence-mod-mode-card-note {
+  grid-column: 1 / -1;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.35;
   color: var(--text-muted);
 }
 
@@ -1115,7 +1141,7 @@ body.sidebar-resizing .sidebar {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 4px;
   white-space: normal;
   min-width: 180px;
 }
@@ -1129,7 +1155,7 @@ body.sidebar-resizing .sidebar {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 4px;
   flex: 1 1 360px;
   min-width: 280px;
   white-space: normal;
@@ -1142,14 +1168,14 @@ body.sidebar-resizing .sidebar {
 .sequence-mod-custom-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
 .sequence-mod-custom-entry {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 4px;
+  padding: 6px 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.02);
@@ -1164,7 +1190,7 @@ body.sidebar-resizing .sidebar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
   flex-wrap: wrap;
 }
 
@@ -1193,15 +1219,15 @@ body.sidebar-resizing .sidebar {
 
 .sequence-mod-sequence-card {
   min-height: 0;
-  padding: 16px;
+  padding: 6px 12px;
 }
 
 .sequence-mod-sequence-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 6px 12px;
+  margin-bottom: 4px;
   flex-wrap: wrap;
 }
 
@@ -1209,7 +1235,7 @@ body.sidebar-resizing .sidebar {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 3px 8px;
   background: rgba(33, 92, 175, 0.16);
   border: 1px solid rgba(33, 92, 175, 0.4);
   border-radius: 999px;
@@ -1221,14 +1247,14 @@ body.sidebar-resizing .sidebar {
 .sequence-mod-sequence-viewer {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
   overflow-x: auto;
 }
 
 .sequence-mod-line {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
 }
 
@@ -1242,30 +1268,37 @@ body.sidebar-resizing .sidebar {
 
 .sequence-mod-line-body {
   min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 15px;
 }
 
 .sequence-mod-ruler {
   display: flex;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 6px;
+  margin-bottom: 2px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: inherit;
+  line-height: 13px;
   color: var(--text-muted);
 }
 
 .sequence-mod-ruler-group {
   display: inline-flex;
   justify-content: flex-end;
+  flex: 0 0 5ch;
   width: 5ch;
+  padding-right: calc((5 - var(--group-residues, 5)) * 1ch);
 }
+.sequence-mod-ruler-group > span { font-size: 11px; }
 
 .sequence-mod-group-row {
   display: flex;
-  gap: 10px;
+  gap: 6px;
 }
 
 .sequence-mod-group {
   display: inline-flex;
+  flex: 0 0 5ch;
   width: 5ch;
 }
 
@@ -1324,11 +1357,22 @@ body.sidebar-resizing .sidebar {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 6px 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
 }
+
+#seqmod-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 6px;
+  margin-bottom: 6px;
+}
+#seqmod-summary .metric-card { min-width: 0; gap: 2px; padding: 4px 8px; }
+#seqmod-summary .metric-card:last-child { grid-column: 1 / -1; }
+#seqmod-summary .metric-value { overflow-wrap: anywhere; }
+#seqmod-summary .metric-card:not(.metric-card-primary) .metric-value { font-size: 14px; }
 
 .sequence-mod-primary-intro {
   font-size: 12px;
@@ -1353,7 +1397,7 @@ body.sidebar-resizing .sidebar {
 
 .sequence-mod-details {
   border-top: 1px solid var(--border);
-  padding-top: 10px;
+  padding-top: 6px;
 }
 
 .sequence-mod-details summary {
@@ -1365,7 +1409,7 @@ body.sidebar-resizing .sidebar {
 }
 
 .sequence-mod-details[open] summary {
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .sequence-mod-mass-table td:first-child,
@@ -1387,7 +1431,7 @@ body.sidebar-resizing .sidebar {
 }
 
 .sequence-mod-inline-note {
-  margin-top: 8px;
+  margin-top: 4px;
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -1401,8 +1445,8 @@ body.sidebar-resizing .sidebar {
 /* Metrics bar */
 .metrics-bar {
   display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 6px 12px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
 }
 .metric-card {
@@ -1410,7 +1454,7 @@ body.sidebar-resizing .sidebar {
   flex-direction: column;
   gap: 4px;
   min-width: 132px;
-  padding: 10px 14px;
+  padding: 6px 14px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1460,7 +1504,7 @@ body.sidebar-resizing .sidebar {
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 8px 16px;
   align-items: start;
 }
 
@@ -1473,7 +1517,7 @@ body.sidebar-resizing .sidebar {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   min-height: 300px;
   overflow: hidden;
   box-sizing: border-box;
@@ -1489,8 +1533,10 @@ body.sidebar-resizing .sidebar {
 .plot-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
+.plot-stack:empty { display: none; }
+.plot-stack > .plot-container:not(.plotly) { margin-bottom: 0; }
 
 .single-eic-download-row {
   display: flex;
@@ -1510,7 +1556,7 @@ body.sidebar-resizing .sidebar {
 }
 
 .router-toolbar {
-  gap: 10px;
+  gap: 6px 10px;
   align-items: flex-end;
 }
 .router-actions {
@@ -1548,7 +1594,7 @@ body.sidebar-resizing .sidebar {
 .router-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 16px;
+  gap: 8px 16px;
 }
 .router-panel {
   min-height: 0;
@@ -1630,7 +1676,15 @@ body.sidebar-resizing .sidebar {
 }
 .deconv-controls .input-row {
   margin-bottom: 6px;
+  flex-wrap: wrap;
 }
+.deconv-time-field { flex: 1 1 220px; min-width: 0; }
+.deconv-time-adjuster { display: flex; align-items: stretch; gap: 4px; }
+.deconv-time-adjuster input { flex: 1; min-width: 0; appearance: textfield; }
+.deconv-time-adjuster input::-webkit-inner-spin-button,
+.deconv-time-adjuster input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.deconv-time-nudge { flex: 0 0 28px; justify-content: center; padding: 0; min-height: 30px; font-size: 16px; }
+.deconv-time-nudge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .toggle-expert {
   font-weight: 600;
   margin-bottom: 8px;
@@ -1638,21 +1692,21 @@ body.sidebar-resizing .sidebar {
 .deconv-controls > .toggle-expert { margin-bottom: 0; }
 .expert-params {
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 6px;
   margin-top: 8px;
 }
 .expert-params.hidden { display: none; }
 .expert-params-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 .param-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 8px;
+  gap: 6px 8px;
 }
 .param-grid label {
   display: flex;
@@ -1705,6 +1759,8 @@ body.sidebar-resizing .sidebar {
   white-space: normal;
 }
 
+.chromatogram-download-icon { width: 1em; height: 1em; flex: 0 0 1em; }
+
 #tab-deconv {
   container-type: inline-size;
 }
@@ -1724,7 +1780,7 @@ body.sidebar-resizing .sidebar {
 
 .deconv-results-grid {
   align-items: stretch;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 #deconv-window-context,
@@ -1736,8 +1792,9 @@ body.sidebar-resizing .sidebar {
 #deconv-window-context,
 .deconv-dense-row,
 .deconv-ion-card {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
+#deconv-window-context [hidden] { display: none; }
 
 .deconv-results-grid > .col {
   display: flex;
@@ -1754,12 +1811,12 @@ body.sidebar-resizing .sidebar {
 
 .deconv-spectrum-stack {
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .deconv-mass-stack {
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .deconv-results-grid > .col > .deconv-plot-card {
@@ -1934,13 +1991,14 @@ body.sidebar-resizing .sidebar {
   width: 170px;
 }
 .uptake-assay-samples {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .uptake-assay-layout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 6px 12px;
 }
+.uptake-assay-layout > .col > .plot-container { margin-bottom: 0; }
 .uptake-assay-span-2 {
   grid-column: 1 / -1;
 }
@@ -2039,7 +2097,7 @@ body.sidebar-resizing .sidebar {
   font-size: 12px;
 }
 .uptake-assay-summary {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 #uptake-assay-bar-plot {
   overflow-x: auto;
@@ -2062,7 +2120,7 @@ body.sidebar-resizing .sidebar {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .eic-section-header {
   display: flex;
@@ -2173,7 +2231,7 @@ body.sidebar-resizing .sidebar {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: 8px;
   width: 100%;
   justify-content: flex-end;
 }
@@ -2181,7 +2239,7 @@ body.sidebar-resizing .sidebar {
 /* ===== Tables ===== */
 .data-table-wrapper {
   overflow-x: auto;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 table.data-table {
   width: 100%;
@@ -2294,10 +2352,6 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   :root {
     --sidebar-width: 280px;
   }
-  .tab-btn {
-    padding: 10px 12px;
-    font-size: 12px;
-  }
   .masscalc-query-label {
     min-width: 320px;
     flex-basis: 100%;
@@ -2311,9 +2365,6 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 }
 
 @media (max-width: 600px) {
-  .tab-nav {
-    overflow-x: auto;
-  }
   .tab-toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -2341,13 +2392,15 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 6px 12px;
 }
 .masscalc-figure-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 6px 12px;
+  margin-top: 8px;
 }
+.masscalc-figure-card > .plot-container { margin-bottom: 0; }
 .masscalc-figure-card .tab-toolbar {
   margin-top: 0;
 }
@@ -2368,18 +2421,18 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 
 /* Ion detail styling */
 #deconv-ion-detail {
-  margin-top: 16px;
+  margin-top: 8px;
 }
 .ion-detail-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 12px;
+  padding: 6px 12px;
+  margin-bottom: 8px;
 }
 .ion-detail-card h4 {
   color: var(--accent);
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 .ion-detail-table-wrapper {
   margin-top: 8px;
@@ -2422,8 +2475,8 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
-  margin-top: 12px;
+  padding: 6px 12px;
+  margin-top: 8px;
   max-height: 400px;
   overflow-y: auto;
 }
@@ -2433,8 +2486,8 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
-  margin-top: 12px;
+  padding: 6px 12px;
+  margin-top: 8px;
 }
 
 /* Placeholder state */
@@ -2448,14 +2501,14 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 /* Empty-state quote cards */
 .quote-empty-stack {
   display: block;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 .quote-empty-card {
   width: 100%;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 20px;
+  padding: 8px 20px;
 }
 .quote-empty-card-main {
   min-height: 300px;
@@ -2481,26 +2534,26 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 }
 .reference-masses-panel {
   margin: 0 0 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border: 1px solid var(--border, #d4dce7);
   border-radius: 6px;
 }
 .reference-masses-panel summary { cursor: pointer; font-size: 13px; }
 .reference-masses-panel summary span { font-weight: normal; color: #748094; margin-left: 8px; }
-.reference-masses-panel[open] summary { margin-bottom: 10px; }
+.reference-masses-panel[open] summary { margin-bottom: 6px; }
 .reference-masses-panel [hidden] { display: none !important; }
 .reference-masses-detections { overflow-x: auto; }
 .reference-masses-detections td, .reference-masses-detections th { padding: 4px 10px; font-size: 12px; text-align: left; }
 .peptide-coverage-underline.evidence-msms.precursor-unconfirmed { border-bottom-style: dotted; }
 #peptide-method-settings > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 #peptide-method-settings input[type="number"] { width: 84px; }
-#peptide-method-settings .tab-toolbar { flex-wrap: wrap; margin-top: 10px; }
-#peptide-method-settings { margin-bottom: 12px; }
+#peptide-method-settings .tab-toolbar { flex-wrap: wrap; margin-top: 6px; }
+#peptide-method-settings { margin-bottom: 8px; }
 
 /* One setup card, with sections instead of nested toolbar rectangles. */
 .peptide-setup-panel {
-  padding: 12px 16px;
-  margin: 12px 0;
+  padding: 6px 16px;
+  margin: 8px 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-card);
@@ -2512,7 +2565,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   background: transparent;
   padding: 6px 0;
   margin: 0;
-  gap: 10px 16px;
+  gap: 6px 16px;
   flex-wrap: wrap;
 }
 .peptide-setup-panel .peptide-sequence-input { display: block; margin: 6px 0; }
@@ -2522,7 +2575,7 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
   border: 0;
   border-top: 1px solid var(--border);
   border-radius: 0;
-  padding: 8px 0;
+  padding: 6px 0;
   margin: 4px 0 0;
   min-width: 0;
 }
@@ -2532,5 +2585,5 @@ table.data-table tr:hover td { background: rgba(255,255,255,0.03); }
 .peptide-setup-panel #peptide-method-settings .tab-toolbar { margin: 0; }
 .peptide-setup-panel .toolbar-note { margin: 4px 0 0; }
 .peptide-export-toolbar[hidden], .peptide-spectrum-card[hidden] { display: none; }
-.deconv-dense-actions { flex: 0 0 auto; align-items: center; margin-top: 10px; }
+.deconv-dense-actions { flex: 0 0 auto; align-items: center; margin-top: 8px; }
 .dense-profile-view-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-right: auto; min-width: 0; }

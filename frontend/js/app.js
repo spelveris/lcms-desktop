@@ -33,6 +33,9 @@ const DECONV_EXPERT_DEFAULTS = {
 const state = {
   currentPath: localStorage.getItem('lcms-browse-path') || '/',
   systemVolumes: [],
+  personalFolder: null,
+  showVolumeShortcuts: false,
+  volumesRequestId: 0,
   customMountPaths: loadStoredCustomMounts(),
   runRouterSettings: loadStoredRunRouterSettings(),
   runRouterRecentLog: loadStoredRunRouterRecentLog(),
@@ -66,6 +69,7 @@ const state = {
   deconvAutoRunInFlight: false,
   deconvWindowEditTimer: null,
   deconvWindowEditRunId: 0,
+  deconvContextLoadId: 0,
   deconvSelectedComponentIndex: null,
   deconvDragSelectionInFlight: false,
   progressionAssignments: {},
@@ -279,8 +283,9 @@ function rememberCustomMountPath(resolvedPath, sourcePath = '') {
 }
 
 function renderMountButtons() {
-  const container = document.getElementById('mount-buttons');
-  if (!container) return;
+  const shortcuts = document.getElementById('mount-buttons');
+  const volumes = document.getElementById('volume-shortcuts');
+  if (!shortcuts || !volumes) return;
 
   const entries = [];
   const seen = new Set();
@@ -299,6 +304,13 @@ function renderMountButtons() {
     });
   });
 
+  const personal = state.personalFolder;
+  const personalPath = normalizeEnteredPath(personal?.path);
+  if (personalPath && !seen.has(personalPath)) {
+    seen.add(personalPath);
+    entries.push({ path: personalPath, label: personal.name, title: personalPath, personal: true, pinned: false });
+  }
+
   (state.customMountPaths || []).forEach((mount) => {
     const path = normalizeEnteredPath(mount.path);
     if (!path || seen.has(path)) return;
@@ -316,22 +328,23 @@ function renderMountButtons() {
 
   entries.sort((left, right) => Number(right.pinned) - Number(left.pinned));
 
-  if (entries.length === 0) {
-    container.innerHTML = '';
-    container.style.display = 'none';
-    return;
-  }
-
-  container.style.display = 'flex';
-  container.innerHTML = '';
+  shortcuts.innerHTML = '';
+  volumes.innerHTML = '';
   entries.forEach((entry) => {
+    const isShortcut = entry.pinned || entry.personal;
+    if (!isShortcut && !state.showVolumeShortcuts) return;
     const btn = document.createElement('button');
-    btn.className = `btn btn-sm mount-btn${entry.pinned ? ' mount-btn-pinned' : ''}`;
+    btn.type = 'button';
+    btn.className = 'btn btn-sm mount-btn';
+    if (entry.pinned) btn.classList.add('mount-btn-pinned');
+    if (entry.personal) btn.classList.add('mount-btn-personal');
     btn.textContent = entry.label;
     btn.title = entry.title;
     btn.addEventListener('click', () => browseTo(entry.path));
-    container.appendChild(btn);
+    (isShortcut ? shortcuts : volumes).appendChild(btn);
   });
+  shortcuts.hidden = !shortcuts.children.length;
+  volumes.hidden = !volumes.children.length;
 }
 
 // ===== Initialization =====
@@ -339,6 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initAppVersionBadge();
   initUpdateIndicator();
   initSidebar();
+  initPlotlyResizeObserver();
   initTabs();
   initSettings();
   initFileBrowser();
@@ -621,6 +635,7 @@ function setEICBatchEmptyState(isEmpty, forceNew = false) {
 }
 
 function setDeconvEmptyState(isEmpty, forceNew = false) {
+  if (isEmpty) clearDeconvContextDownloads();
   setQuoteContainerState('deconv-empty-state', 'deconv', isEmpty, forceNew);
   setElementHidden('deconv-window-context', isEmpty);
   if (isEmpty) setElementHidden('deconv-results', true);
@@ -1082,6 +1097,7 @@ function resetTimeChangeView() {
   if (plot) plot.innerHTML = '';
   if (offset) offset.innerHTML = '';
   if (table) table.innerHTML = '';
+  syncTimeChangeDownloads();
   setTimeChangeEmptyState(true);
 }
 
@@ -1135,6 +1151,8 @@ function resizePlotlyById(plotId) {
   if (!plotId || !(window.Plotly && window.Plotly.Plots && typeof window.Plotly.Plots.resize === 'function')) return;
   const el = document.getElementById(plotId);
   if (!el || !el.classList.contains('js-plotly-plot')) return;
+  // Deliberately wide charts (such as the uptake bars) keep their scrollable canvas.
+  if (el.layout?.autosize === false) return;
   try {
     const width = Math.floor(el.clientWidth || 0);
     const fixedHeight = Number(el.dataset.fixedPlotHeight || 0);
@@ -1157,6 +1175,28 @@ function resizePlotlyById(plotId) {
   }
 }
 
+function initPlotlyResizeObserver() {
+  if (typeof ResizeObserver === 'undefined') return;
+  const main = document.querySelector('.main-content');
+  if (!main) return;
+  let previousWidth = -1;
+  let frame = null;
+  const observer = new ResizeObserver(entries => {
+    const width = Math.floor(entries[0]?.contentRect.width || 0);
+    if (width < 80 || width === previousWidth) return;
+    previousWidth = width;
+    if (frame !== null) return;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      main.querySelectorAll('.js-plotly-plot[id]').forEach(plot => {
+        if (plot.clientWidth > 80) resizePlotlyById(plot.id);
+      });
+    });
+  });
+  observer.observe(main);
+  return observer;
+}
+
 function syncDeconvBottomLayout() {
   // Size the plots, not their outer cards. Download rows can wrap naturally
   // without shrinking a Plotly canvas or covering its buttons.
@@ -1171,7 +1211,8 @@ function syncDeconvBottomLayout() {
 }
 
 function schedulePlotlyResize(plotIds = []) {
-  const ids = (Array.isArray(plotIds) && plotIds.length > 0)
+  const resizeAll = !(Array.isArray(plotIds) && plotIds.length > 0);
+  const ids = !resizeAll
     ? plotIds
     : [
       'deconv-spectrum-plot',
@@ -1209,7 +1250,12 @@ function schedulePlotlyResize(plotIds = []) {
   [0, 120, 280].forEach((delayMs) => {
     setTimeout(() => {
       if (includesDeconvBottom) syncDeconvBottomLayout();
-      ids.forEach((id) => resizePlotlyById(id));
+      // UV, EIC, progression and batch canvases are created after startup.
+      // Discover them again after each layout transition instead of relying on IDs.
+      const currentIds = resizeAll
+        ? [...new Set([...ids, ...Array.from(document.querySelectorAll('.js-plotly-plot[id]'), plot => plot.id)])]
+        : ids;
+      currentIds.forEach((id) => resizePlotlyById(id));
     }, delayMs);
   });
 }
@@ -1564,8 +1610,13 @@ function initFileBrowser() {
     }
   });
 
-  // Volumes / Drives button
-  document.getElementById('btn-volumes').addEventListener('click', loadVolumes);
+  const volumesButton = document.getElementById('btn-volumes');
+  volumesButton.addEventListener('click', () => {
+    state.showVolumeShortcuts = !state.showVolumeShortcuts;
+    volumesButton.setAttribute('aria-expanded', String(state.showVolumeShortcuts));
+    renderMountButtons();
+    loadVolumes();
+  });
 
   // Auto-load volumes on startup
   loadVolumes();
@@ -1633,14 +1684,17 @@ function initFileBrowser() {
 }
 
 async function loadVolumes() {
+  const requestId = ++state.volumesRequestId;
+  let data;
   try {
-    const data = await api.getVolumes();
-    state.systemVolumes = Array.isArray(data.volumes) ? data.volumes : [];
-    renderMountButtons();
-  } catch (err) {
-    state.systemVolumes = [];
-    renderMountButtons();
+    data = await api.getVolumes();
+  } catch (_) {
+    // The volume list may be temporarily unavailable.
   }
+  if (requestId !== state.volumesRequestId) return;
+  state.systemVolumes = Array.isArray(data?.volumes) ? data.volumes : [];
+  state.personalFolder = data?.personal_folder || null;
+  renderMountButtons();
 }
 
 function getFileSearchQuery() {
@@ -3235,16 +3289,26 @@ function renderSingleSample(data) {
 function appendSingleChromatogramDownloads(container, options) {
   if (!options.traces?.length || options.traces.some(trace => !trace.times?.length || !trace.intensities?.length)) return;
   const row = document.createElement('div');
-  row.className = 'single-eic-download-row single-chromatogram-download-row';
+  row.className = options.deconvolution ? 'deconv-mass-download-row' : 'single-eic-download-row single-chromatogram-download-row';
   row.dataset.plotId = options.plotId;
   row.setAttribute('role', 'group');
   row.setAttribute('aria-label', `${options.title} downloads`);
+  const iconPaths = {
+    pdf: 'M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5',
+    jpg: 'M1.5 3.5h13v11h-13zM1.5 12l4-4 3 3 2-2 4 4M12 6.5a1 1 0 1 1-2 0 1 1 0 1 1 2 0z',
+  };
   const buttons = [];
-  for (const format of ['csv', 'pdf', 'png']) {
+  for (const format of options.formats || ['csv', 'pdf', 'png']) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'btn btn-sm';
-    button.textContent = `Download ${format.toUpperCase()}`;
+    const label = `Download ${format.toUpperCase()}`;
+    const iconPath = options.deconvolution && iconPaths[format];
+    if (iconPath) {
+      button.innerHTML = `<svg class="chromatogram-download-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="${iconPath}"/></svg><span>${label}</span>`;
+    } else {
+      button.textContent = label;
+    }
     button.addEventListener('click', async () => {
       if (row.dataset.busy === 'true') return;
       row.dataset.busy = 'true';
@@ -3266,14 +3330,19 @@ async function exportSingleChromatogram(options, format) {
   const name = String(options.sampleName || 'sample').replace(/\.(?:sirslt|rslt|olax|d)$/i, '');
   const suffix = options.kind === 'tic' ? `tic_${options.polarity || 'default'}`
     : options.traces.length === 1 ? `uv_${options.traces[0].wavelength ?? options.traces[0].nm}nm` : 'uv_combined';
-  const filenameBase = `${sanitizeFilename(name)}_${suffix}`;
+  const contextTag = options.deconvolution ? `deconv_${options.backgroundSubtracted ? 'bgsub_' : ''}` : '';
+  const filenameBase = `${sanitizeFilename(name)}_${contextTag}${suffix}`;
   showLoading(`Exporting ${format.toUpperCase()}...`);
   try {
     const response = await api.exportSingleChromatogram({
       kind: options.kind, polarity: options.polarity, traces: options.traces,
       title: options.title, sample_name: name, filename_base: filenameBase, format,
+      ...(options.backgroundSubtracted ? { background_subtracted: true } : {}),
       dpi: parseInt(document.getElementById('export-dpi')?.value, 10) || 300,
-      style: buildCurrentDeconvStyle(),
+      style: {
+        ...buildCurrentDeconvStyle(),
+        ...(options.deconvolution ? { x_axis_width_multiplier: 1, selection_window: options.selectionWindow } : {}),
+      },
     });
     const blob = await backendResponseToBlob(response);
     const filename = getFilenameFromContentDisposition(response.headers.get('content-disposition'), `${filenameBase}.${format}`);
@@ -7037,6 +7106,19 @@ async function autoRunDeconvolutionOnTabOpen() {
   }
 }
 
+function nudgeDeconvTime(inputId, direction) {
+  if (!['deconv-start', 'deconv-end'].includes(inputId) || ![-1, 1].includes(Number(direction))) return false;
+  const input = document.getElementById(inputId);
+  const current = parseFloat(input?.value);
+  if (!Number.isFinite(current)) return false;
+  const next = Math.max(0, Number((current + Number(direction) * 0.01).toFixed(4)));
+  const other = parseFloat(document.getElementById(inputId === 'deconv-start' ? 'deconv-end' : 'deconv-start')?.value);
+  if (next === current || (Number.isFinite(other) && (inputId === 'deconv-start' ? next >= other : next <= other))) return false;
+  input.value = formatDeconvTimeValue(next);
+  scheduleManualDeconvWindowUpdate();
+  return true;
+}
+
 function scheduleManualDeconvWindowUpdate({ immediate = false } = {}) {
   if (state.deconvWindowEditTimer) {
     clearTimeout(state.deconvWindowEditTimer);
@@ -7109,6 +7191,9 @@ function initDeconvolution() {
   document.getElementById('deconv-end').addEventListener('input', () => scheduleManualDeconvWindowUpdate());
   document.getElementById('deconv-start').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
   document.getElementById('deconv-end').addEventListener('change', () => scheduleManualDeconvWindowUpdate({ immediate: true }));
+  document.querySelectorAll('.deconv-time-nudge').forEach(button => {
+    button.addEventListener('click', () => nudgeDeconvTime(button.dataset.timeTarget, button.dataset.timeDirection));
+  });
   document.getElementById('btn-deconv-mode-deconvolute')?.addEventListener('click', () => setDeconvInteractionMode('deconvolute'));
   document.getElementById('btn-deconv-mode-zoom')?.addEventListener('click', () => setDeconvInteractionMode('zoom'));
   document.getElementById('deconv-mw-algorithm')?.addEventListener('change', async () => {
@@ -7225,7 +7310,30 @@ async function applyDraggedDeconvWindow(start, end) {
   }
 }
 
+function clearDeconvContextDownloads() {
+  state.deconvContextLoadId += 1;
+  for (const kind of ['uv', 'tic']) {
+    const host = document.getElementById(`deconv-${kind}-downloads`);
+    if (host) { host.innerHTML = ''; host.hidden = true; }
+  }
+}
+
+function addDeconvContextDownloads(kind, trace, options) {
+  const host = document.getElementById(`deconv-${kind}-downloads`);
+  if (!host || !Array.isArray(trace?.times) || !Array.isArray(trace?.intensities)
+      || !trace.times.length || trace.times.length !== trace.intensities.length) return;
+  appendSingleChromatogramDownloads(host, {
+    ...options, kind, plotId: `deconv-${kind}-plot`, deconvolution: true,
+    formats: ['pdf', 'jpg', 'csv'],
+    traces: [{ ...trace, times: trace.times.slice(), intensities: trace.intensities.slice(), color: kind === 'uv' ? '#1f77b4' : '#ff7f0e' }],
+  });
+  host.hidden = false;
+}
+
 async function refreshDeconvWindowContext(samplePath = null) {
+  clearDeconvContextDownloads();
+  const loadId = state.deconvContextLoadId;
+  const isCurrent = () => loadId === state.deconvContextLoadId;
   const path = samplePath || document.getElementById('deconv-sample-select').value;
   const uvDiv = document.getElementById('deconv-uv-plot');
   const ticDiv = document.getElementById('deconv-tic-plot');
@@ -7241,7 +7349,12 @@ async function refreshDeconvWindowContext(samplePath = null) {
   const uvSmoothing = parseInt(document.getElementById('uv-smoothing').value) || 0;
   const backgroundPath = getSelectedDeconvBackgroundPath(path);
   const loadedMeta = state.loadedSamples[path] || await loadSampleMeta(path,{silent:true});
+  if (!isCurrent()) return;
   syncDeconvMwAlgorithmDefault(path);
+  const downloadOptions = {
+    sampleName: loadedMeta?.name || path.split(/[\\/]/).pop() || 'sample',
+    backgroundSubtracted: Boolean(backgroundPath), selectionWindow: { start, end },
+  };
 
   const preferredWavelength = preferredUvWavelength(loadedMeta,getSelectedWavelengths());
 
@@ -7254,6 +7367,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
         mzTargets: [],
         uvSmoothing,
       });
+      if (!isCurrent()) return;
       const uv = getBgsubDeconvUvChannel(bgsub);
       if (uv) {
         const uvWave = Number.isFinite(Number(uv.nm)) ? Number(uv.nm) : preferredWavelength;
@@ -7269,6 +7383,9 @@ async function refreshDeconvWindowContext(samplePath = null) {
           selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
         });
         bindDeconvWindowDragSelection('deconv-uv-plot');
+        addDeconvContextDownloads('uv', { ...uv, wavelength: uvWave }, {
+          ...downloadOptions, title: `Background-Subtracted UV (${uvWave.toFixed(0)} nm)`,
+        });
       } else {
         uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for background-subtracted view</p>';
       }
@@ -7288,10 +7405,12 @@ async function refreshDeconvWindowContext(samplePath = null) {
           selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
         });
         bindDeconvWindowDragSelection('deconv-tic-plot');
+        addDeconvContextDownloads('tic', tic, { ...downloadOptions, polarity: tic.polarity, title: `Background-Subtracted TIC${ticPolarityLabel}` });
       } else {
         ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for background-subtracted view</p>';
       }
     } catch (_) {
+      if (!isCurrent()) return;
       uvDiv.innerHTML = '<p class="placeholder-msg">Background-subtracted context failed to load</p>';
       ticDiv.innerHTML = '<p class="placeholder-msg">Background-subtracted context failed to load</p>';
     }
@@ -7299,6 +7418,7 @@ async function refreshDeconvWindowContext(samplePath = null) {
     try {
       if(!Number.isFinite(preferredWavelength))throw new Error('No recorded UV channel');
       const uv = await api.getUVChromatogram(path, preferredWavelength, uvSmoothing);
+      if (!isCurrent()) return;
       charts.plotChromatogramWithWindow('deconv-uv-plot', uv.times, uv.intensities, {
         title: `UV Chromatogram (${preferredWavelength.toFixed(0)} nm)`,
         yLabel: `UV ${preferredWavelength.toFixed(0)} nm (mAU)`,
@@ -7311,12 +7431,17 @@ async function refreshDeconvWindowContext(samplePath = null) {
         selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
       });
       bindDeconvWindowDragSelection('deconv-uv-plot');
+      addDeconvContextDownloads('uv', { ...uv, wavelength: preferredWavelength }, {
+        ...downloadOptions, title: `UV Chromatogram (${preferredWavelength.toFixed(0)} nm)`,
+      });
     } catch (_) {
+      if (!isCurrent()) return;
       uvDiv.innerHTML = '<p class="placeholder-msg">No UV data available for this sample</p>';
     }
 
     try {
       const tic = await api.getTIC(path);
+      if (!isCurrent()) return;
       charts.plotChromatogramWithWindow('deconv-tic-plot', tic.times, tic.intensities, {
         title: 'Total Ion Chromatogram (TIC)',
         yLabel: 'TIC Intensity',
@@ -7329,7 +7454,9 @@ async function refreshDeconvWindowContext(samplePath = null) {
         selectdirection: state.deconvInteractionMode === 'zoom' ? undefined : 'h',
       });
       bindDeconvWindowDragSelection('deconv-tic-plot');
+      addDeconvContextDownloads('tic', tic, { ...downloadOptions, title: 'Total Ion Chromatogram (TIC)' });
     } catch (_) {
+      if (!isCurrent()) return;
       ticDiv.innerHTML = '<p class="placeholder-msg">No TIC data available for this sample</p>';
     }
   }
@@ -8595,6 +8722,7 @@ function exportBatchDeconvCSV() {
 // ===== Time Change Tab =====
 function initTimeChangeMS() {
   initMzWindowControls('timechange-eic-window');
+  syncTimeChangeDownloads();
   document.getElementById('btn-run-time-change-ms').addEventListener('click', () => runTimeChangeMS('ms'));
   document.getElementById('btn-run-time-change-tic')?.addEventListener('click', () => runTimeChangeMS('tic'));
   document.getElementById('btn-run-time-change-eic')?.addEventListener('click', () => runTimeChangeMS('eic'));
@@ -8621,6 +8749,7 @@ function initTimeChangeMS() {
   document.getElementById('btn-export-timechange-tic-pdf')?.addEventListener('click', exportTimeChangeTICPdf);
   document.getElementById('btn-export-timechange-eic-pdf')?.addEventListener('click', exportTimeChangeEICPdf);
   document.getElementById('btn-export-timechange-uv-pdf')?.addEventListener('click', exportTimeChangeUVPdf);
+  document.getElementById('btn-export-timechange-overlap-pdf')?.addEventListener('click', () => exportTimeChangeOffset('pdf', { view: 'overlap' }));
 }
 
 function getTimeChangeSignalKind() {
@@ -8974,7 +9103,24 @@ function buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, k
   };
 }
 
+function syncTimeChangeDownloads(data = null) {
+  const ready = getTimeChangePlotSpectra(data).length > 0;
+  const kind = ['tic', 'eic', 'uv'].includes(data?.kind) ? data.kind : 'ms';
+  const label = kind === 'ms' ? 'Summed mass' : kind.toUpperCase();
+  for (const id of ['timechange-overlap-downloads', 'timechange-offset-downloads']) {
+    const row = document.getElementById(id);
+    if (row) row.hidden = !ready;
+  }
+  for (const signal of ['ms', 'tic', 'eic', 'uv']) {
+    const button = document.getElementById(`btn-export-timechange-${signal}-pdf`);
+    if (button) button.hidden = !ready || signal !== kind;
+  }
+  const caption = document.getElementById('timechange-overlap-pdf-label');
+  if (caption) caption.textContent = `${label} overlay PDF`;
+}
+
 function renderTimeChangeMS(data) {
+  syncTimeChangeDownloads(data);
   const spectra = data.spectra || [];
   const kind = data.kind === 'uv' || data.kind === 'tic' || data.kind === 'eic' ? data.kind : 'ms';
   const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
@@ -9067,7 +9213,7 @@ function renderTimeChangeMS(data) {
   tableContainer.innerHTML = html;
 }
 
-async function exportTimeChangeOffset(format) {
+async function exportTimeChangeOffset(format, { view = 'offset' } = {}) {
   if (!state.timeChangeMSData) {
     toast('Generate Time Change first', 'warning');
     return;
@@ -9093,6 +9239,7 @@ async function exportTimeChangeOffset(format) {
     state.timeChangeMSData.ionMode,
   );
   const baseStyle = buildCurrentDeconvStyle();
+  const overlap = view === 'overlap';
   const filenameBase = kind === 'uv'
     ? `time_change_uv_${Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength).toFixed(0) + 'nm' : 'offset'}`
     : (kind === 'tic'
@@ -9101,6 +9248,7 @@ async function exportTimeChangeOffset(format) {
         ? `time_change_eic_${Number(state.timeChangeMSData.targetMz).toFixed(2).replace('.', '_')}_${state.timeChangeMSData.ionMode === 'negative' ? 'neg' : 'pos'}_offset`
         : 'time_change_mass_offset'));
 
+  const exportFilenameBase = overlap ? `${filenameBase.replace(/_offset$/, '')}_overlap` : filenameBase;
   showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
   try {
     const response = await api.exportTimeChange({
@@ -9109,7 +9257,7 @@ async function exportTimeChangeOffset(format) {
         smoothing: state.timeChangeMSData.smoothing } : null,
       format,
       dpi,
-      filename_base: filenameBase,
+      filename_base: exportFilenameBase,
       traces: plotSpectra.map((trace) => ({
         label: trace.label,
         x: trace.x,
@@ -9123,21 +9271,21 @@ async function exportTimeChangeOffset(format) {
         signal_kind: kind,
         normalize,
         x_axis_width_multiplier: 2.0,
-        offset_angle_degrees: 45.0,
-        offset_guide: true,
+        offset_angle_degrees: overlap ? null : 45.0,
+        offset_guide: !overlap,
         offset_guide_anchor_x: kind === 'uv' || kind === 'tic' || kind === 'eic' ? 0.0 : null,
         uv_wavelength_nm: Number.isFinite(Number(state.timeChangeMSData.wavelength)) ? Number(state.timeChangeMSData.wavelength) : null,
-        x_offset_step: offsetConfig.xOffsetStep,
-        y_offset_step: offsetConfig.yOffsetStep,
-        title: offsetConfig.exportTitle,
+        x_offset_step: overlap ? 0 : offsetConfig.xOffsetStep,
+        y_offset_step: overlap ? 0 : offsetConfig.yOffsetStep,
+        title: overlap ? offsetConfig.overlapTitle : offsetConfig.exportTitle,
         x_label: offsetConfig.xTitle,
-        y_label: offsetConfig.yTitle,
+        y_label: overlap ? offsetConfig.yTitle.replace(/ \+ offset$/, '') : offsetConfig.yTitle,
       },
     });
     const blob = await backendResponseToBlob(response);
     const filename = getFilenameFromContentDisposition(
       response.headers.get('content-disposition'),
-      `${sanitizeFilename(filenameBase)}.${format}`
+      `${sanitizeFilename(exportFilenameBase)}.${format}`
     );
     downloadBlob(blob, filename);
     toast(`Exported ${String(format || '').toUpperCase()}`, 'success');
@@ -10498,7 +10646,7 @@ function renderSequenceModViewer(context) {
     for (let groupStart = 0; groupStart < lineSequence.length; groupStart += SEQUENCE_MOD_GROUP_SIZE) {
       const groupSequence = lineSequence.slice(groupStart, groupStart + SEQUENCE_MOD_GROUP_SIZE);
       const groupEnd = lineStart + groupStart + groupSequence.length;
-      rulerGroups.push(`<span class="sequence-mod-ruler-group">${groupEnd}</span>`);
+      rulerGroups.push(`<span class="sequence-mod-ruler-group" style="--group-residues:${groupSequence.length};"><span>${groupEnd}</span></span>`);
 
       const residueHtml = groupSequence.split('').map((residue, offset) => {
         const index = lineStart + groupStart + offset;
@@ -10551,15 +10699,15 @@ function renderSequenceModSummary(context) {
   container.innerHTML = `
     <div class="metric-card">
       <span class="metric-label">Selected Sites</span>
-      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.selectedSiteCount > 0 ? context.selectedSiteLabel : 'None')}</span>
+      <span class="metric-value">${escapeHtml(context.selectedSiteCount > 0 ? context.selectedSiteLabel : 'None')}</span>
     </div>
     <div class="metric-card">
       <span class="metric-label">Applied Site Changes</span>
-      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.editedSiteCount > 0 ? context.editedSiteLabel : 'No mass-changing edits')}</span>
+      <span class="metric-value">${escapeHtml(context.editedSiteCount > 0 ? context.editedSiteLabel : 'No mass-changing edits')}</span>
     </div>
     <div class="metric-card">
       <span class="metric-label">Replacement Input</span>
-      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.replacementMode === 'custom' ? 'Custom residues per selected site' : 'Standard amino acid across selected sites')}</span>
+      <span class="metric-value">${escapeHtml(context.replacementMode === 'custom' ? 'Custom residues per selected site' : 'Standard amino acid across selected sites')}</span>
     </div>
     <div class="metric-card metric-card-primary">
       <span class="metric-label">Primary Deconv Mass</span>
@@ -10567,7 +10715,7 @@ function renderSequenceModSummary(context) {
     </div>
     <div class="metric-card">
       <span class="metric-label">Processed Form</span>
-      <span class="metric-value" style="font-size:16px;">${escapeHtml(context.primaryTargetLabel)}</span>
+      <span class="metric-value">${escapeHtml(context.primaryTargetLabel)}</span>
     </div>
   `;
 }

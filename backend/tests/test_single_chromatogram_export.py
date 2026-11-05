@@ -34,6 +34,51 @@ def axis_size(fig):
 
 
 class SingleChromatogramExportTests(unittest.TestCase):
+    def test_deconvolution_chromatogram_axes_and_fonts_match_mass_exports_exactly(self):
+        plotting = server.plot_runtime.get('plotting')
+        for width in [6., 8., 12.]:
+            reference = plotting.create_deconvoluted_masses_figure('reference.d',
+                [{'mass': 20000., 'intensity': 100.}], {'fig_width': width, 'deconv_show_peak_labels': False})
+            try:
+                for kind in ['uv', 'tic']:
+                    data = payload(kind)
+                    data['style'].update(fig_width=width, x_axis_width_multiplier=1,
+                        selection_window={'start': .05, 'end': .2})
+                    fig = plotting.create_single_chromatogram_export_figure(prepare_chromatogram(data),
+                        'Sample_with_a_long_name_'*5, data['style'])
+                    try:
+                        np.testing.assert_allclose(axis_size(fig),axis_size(reference),rtol=0,atol=1e-12)
+                        self.assertEqual(fig.axes[0].xaxis.label.get_fontsize(),reference.axes[0].xaxis.label.get_fontsize())
+                        np.testing.assert_array_equal(fig.axes[0].lines[0].get_xdata(),data['traces'][0]['times'])
+                        bounds=fig.axes[0].transData.inverted().transform(fig.axes[0].patches[0].get_extents().get_points())
+                        np.testing.assert_allclose(bounds[:,0],[.05,.2],atol=1e-12)
+                    finally:
+                        server.plt.close(fig)
+            finally:
+                server.plt.close(reference)
+
+    def test_jpg_has_white_background_and_the_same_physical_canvas_as_pdf(self):
+        for kind in ['uv', 'tic']:
+            data=payload(kind);data.update(format='pdf',dpi=200)
+            data['style'].update(x_axis_width_multiplier=1,selection_window={'start':.05,'end':.2})
+            pdf=PdfReader(io.BytesIO(server.export_single_chromatogram(data).body)).pages[0]
+            for spelling in ['jpg','jpeg']:
+                data['format']=spelling
+                response=server.export_single_chromatogram(data)
+                image=Image.open(io.BytesIO(response.body))
+                self.assertEqual(response.media_type,'image/jpeg')
+                self.assertTrue(response.headers['content-disposition'].endswith('.jpg"'))
+                self.assertEqual(image.format,'JPEG');self.assertEqual(image.mode,'RGB')
+                self.assertEqual(image.getpixel((0,0)),(255,255,255))
+                np.testing.assert_allclose(image.size,[float(pdf.mediabox.width)/72*200,
+                    float(pdf.mediabox.height)/72*200],atol=1.01)
+
+    def test_background_subtracted_csv_keeps_signed_full_precision_data_and_labels(self):
+        data=payload();data['background_subtracted']=True
+        rows=list(csv.reader(io.StringIO(server.export_single_chromatogram(data).body.decode())))
+        self.assertEqual(rows[0],['Elution time (min)','Background-subtracted UV absorbance at 278 nm (mAU)'])
+        np.testing.assert_array_equal(np.array(rows[1:],float)[:,1],data['traces'][0]['intensities'])
+
     def test_csv_round_trips_full_precision_and_labels_without_loading_a_run_or_renderer(self):
         for kind, polarity, header in [('uv', None, 'UV absorbance at 278 nm (mAU)'),
                                        ('tic', 'positive', 'Positive TIC intensity (counts)'),

@@ -12,6 +12,7 @@ COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
 def prepare_chromatogram(payload):
     kind = str(payload.get('kind', '')).lower()
     polarity = str(payload.get('polarity') or '').lower()
+    background_subtracted = payload.get('background_subtracted') is True
     if kind not in {'uv', 'tic'} or polarity not in {'', 'positive', 'negative'}:
         raise ValueError('Choose a UV chromatogram or a positive/negative TIC')
     raw_traces = payload.get('traces')
@@ -44,6 +45,8 @@ def prepare_chromatogram(payload):
         else:
             label = f'{polarity.capitalize()} TIC' if polarity else 'TIC'
             column = f'{label} intensity (counts)'
+        if background_subtracted:
+            column = f'Background-subtracted {column}'
         color = str(raw.get('color') or COLORS[index % len(COLORS)])
         if not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
             color = COLORS[index % len(COLORS)]

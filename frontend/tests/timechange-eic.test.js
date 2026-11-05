@@ -11,6 +11,9 @@ function fixture() {
     'timechange-eic-window-number':'.5', 'timechange-eic-window':'.5',
     'mz-window-number':'3', 'mz-window':'1', 'eic-smoothing':'1',
     'btn-run-time-change-ms':'', 'timechange-normalize':'', 'export-dpi':'300',
+    'timechange-overlap-downloads':'', 'timechange-offset-downloads':'', 'timechange-overlap-pdf-label':'',
+    'btn-export-timechange-overlap-pdf':'', 'btn-export-timechange-ms-pdf':'',
+    'btn-export-timechange-tic-pdf':'', 'btn-export-timechange-eic-pdf':'', 'btn-export-timechange-uv-pdf':'',
   })) nodes.set(id, {value, handlers:{}, addEventListener(name, handler) { this.handlers[name] = handler; }});
   const context = vm.createContext({console, setTimeout, clearTimeout, Blob,
     localStorage:{getItem:()=>null}, window:{},
@@ -74,4 +77,47 @@ test('PDF EIC regenerates when its local window changes; PNG and SVG retain the 
   const session=JSON.parse(await downloads.at(-1).blob.text());
   assert.equal(session.analyses.time_change.mzWindow,0);
   assert.deepEqual(session.analyses.time_change.spectra[0].intensities,[0,10,0]);
+});
+
+test('graph downloads stay hidden until usable data exist and follow the displayed signal kind', () => {
+  const {nodes,run}=fixture();
+  const kinds=['ms','tic','eic','uv'];
+  for(const row of ['timechange-overlap-downloads','timechange-offset-downloads'])assert.equal(nodes.get(row).hidden,true);
+  for(const kind of kinds){
+    const data={kind,spectra:[{name:'sample',mz:[100,200],times:[0,1],intensities:[10,20]}]};
+    run(`syncTimeChangeDownloads(${JSON.stringify(data)})`);
+    for(const row of ['timechange-overlap-downloads','timechange-offset-downloads'])assert.equal(nodes.get(row).hidden,false);
+    for(const signal of kinds)assert.equal(nodes.get(`btn-export-timechange-${signal}-pdf`).hidden,signal!==kind);
+    assert.match(nodes.get('timechange-overlap-pdf-label').textContent,/overlay PDF$/);
+  }
+  run('syncTimeChangeDownloads({kind:"tic",spectra:[{status:"error",times:[],intensities:[]}]})');
+  assert.equal(nodes.get('timechange-overlap-downloads').hidden,true);
+  assert.equal(nodes.get('timechange-offset-downloads').hidden,true);
+  run('syncTimeChangeDownloads()');
+  for(const kind of kinds)assert.equal(nodes.get(`btn-export-timechange-${kind}-pdf`).hidden,true);
+});
+
+test('each graph exports its own PDF using the same traces, with the existing diagonal settings preserved',async()=>{
+  for(const kind of ['ms','tic','eic','uv']){
+    const {nodes,requests,exports,run}=fixture();
+    const data={kind,wavelength:194,targetMz:247.1,ionMode:'positive',mzWindow:.5,smoothing:1,
+      spectra:[{name:'first',mz:[100,200],times:[0,1],intensities:[10,20]},
+        {name:'second',mz:[100,200],times:[0,1],intensities:[30,40]}]};
+    run(`state.timeChangeMSData=${JSON.stringify(data)}`);
+    await nodes.get('btn-export-timechange-overlap-pdf').handlers.click();
+    await run('exportTimeChangeOffset("pdf")');
+    assert.equal(requests.length,0);assert.equal(exports.length,2);
+    const [overlap,diagonal]=exports;
+    assert.deepEqual(overlap.traces,diagonal.traces);
+    assert.deepEqual(overlap.traces[0].intensities,[10,20]);
+    assert.equal(overlap.style.x_offset_step,0);assert.equal(overlap.style.y_offset_step,0);
+    assert.equal(overlap.style.offset_guide,false);assert.equal(overlap.style.offset_angle_degrees,null);
+    assert.match(overlap.style.title,/Overlap$/);assert.doesNotMatch(overlap.style.y_label,/\+ offset/);
+    assert.match(overlap.filename_base,/_overlap$/);
+    assert.equal(diagonal.style.x_offset_step,kind==='ms'?67.5:.3375);
+    assert.equal(diagonal.style.y_offset_step,13.5);assert.equal(diagonal.style.offset_guide,true);
+    assert.equal(diagonal.style.offset_angle_degrees,45);
+    for(const payload of exports){assert.equal(payload.format,'pdf');assert.equal(payload.style.fig_width,6);assert.equal(payload.style.x_axis_width_multiplier,2);}
+    assert.equal(overlap.eic_settings?.mz_window,kind==='eic'?.5:undefined);
+  }
 });

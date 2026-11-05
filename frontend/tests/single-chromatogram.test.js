@@ -19,7 +19,8 @@ function fixture() {
     setAttribute(name, value) { this.attributes[name] = value; }
   }
   for (const id of ['single-sample-select', 'single-metrics', 'single-uv-plots', 'single-tic-plot',
-    'single-eic-plots', 'fig-width', 'line-width', 'show-grid', 'mass-axis-min', 'mass-axis-max', 'export-dpi']) {
+    'single-eic-plots', 'fig-width', 'line-width', 'show-grid', 'mass-axis-min', 'mass-axis-max', 'export-dpi',
+    'deconv-start','deconv-end','deconv-uv-plot','deconv-tic-plot','deconv-uv-downloads','deconv-tic-downloads','uv-smoothing']) {
     nodes.set(id, new Element());
   }
   nodes.get('single-sample-select').value = '/data/first.sirslt';
@@ -41,6 +42,60 @@ function fixture() {
     state.loadedSamples['/data/first.sirslt']={name:'first.sirslt',has_ms_neg:true};`);
   return {nodes, context, run, requests, downloads, response, messages};
 }
+
+test('Deconvolution downloads export each complete displayed trace with its saved selection and standard axis size',async()=>{
+  for(const background of [false,true]){
+    const {nodes,context,run,requests,downloads}=fixture();
+    nodes.get('deconv-start').value='.05';nodes.get('deconv-end').value='.2';nodes.get('uv-smoothing').value='1';
+    context.api.getUVChromatogram=async()=>uv[0];context.api.getTIC=async()=>({times:tic.times,intensities:tic.intensities});
+    context.api.runBackgroundSubtraction=async()=>({uv:{wavelengths:uv},tic:{times:tic.times,intensities:tic.intensities}});
+    run(`state.loadedSamples['/data/first.sirslt'].uv_wavelengths=[278];
+      getSelectedWavelengths=()=>[278];getSelectedDeconvBackgroundPath=()=>${background?'"/background.sirslt"':'""'};
+      setDeconvEmptyState=()=>{};charts.plotChromatogramWithWindow=()=>{};bindDeconvWindowDragSelection=()=>{};`);
+    await run('refreshDeconvWindowContext("/data/first.sirslt")');
+    nodes.get('deconv-start').value='9';nodes.get('single-sample-select').value='/data/other.sirslt';
+    for(const kind of ['uv','tic']){
+      const host=nodes.get(`deconv-${kind}-downloads`);assert.equal(host.hidden,false);
+      const buttons=host.children[0].children;assert.equal(buttons.length,3);
+      assert.match(buttons[0].innerHTML, /<svg class="chromatogram-download-icon"[^>]*aria-hidden="true"[^>]*>.*<span>Download PDF<\/span>/);
+      assert.match(buttons[1].innerHTML, /<svg class="chromatogram-download-icon"[^>]*aria-hidden="true"[^>]*>.*<span>Download JPG<\/span>/);
+      assert.equal(buttons[2].textContent, 'Download CSV');
+      for(const button of buttons)await button.listeners.click();
+    }
+    assert.deepEqual(requests.map(r=>r.format),['pdf','jpg','csv','pdf','jpg','csv']);
+    for(const r of requests){
+      assert.equal(r.style.x_axis_width_multiplier,1);
+      assert.deepEqual(r.style.selection_window,{start:.05,end:.2});
+      assert.equal(r.sample_name,'first');assert.match(r.filename_base,/_deconv_/);
+      assert.equal(r.background_subtracted===true,background);
+      assert.deepEqual(r.traces[0].times,r.kind==='uv'?uv[0].times:tic.times);
+      assert.deepEqual(r.traces[0].intensities,r.kind==='uv'?uv[0].intensities:tic.intensities);
+    }
+    assert.equal(downloads.length,6);
+    run('clearDeconvContextDownloads()');
+    assert.equal(nodes.get('deconv-uv-downloads').hidden,true);assert.equal(nodes.get('deconv-uv-downloads').children.length,0);
+  }
+});
+
+test('an earlier chromatogram load cannot replace the new graph downloads, and missing channels hide their buttons',async()=>{
+  const {nodes,context,run,requests}=fixture();const pending=[];
+  nodes.get('deconv-start').value='.05';nodes.get('deconv-end').value='.2';
+  context.api.getUVChromatogram=()=>new Promise(resolve=>pending.push(resolve));
+  context.api.getTIC=async()=>({times:[],intensities:[]});
+  run(`state.loadedSamples['/data/first.sirslt'].uv_wavelengths=[278];
+    getSelectedWavelengths=()=>[278];getSelectedDeconvBackgroundPath=()=>'';
+    setDeconvEmptyState=()=>{};charts.plotChromatogramWithWindow=()=>{};bindDeconvWindowDragSelection=()=>{};`);
+  const first=run('refreshDeconvWindowContext("/data/first.sirslt")');
+  nodes.get('deconv-start').value='.1';
+  const second=run('refreshDeconvWindowContext("/data/first.sirslt")');
+  pending[1]({...uv[0],intensities:[7,8,9]});await second;
+  pending[0](uv[0]);await first;
+  const host=nodes.get('deconv-uv-downloads');assert.equal(host.children.length,1);
+  await host.children[0].children[2].listeners.click();
+  assert.deepEqual(requests[0].traces[0].intensities,[7,8,9]);
+  assert.deepEqual(requests[0].style.selection_window,{start:.1,end:.2});
+  assert.equal(nodes.get('deconv-tic-downloads').hidden,true);
+});
 
 const uv = [{nm: 278, wavelength: 278, times: [0, .1234567890123, 1], intensities: [-.01, 2.3456789012345, .1]}];
 const tic = {times: [0, .1, .2], intensities: [3, 4, 5], has_dual_polarity: true,

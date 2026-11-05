@@ -594,7 +594,7 @@ function buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotat
       y: candidate.intensity,
       text: label,
       showarrow: false,
-      xanchor: 'center',
+      xanchor: px < width / 2 ? 'left' : plotWidthPx - px < width / 2 ? 'right' : 'center',
       yanchor: 'bottom',
       yshift: 6 + (lane * 10),
       font: { size: 9, color: '#000000' },
@@ -611,7 +611,7 @@ function bindAdaptiveMassSpectrumLabels(divId, mzValues, intensities, baseAnnota
   const applyAdaptiveAnnotations = (eventData = null) => {
     if (plot.__adaptiveMassSpectrumBusy) return;
     const xRange = getMassSpectrumViewRange(plot, mzValues, eventData);
-    const plotWidth = Math.max(320, Math.floor(plot.clientWidth || plot.offsetWidth || 800));
+    const plotWidth = Math.max(1, Math.floor(plot._fullLayout?._size?.w || plot.clientWidth || plot.offsetWidth || 800));
     const annotations = buildAdaptiveMassSpectrumAnnotations(mzValues, intensities, baseAnnotations, xRange, plotWidth, gridStep);
     plot.__adaptiveMassSpectrumBusy = true;
     Promise.resolve(window.Plotly.relayout(plot, { annotations }))
@@ -1376,6 +1376,22 @@ const charts = {
       : getContainerHeight(divId, 380);
 
     const xaxis = { title: 'm/z', automargin: true };
+    // Fit the acquired domain without Plotly padding or label-driven expansion.
+    // Keep the same limits when the toolbar or a double-click resets the view.
+    let mzMin = Infinity, mzMax = -Infinity;
+    for (const trace of traces) {
+      for (let i = 0; i < trace.x.length; i++) {
+        if (trace.x[i] == null || trace.y[i] == null) continue;
+        const mz = Number(trace.x[i]), intensity = Number(trace.y[i]);
+        if (!Number.isFinite(mz) || !Number.isFinite(intensity)) continue;
+        mzMin = Math.min(mzMin, mz);
+        mzMax = Math.max(mzMax, mz);
+      }
+    }
+    if (mzMax > mzMin) {
+      xaxis.range = [mzMin, mzMax];
+      xaxis.autorangeoptions = { minallowed: mzMin, maxallowed: mzMax };
+    }
     if (Array.isArray(options.xRange) && options.xRange.length === 2) {
       const x0 = Number(options.xRange[0]);
       const x1 = Number(options.xRange[1]);
@@ -1387,7 +1403,7 @@ const charts = {
     const layout = mergeLayout({
       title: { text: options.title || 'Mass Spectrum', font: { size: 14 } },
       xaxis,
-      yaxis: { title: 'Intensity', automargin: true },
+      yaxis: { title: 'Intensity', automargin: true, rangemode: 'tozero' },
       showlegend: traces.length > 1,
       height: plotHeight,
       margin: { l: 64, r: 44, t: 40, b: divId === 'deconv-spectrum-plot' ? 66 : 96 },

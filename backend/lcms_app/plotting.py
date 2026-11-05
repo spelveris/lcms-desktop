@@ -1178,8 +1178,9 @@ def export_figure(
     Returns:
         Image/document as bytes
     """
-    fig.patch.set_facecolor('none')
-    fig.patch.set_alpha(0.0)
+    jpeg = format.lower() in {'jpg', 'jpeg'}
+    fig.patch.set_facecolor('white' if jpeg else 'none')
+    fig.patch.set_alpha(1.0 if jpeg else 0.0)
     for ax in fig.get_axes():
         ax.set_facecolor('none')
         ax.patch.set_alpha(0.0)
@@ -1190,9 +1191,10 @@ def export_figure(
         format=format,
         dpi=dpi,
         bbox_inches=bbox_inches,
-        facecolor='none',
+        facecolor='white' if jpeg else 'none',
         edgecolor='none',
-        transparent=True,
+        transparent=not jpeg,
+        **({'pil_kwargs': {'quality': 95, 'subsampling': 0}} if jpeg else {}),
         **({'metadata': metadata} if metadata is not None else {}),
     )
     buf.seek(0)
@@ -2277,7 +2279,7 @@ def _normalize_time_change_trace_payload(traces: list) -> list[dict]:
 def create_single_chromatogram_export_figure(
     prepared: dict, sample_name: str = '', style: Optional[dict] = None,
 ) -> matplotlib.figure.Figure:
-    """Twice the Deconvolution axis width, identical axis height and text sizes."""
+    """Fixed Deconvolution axes, optionally wider, with identical text sizes."""
     style = style or {}
     base_width = min(30., max(1., _coerce_finite_float(style.get('fig_width'), 6.)))
     panel_width, panel_height = _get_deconvolution_panel_dimensions(base_width)
@@ -2285,8 +2287,9 @@ def create_single_chromatogram_export_figure(
     _apply_locked_deconvolution_export_layout(fig)
     left, bottom, width, height = ax.get_position().bounds
     left_in, bottom_in = left*panel_width, bottom*panel_height
-    width_in, height_in = 2*width*panel_width, height*panel_height
-    canvas_width = panel_width + width*panel_width
+    width_multiplier = min(4., max(1., _coerce_finite_float(style.get('x_axis_width_multiplier'), 2.)))
+    width_in, height_in = width_multiplier*width*panel_width, height*panel_height
+    canvas_width = panel_width + (width_multiplier-1)*width*panel_width
 
     def position_axes():
         fw, fh = fig.get_size_inches()
@@ -2301,6 +2304,12 @@ def create_single_chromatogram_export_figure(
                 color=trace['color'], linewidth=line_width, rasterized=False)
     all_times = np.concatenate([trace['times'] for trace in traces])
     _set_chrom_xlim(ax, all_times)
+    window = style.get('selection_window')
+    if isinstance(window, dict):
+        start = _coerce_finite_float(window.get('start'), np.nan)
+        end = _coerce_finite_float(window.get('end'), np.nan)
+        if np.isfinite(start) and np.isfinite(end) and end > start:
+            ax.axvspan(start, end, facecolor='#ffd700', alpha=.25, zorder=0)
     ax.set_xlabel('Elution time (min)')
     ax.set_ylabel(prepared['y_label'])
     ax.ticklabel_format(axis='y', style='scientific', scilimits=(-2, 3), useMathText=False)

@@ -47,6 +47,36 @@ function fixture() {
   return { context, elements, plots, run: (code) => vm.runInContext(code, context) };
 }
 
+test('time adjustment buttons preserve measured decimals and the other boundary, and reject invalid windows',()=>{
+  const {run,elements,context}=fixture();context.updates=0;
+  run('scheduleManualDeconvWindowUpdate=()=>{updates++;}');
+  const start={value:'2.2688'},end={value:'2.5688'};
+  elements.set('deconv-start',start);elements.set('deconv-end',end);
+  assert.equal(run('nudgeDeconvTime("deconv-start",1)'),true);
+  assert.equal(start.value,'2.2788');assert.equal(end.value,'2.5688');
+  run('nudgeDeconvTime("deconv-end",-1)');assert.equal(end.value,'2.5588');
+  run('nudgeDeconvTime("deconv-start",-1);nudgeDeconvTime("deconv-end",1)');
+  assert.equal(start.value,'2.2688');assert.equal(end.value,'2.5688');
+  start.value='0.0040';run('nudgeDeconvTime("deconv-start",-1)');assert.equal(start.value,'0.0000');
+  const count=context.updates;assert.equal(run('nudgeDeconvTime("deconv-start",-1)'),false);
+  start.value='2.56';end.value='2.5688';assert.equal(run('nudgeDeconvTime("deconv-start",1)'),false);
+  assert.equal(run('nudgeDeconvTime("deconv-end",-1)'),false);
+  start.value='';assert.equal(run('nudgeDeconvTime("deconv-start",1)'),false);
+  assert.equal(run('nudgeDeconvTime("other",1)'),false);
+  assert.equal(run('nudgeDeconvTime("deconv-end",0)'),false);assert.equal(context.updates,count);
+});
+
+test('rapid time adjustments reuse the manual-edit debounce and submit only the final window',()=>{
+  const {run,elements,context}=fixture();const pending=new Map(),requests=[];let id=0;
+  context.setTimeout=(callback,delay)=>{pending.set(++id,{callback,delay});return id;};
+  context.clearTimeout=timer=>pending.delete(timer);context.recordWindow=(start,end)=>requests.push([start,end]);
+  elements.set('deconv-start',{value:'2.2688'});elements.set('deconv-end',{value:'2.5688'});
+  run('applyManualDeconvWindowUpdate=()=>recordWindow(Number(document.getElementById("deconv-start").value),Number(document.getElementById("deconv-end").value))');
+  run('nudgeDeconvTime("deconv-start",1);nudgeDeconvTime("deconv-start",1);nudgeDeconvTime("deconv-end",-1)');
+  assert.equal(pending.size,1);const task=[...pending.values()][0];assert.equal(task.delay,450);
+  task.callback();assert.deepEqual(requests,[[2.2888,2.5588]]);
+});
+
 test('charge-profile mode is opt-in for Pro iQ and keeps its controls editable',()=>{
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
   assert.match(html,/<select id="deconv-mw-algorithm">[\s\S]*?value="charge-profile"[^>]*>Agilent-style \(experimental\)<\/option>[\s\S]*?<\/select>/);
@@ -136,13 +166,12 @@ test('centroid reconstruction plots measured sticks and labels the fitted compon
 test('Single Sample uses compact cards and preserves molecule controls',()=>{
   const css=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
-  assert.match(css,/#tab-single > \.tab-toolbar,[\s\S]*?padding: 6px 12px;[\s\S]*?margin-bottom: 8px;/);
+  assert.match(css,/\.tab-toolbar\s*\{[^}]*margin-bottom: 8px;[^}]*padding: 6px 12px;/);
   assert.match(css,/#tab-single > \.mz-toolbar\s*\{ margin-bottom: 6px; \}/);
   assert.match(css,/#tab-single > \.metrics-bar\s*\{ row-gap: 6px; \}/);
   assert.match(css,/#tab-single \.plot-stack\s*\{ row-gap: 4px; \}/);
   assert.match(css,/#single-results\s*\{ gap: 8px; \}/);
-  assert.match(css,/\.tab-toolbar\s*\{[^}]*margin-bottom: 16px;[^}]*padding: 12px 16px;/);
-  assert.match(css,/\.mz-toolbar\s*\{[^}]*margin-bottom: 12px;[^}]*padding: 8px 16px;/);
+  assert.match(css,/\.mz-toolbar\s*\{[^}]*margin-bottom: 6px;[^}]*padding: 6px 12px;/);
   assert.doesNotMatch(html,/Enter SMILES or draw a molecule, then compute and add target m\/z automatically/);
   assert.match(html,/<div id="single-smiles-result" class="toolbar-note"><\/div>/);
   assert.match(css,/#single-smiles-result:empty\s*\{ display: none; \}/);
@@ -288,7 +317,7 @@ test('dense view controls sit below the graph with the export button, without th
   assert.match(card,/deconv-dense-actions[\s\S]*dense-profile-view-controls[\s\S]*data-format="pdf-dense"/);
   assert.doesNotMatch(html+fs.readFileSync(path.join(root,'js/app.js'),'utf8'),/Smoothed charge projection: 0.1 Da bins/);
   const css=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
-  assert.match(css,/\.deconv-dense-actions\s*\{[^}]*flex: 0 0 auto;[^}]*margin-top: 10px/);
+  assert.match(css,/\.deconv-dense-actions\s*\{[^}]*flex: 0 0 auto;[^}]*margin-top: 8px/);
 });
 
 test('selecting another coloured-result component focuses that mass and full range is reversible', () => {
@@ -666,6 +695,58 @@ test('sidebar/window resize includes the peptide spectrum and preserves its canv
   sizes.length=0;plot.clientWidth=480;run('schedulePlotlyResize()');
   assert.equal(sizes.length,3);assert.ok(sizes.every(size=>size.width===480&&size.height===430));
   assert.equal(plot.style.height,'430px');
+});
+
+test('sidebar resize discovers dynamic UV and EIC canvases after the transition without resetting their ranges',()=>{
+  const {run,context,elements}=fixture();const calls=[],timers=[];
+  context.setTimeout=callback=>timers.push(callback);
+  context.window.Plotly={relayout:(el,size)=>calls.push({id:el.id,...size}),Plots:{resize(){}}};
+  const dynamic=[];
+  context.document.querySelectorAll=()=>dynamic;
+  run('schedulePlotlyResize()');
+  for(const id of ['uv-combined-plot','uv-plot-3','eic-single-4','batch-deconv-mass-custom']){
+    const plot={id,classList:{contains:()=>true},dataset:{},clientWidth:900,clientHeight:300,style:{},layout:{height:300,xaxis:{range:[1,2]}}};
+    elements.set(id,plot);dynamic.push(plot);
+  }
+  timers.forEach(callback=>callback());
+  assert.equal(calls.length,12);
+  assert.ok(calls.every(call=>call.width===900&&call.height===300));
+  assert.ok(calls.every(call=>Object.keys(call).sort().join(',')==='height,id,width'));
+  calls.length=0;timers.length=0;
+  dynamic.forEach(plot=>{plot.clientWidth=1200;});run('schedulePlotlyResize()');timers.forEach(callback=>callback());
+  assert.equal(calls.length,12);assert.ok(calls.every(call=>call.width===1200));
+  dynamic.forEach(plot=>assert.deepEqual(plot.layout.xaxis.range,[1,2]));
+});
+
+test('an explicit resize keeps its scope and preserves deliberately wide scrollable charts',()=>{
+  const {run,context,elements}=fixture();const calls=[];
+  context.setTimeout=callback=>callback();
+  context.window.Plotly={relayout:(el,size)=>calls.push(el.id),Plots:{resize(){}}};
+  const plot=id=>({id,classList:{contains:()=>true},dataset:{},clientWidth:500,clientHeight:300,style:{},layout:{height:300}});
+  const uv=plot('uv-plot-0'),eic=plot('eic-single-1'),bars=plot('uptake-assay-bar-plot');
+  bars.layout={autosize:false,width:1800,height:300};
+  [uv,eic,bars].forEach(el=>elements.set(el.id,el));context.document.querySelectorAll=()=>[uv,eic,bars];
+  run('schedulePlotlyResize(["uv-plot-0"])');assert.deepEqual(calls,['uv-plot-0','uv-plot-0','uv-plot-0']);
+  calls.length=0;run('schedulePlotlyResize()');
+  assert.equal(calls.length,6);assert.ok(!calls.includes(bars.id));assert.equal(bars.layout.width,1800);
+});
+
+test('main-panel width changes resize dynamic charts without a window event or observer loop',()=>{
+  const {run,context,elements}=fixture();const frames=[],calls=[];let callback,observed;
+  const plots=[],main={querySelectorAll:()=>plots};
+  context.document.querySelector=()=>main;
+  context.ResizeObserver=class{constructor(fn){callback=fn;}observe(node){observed=node;}};
+  context.requestAnimationFrame=fn=>{frames.push(fn);return frames.length;};
+  context.window.Plotly={relayout:(el,size)=>calls.push({id:el.id,...size}),Plots:{resize(){}}};
+  run('initPlotlyResizeObserver()');assert.equal(observed,main);
+  callback([{contentRect:{width:800}}]);callback([{contentRect:{width:960}}]);
+  assert.equal(frames.length,1);
+  const uv={id:'uv-combined-plot',classList:{contains:()=>true},dataset:{},style:{},clientWidth:600,clientHeight:300,layout:{height:300}};
+  elements.set(uv.id,uv);plots.push(uv);frames.shift()();
+  assert.deepEqual(calls,[{id:uv.id,width:600,height:300}]);
+  callback([{contentRect:{width:960,height:500}}]);assert.equal(frames.length,0);
+  uv.clientWidth=760;callback([{contentRect:{width:1280}}]);frames.shift()();
+  assert.equal(calls.at(-1).width,760);
 });
 
 test('existing download controls and all export formats are preserved', () => {

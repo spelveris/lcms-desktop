@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.69">
+  <link rel="stylesheet" href="css/style.css?v=0.2.70">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -58,9 +58,10 @@
         <div class="nav-buttons">
           <button id="btn-up" class="btn btn-sm">&#8679; Up</button>
           <button id="btn-home" class="btn btn-sm">&#8962; Home</button>
-          <button id="btn-volumes" class="btn btn-sm">&#128190; Volumes</button>
+          <button id="btn-volumes" class="btn btn-sm" type="button" aria-expanded="false" aria-controls="volume-shortcuts">&#128190; Volumes</button>
         </div>
-        <div id="mount-buttons" class="mount-buttons" style="display:none;"></div>
+        <div id="mount-buttons" class="mount-buttons" hidden></div>
+        <div id="volume-shortcuts" class="mount-buttons" hidden></div>
         <div class="sort-bar">
           <label for="sort-select">Sort:</label>
           <select id="sort-select">
@@ -395,7 +396,7 @@
       </div>
       <p class="toolbar-note">Blue diamonds mark precursors actually selected for MS/MS in this MS1 scan. Click a diamond to see its measured fragments below.</p>
       <div id="qtof-ms1-plot" class="plot-container" style="height:330px;"></div>
-      <div class="tab-toolbar" style="margin-top:12px;">
+      <div class="tab-toolbar tab-toolbar-after-note">
         <label>Acquired MS/MS scan: <select id="qtof-fragment-select" disabled></select></label>
         <button id="qtof-ms2-prev" class="btn btn-sm" type="button" disabled aria-label="Previous MS/MS scan">←</button>
         <button id="qtof-ms2-next" class="btn btn-sm" type="button" disabled aria-label="Next MS/MS scan">→</button>
@@ -543,7 +544,7 @@
         <button id="btn-uptake-assay-run" class="btn btn-primary">Build Graphs</button>
         <button id="btn-uptake-assay-export-pdf" class="btn btn-sm">Export PDF</button>
       </div>
-      <div class="toolbar-note" style="margin-bottom:12px;">Uses the currently selected files. Mark rows as calibration controls or assay samples. Calibration controls are fit from the selected EIC and time window. Assay samples use that same window to calculate intracellular concentration. Matching sample names are grouped as replicates and shown with mean plus SD error bars.</div>
+      <div class="toolbar-note">Uses the currently selected files. Mark rows as calibration controls or assay samples. Calibration controls are fit from the selected EIC and time window. Assay samples use that same window to calculate intracellular concentration. Matching sample names are grouped as replicates and shown with mean plus SD error bars.</div>
       <div id="uptake-assay-samples" class="uptake-assay-samples"></div>
       <div id="uptake-assay-empty-state" class="quote-empty-stack"></div>
       <div id="uptake-assay-content" class="uptake-assay-layout hidden">
@@ -579,7 +580,7 @@
         <button id="btn-export-uv-area-pdf" class="btn btn-sm hidden"
                 title="Export the UV area graph with Time Change axis and font sizing">PDF UV area</button>
       </div>
-      <div id="eic-batch-mode-note" class="toolbar-note" style="margin-bottom:8px;">EIC mode uses the current m/z targets. UV mode uses a checked wavelength available in the sample, or its recorded default, and lets you drag windows to calculate area.</div>
+      <div id="eic-batch-mode-note" class="toolbar-note">EIC mode uses the current m/z targets. UV mode uses a checked wavelength available in the sample, or its recorded default, and lets you drag windows to calculate area.</div>
       <div id="eic-mz-toolbar" class="mz-toolbar">
         <input type="number" id="eic-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
         <button id="btn-eic-add-mz" class="btn btn-sm btn-primary">Add</button>
@@ -614,8 +615,22 @@
       </div>
       <div class="deconv-controls">
         <div class="input-row">
-          <label>Start (min)<input type="number" id="deconv-start" step="0.05" value="0" min="0"></label>
-          <label>End (min)<input type="number" id="deconv-end" step="0.05" value="30" min="0"></label>
+          <div class="deconv-time-field">
+            <label for="deconv-start">Start (min)</label>
+            <div class="deconv-time-adjuster">
+              <button type="button" class="btn deconv-time-nudge" data-time-target="deconv-start" data-time-direction="-1" aria-label="Decrease start time by 0.01 min" title="Start −0.01 min">−</button>
+              <input type="number" id="deconv-start" step="0.01" value="0" min="0">
+              <button type="button" class="btn deconv-time-nudge" data-time-target="deconv-start" data-time-direction="1" aria-label="Increase start time by 0.01 min" title="Start +0.01 min">+</button>
+            </div>
+          </div>
+          <div class="deconv-time-field">
+            <label for="deconv-end">End (min)</label>
+            <div class="deconv-time-adjuster">
+              <button type="button" class="btn deconv-time-nudge" data-time-target="deconv-end" data-time-direction="-1" aria-label="Decrease end time by 0.01 min" title="End −0.01 min">−</button>
+              <input type="number" id="deconv-end" step="0.01" value="30" min="0">
+              <button type="button" class="btn deconv-time-nudge" data-time-target="deconv-end" data-time-direction="1" aria-label="Increase end time by 0.01 min" title="End +0.01 min">+</button>
+            </div>
+          </div>
         </div>
         <label class="checkbox-label toggle-expert">
           <input type="checkbox" id="expert-mode-toggle"> Expert Mode
@@ -665,9 +680,11 @@
       <div id="deconv-window-context" class="two-col hidden">
         <div class="col deconv-plot-card">
           <div id="deconv-uv-plot" class="deconv-plot-inner" data-fixed-plot-height="360"></div>
+          <div id="deconv-uv-downloads" hidden></div>
         </div>
         <div class="col deconv-plot-card">
           <div id="deconv-tic-plot" class="deconv-plot-inner" data-fixed-plot-height="360"></div>
+          <div id="deconv-tic-downloads" hidden></div>
         </div>
       </div>
       <div id="deconv-results" class="hidden">
@@ -765,9 +782,7 @@
           <label>MS Start (min)<input type="number" id="timechange-ms-start" step="0.05" value="0" min="0"></label>
           <label>MS End (min)<input type="number" id="timechange-ms-end" step="0.05" value="30" min="0"></label>
         </div>
-        <button id="btn-export-timechange-ms-pdf" class="btn btn-sm" title="Generate summed mass spectra if needed, then export the diagonal Time Change plot">PDF summed mass</button>
         <button id="btn-run-time-change-tic" class="btn btn-primary">Generate TIC</button>
-        <button id="btn-export-timechange-tic-pdf" class="btn btn-sm" title="Generate TIC if needed, then export the diagonal Time Change TIC plot">PDF TIC</button>
         <div class="timechange-eic-controls">
           <label>EIC m/z<input type="number" id="timechange-eic-mz" step="0.01" min="0.01" placeholder="e.g. 203.00"></label>
           <label class="timechange-eic-window-control">m/z Window (± Da)
@@ -783,10 +798,8 @@
             </select>
           </label>
           <button id="btn-run-time-change-eic" class="btn btn-primary">Generate EIC</button>
-          <button id="btn-export-timechange-eic-pdf" class="btn btn-sm" title="Generate the selected EIC if needed, then export the diagonal Time Change EIC plot">PDF EIC</button>
         </div>
         <button id="btn-run-time-change-uv" class="btn btn-primary">Generate UV</button>
-        <button id="btn-export-timechange-uv-pdf" class="btn btn-sm" title="Generate UV if needed, then export the diagonal Time Change UV plot">PDF UV</button>
         <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
         <div class="export-group">
           <button class="btn btn-sm btn-export-timechange" data-format="png">PNG</button>
@@ -795,8 +808,36 @@
       </div>
       <div id="timechange-empty-state" class="quote-empty-stack"></div>
       <div id="timechange-content" class="hidden">
-        <div id="timechange-ms-plot" class="plot-container"></div>
-        <div id="timechange-ms-offset-plot" class="plot-container"></div>
+        <div class="timechange-plot-card">
+          <div id="timechange-ms-plot" class="plot-container"></div>
+          <div id="timechange-overlap-downloads" class="timechange-plot-downloads" aria-label="Overlay graph downloads" hidden>
+            <button id="btn-export-timechange-overlap-pdf" class="btn btn-sm" type="button" title="Download the overlay graph as PDF">
+              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+              <span id="timechange-overlap-pdf-label">Overlay PDF</span>
+            </button>
+          </div>
+        </div>
+        <div class="timechange-plot-card">
+          <div id="timechange-ms-offset-plot" class="plot-container"></div>
+          <div id="timechange-offset-downloads" class="timechange-plot-downloads" aria-label="Diagonal graph downloads" hidden>
+            <button id="btn-export-timechange-ms-pdf" class="btn btn-sm" type="button" title="Download the diagonal summed mass graph as PDF" hidden>
+              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+              <span>Diagonal summed mass PDF</span>
+            </button>
+            <button id="btn-export-timechange-tic-pdf" class="btn btn-sm" type="button" title="Download the diagonal TIC graph as PDF" hidden>
+              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+              <span>Diagonal TIC PDF</span>
+            </button>
+            <button id="btn-export-timechange-eic-pdf" class="btn btn-sm" type="button" title="Download the diagonal EIC graph as PDF" hidden>
+              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+              <span>Diagonal EIC PDF</span>
+            </button>
+            <button id="btn-export-timechange-uv-pdf" class="btn btn-sm" type="button" title="Download the diagonal UV graph as PDF" hidden>
+              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+              <span>Diagonal UV PDF</span>
+            </button>
+          </div>
+        </div>
         <div id="timechange-ms-table-container"></div>
       </div>
     </div>
@@ -812,7 +853,7 @@
           <div class="molecule-tools">
             <div class="molecule-tools-row">
               <label class="sequence-mod-sequence-label">Protein Sequence
-                <textarea id="seqmod-sequence-input" rows="7" spellcheck="false" placeholder="Paste a protein sequence. Use * for stop codons or placeholder sites."></textarea>
+                <textarea id="seqmod-sequence-input" rows="4" spellcheck="false" placeholder="Paste a protein sequence. Use * for stop codons or placeholder sites."></textarea>
               </label>
             </div>
             <div class="molecule-tools-row">
@@ -931,7 +972,7 @@
         <div id="masscalc-summary" class="metrics-bar"></div>
         <div id="masscalc-mod-table-container"></div>
         <div id="masscalc-compare-table-container"></div>
-        <div class="masscalc-figure-grid" style="margin-top:10px;">
+        <div class="masscalc-figure-grid">
           <div class="masscalc-figure-card">
             <div class="tab-toolbar">
               <span class="toolbar-note">Mass Calculator Figure</span>
@@ -1022,7 +1063,7 @@
 
       <div class="router-grid">
         <div class="plot-container router-panel">
-          <div class="tab-toolbar" style="margin-bottom:8px;">
+          <div class="tab-toolbar">
             <span class="toolbar-note">Current finished runs found in the scan folder</span>
           </div>
           <div id="router-results-table-container">
@@ -1030,7 +1071,7 @@
           </div>
         </div>
         <div class="plot-container router-panel">
-          <div class="tab-toolbar" style="margin-bottom:8px;">
+          <div class="tab-toolbar">
             <span class="toolbar-note">Recent transfer activity (last 50 runs)</span>
           </div>
           <div id="router-log-table-container">
@@ -1043,13 +1084,13 @@
 
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=0.2.63"></script>
-  <script src="js/charts.js?v=0.2.69"></script>
+  <script src="js/charts.js?v=0.2.70"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.69"></script>
+  <script src="js/app.js?v=0.2.70"></script>
 </body>
 </html>
