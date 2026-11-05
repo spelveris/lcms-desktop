@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.71">
+  <link rel="stylesheet" href="css/style.css?v=0.2.72">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -58,7 +58,13 @@
         <div class="nav-buttons">
           <button id="btn-up" class="btn btn-sm">&#8679; Up</button>
           <button id="btn-home" class="btn btn-sm">&#8962; Home</button>
-          <button id="btn-volumes" class="btn btn-sm" type="button" aria-expanded="false" aria-controls="volume-shortcuts">&#128190; Volumes</button>
+          <button id="btn-volumes" class="btn btn-sm" type="button" aria-expanded="false" aria-controls="volume-shortcuts">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M4 3h8l2 6v4H2V9zM2 9h12M10 11h2"/>
+            </svg>
+            <span>Volumes</span>
+          </button>
         </div>
         <div id="mount-buttons" class="mount-buttons" hidden></div>
         <div id="volume-shortcuts" class="mount-buttons" hidden></div>
@@ -427,13 +433,17 @@
           Da
           <input type="range" id="mz-window" min="0" max="1" value="0.5" step="0.1" aria-label="m/z window slider" title="Slider: 0–1 Da. Enter a larger window in the number field.">
         </label>
-        <input type="number" id="single-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
-        <select id="mz-add-polarity" class="mz-polarity-sel" title="Ionization mode for this m/z">
-          <option value="positive">+ pos</option>
-          <option value="negative">− neg</option>
-        </select>
-        <button id="btn-single-add-mz" class="btn btn-sm btn-primary">Add</button>
-        <button id="btn-clear-mz" class="btn btn-sm btn-danger">Clear All</button>
+        <div class="mz-target-entry">
+          <input type="number" id="single-mz-add-input" placeholder="Enter m/z" step="0.01" aria-label="Target m/z">
+          <div id="mz-add-polarity" class="mz-polarity-toggle" role="radiogroup" aria-label="Ionization mode for this m/z">
+            <label><input type="radio" id="mz-add-positive" name="mz-add-polarity" value="positive" checked><span>+ Positive</span></label>
+            <label><input type="radio" id="mz-add-negative" name="mz-add-polarity" value="negative"><span>− Negative</span></label>
+          </div>
+          <button id="btn-single-add-mz" class="btn btn-sm btn-primary" type="button">Add</button>
+          <button id="btn-clear-mz" class="btn btn-sm btn-danger" type="button">Clear All</button>
+        </div>
+      </div>
+      <div class="mz-toolbar" role="group" aria-label="Added m/z targets">
         <div id="single-mz-targets-inline" class="tag-list tab-mz-targets-inline"></div>
       </div>
       <div class="molecule-tools">
@@ -579,7 +589,7 @@
         <button id="btn-export-uv-area-pdf" class="btn btn-sm hidden" data-format="pdf"
                 title="Export the UV area graph with Time Change axis and font sizing">PDF UV area</button>
       </div>
-      <div id="eic-batch-mode-note" class="toolbar-note">EIC mode uses the current m/z targets. UV mode uses a checked wavelength available in the sample, or its recorded default, and lets you drag windows to calculate area.</div>
+      <div id="eic-batch-mode-note" class="toolbar-note hidden"></div>
       <div id="eic-mz-toolbar" class="mz-toolbar">
         <input type="number" id="eic-mz-add-input" placeholder="Enter m/z" step="0.01" style="width:120px;">
         <button id="btn-eic-add-mz" class="btn btn-sm btn-primary">Add</button>
@@ -1082,13 +1092,13 @@
 
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=0.2.63"></script>
-  <script src="js/charts.js?v=0.2.71"></script>
+  <script src="js/charts.js?v=0.2.72"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.71"></script>
+  <script src="js/app.js?v=0.2.72"></script>
 </body>
 </html>

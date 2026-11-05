@@ -27,7 +27,8 @@ const cleanupStartupUpdates = createStartupUpdateCleanup({
 
 const BACKEND_PORT = 8741;
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
-const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const UPDATE_FOCUS_CHECK_INTERVAL_MS = 60 * 1000;
 const RELEASES_URL = "https://github.com/spelveris/lcms-desktop/releases";
 
 let mainWindow = null;
@@ -40,6 +41,8 @@ let backendReady = false;
 let mainWindowReady = false;
 let updateCheckTimer = null;
 let updateCheckPromise = null;
+let updateDownloadPromise = null;
+let lastUpdateCheckAt = 0;
 let packagedUpdaterConfigured = false;
 let downloadedUpdateFile = "";
 let macUpdateHelperStarted = false;
@@ -76,7 +79,9 @@ function configurePackagedUpdater() {
   if (!app.isPackaged || packagedUpdaterConfigured) return;
   packagedUpdaterConfigured = true;
 
-  autoUpdater.autoDownload = true;
+  // Start downloads explicitly after comparing against any already staged version.
+  autoUpdater.autoDownload = false;
+  autoUpdater.requestHeaders = { "Cache-Control": "no-cache" };
   // Do not retain a second installer/ZIP for future differential downloads.
   autoUpdater.disableDifferentialDownload = true;
   // Squirrel.Mac rejects successive ad-hoc-signed builds because their code
@@ -84,28 +89,6 @@ function configurePackagedUpdater() {
   autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
   autoUpdater.allowPrerelease = false;
   autoUpdater.logger = console;
-
-  autoUpdater.on("checking-for-update", () => {
-    sendUpdateStatus({
-      state: "checking",
-      available: false,
-      currentVersion: String(app.getVersion() || ""),
-    });
-  });
-
-  autoUpdater.on("update-available", (info) => {
-    const latestVersion = String(info?.version || "");
-    sendUpdateStatus({
-      state: "available",
-      available: true,
-      installable: true,
-      currentVersion: String(app.getVersion() || ""),
-      latestVersion,
-      releaseUrl: releaseUrlForVersion(latestVersion),
-      progressPercent: 0,
-      checkedAt: new Date().toISOString(),
-    });
-  });
 
   autoUpdater.on("download-progress", (progress) => {
     const progressPercent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
@@ -120,6 +103,7 @@ function configurePackagedUpdater() {
   autoUpdater.on("update-downloaded", (info) => {
     const latestVersion = String(info?.version || updateStatus.latestVersion || "");
     downloadedUpdateFile = String(info?.downloadedFile || "");
+    autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
     sendUpdateStatus({
       state: "ready",
       available: true,
@@ -131,31 +115,7 @@ function configurePackagedUpdater() {
     });
   });
 
-  autoUpdater.on("update-not-available", (info) => {
-    sendUpdateStatus({
-      state: "current",
-      available: false,
-      installable: true,
-      currentVersion: String(app.getVersion() || ""),
-      latestVersion: String(info?.version || app.getVersion() || ""),
-      progressPercent: 0,
-      checkedAt: new Date().toISOString(),
-      errorMessage: "",
-    });
-  });
-
-  autoUpdater.on("error", (error) => {
-    console.warn(`[updates] Automatic update failed: ${error.message}`);
-    sendUpdateStatus({
-      state: "offline",
-      available: false,
-      installable: true,
-      currentVersion: String(app.getVersion() || ""),
-      progressPercent: 0,
-      checkedAt: new Date().toISOString(),
-      errorMessage: String(error?.message || "Automatic update failed."),
-    });
-  });
+  autoUpdater.on("error", reportPackagedUpdateError);
 }
 
 function installedMacAppPath() {
@@ -190,11 +150,28 @@ function launchMacUpdateHelper() {
 }
 
 function checkForUpdates() {
-  // Manual, startup and daily checks share one request, including cleanup.
+  // Manual, startup and background checks share one request, including cleanup.
   if (!updateCheckPromise) {
     updateCheckPromise = runUpdateCheck().finally(() => { updateCheckPromise = null; });
   }
   return updateCheckPromise;
+}
+
+function reportPackagedUpdateError(error) {
+  const message = String(error?.message || "Automatic update failed.");
+  if (updateStatus.state === "offline" && updateStatus.errorMessage === message) return updateStatus;
+  console.warn(`[updates] ${message}`);
+  // A discovery error leaves an already downloaded, verified release usable.
+  if (updateStatus.state === "ready") return updateStatus;
+  return sendUpdateStatus({
+    state: "offline",
+    available: false,
+    installable: true,
+    currentVersion: String(app.getVersion() || ""),
+    progressPercent: 0,
+    checkedAt: new Date().toISOString(),
+    errorMessage: message,
+  });
 }
 
 async function runUpdateCheck() {
@@ -204,25 +181,60 @@ async function runUpdateCheck() {
     // All automatic and renderer-triggered checks share this barrier, so a new
     // download cannot race startup cleanup. Opening the window never waits.
     await cleanupStartupUpdates();
-    if (updateStatus.state === "available" || updateStatus.state === "downloading" || updateStatus.state === "ready" || updateStatus.state === "installing") {
+    if (isQuitting || ["available", "downloading", "installing"].includes(updateStatus.state)) {
       return updateStatus;
     }
+    // The ready event may arrive before the updater finishes writing its cache.
+    if (updateDownloadPromise) await updateDownloadPromise;
+    if (isQuitting) return updateStatus;
+    const readyVersion = updateStatus.state === "ready" ? updateStatus.latestVersion : "";
+    if (!readyVersion) sendUpdateStatus({ state: "checking", available: false, currentVersion });
+    lastUpdateCheckAt = Date.now();
     try {
-      await autoUpdater.checkForUpdates();
-      return updateStatus;
-    } catch (error) {
-      console.warn(`[updates] Could not check for automatic updates: ${error.message}`);
-      return sendUpdateStatus({
-        state: "offline",
-        available: false,
+      const result = await autoUpdater.checkForUpdates();
+      if (isQuitting) return updateStatus;
+      if (!result) throw new Error("Automatic update check is unavailable.");
+      const latestVersion = String(result.updateInfo?.version || currentVersion);
+      if (readyVersion && (!result.isUpdateAvailable || !isNewerVersion(latestVersion, readyVersion))) {
+        return updateStatus;
+      }
+      if (!result.isUpdateAvailable) {
+        return sendUpdateStatus({
+          state: "current",
+          available: false,
+          installable: true,
+          currentVersion,
+          latestVersion,
+          progressPercent: 0,
+          checkedAt: new Date().toISOString(),
+          errorMessage: "",
+        });
+      }
+
+      // Windows must not install the previous package on quit while a newer one downloads.
+      autoUpdater.autoInstallOnAppQuit = false;
+      downloadedUpdateFile = "";
+      sendUpdateStatus({
+        state: "available",
+        available: true,
         installable: true,
         currentVersion,
+        latestVersion,
+        releaseUrl: releaseUrlForVersion(latestVersion),
         progressPercent: 0,
         checkedAt: new Date().toISOString(),
+        errorMessage: "",
       });
+      updateDownloadPromise = autoUpdater.downloadUpdate(result.cancellationToken)
+        .catch(reportPackagedUpdateError)
+        .finally(() => { updateDownloadPromise = null; });
+      return updateStatus;
+    } catch (error) {
+      return reportPackagedUpdateError(error);
     }
   }
 
+  lastUpdateCheckAt = Date.now();
   sendUpdateStatus({ state: "checking", available: false, currentVersion });
   try {
     const release = await fetchLatestRelease();
@@ -282,6 +294,11 @@ ipcMain.handle("updates:open-release", async () => {
 
 ipcMain.handle("updates:perform-action", async () => {
   if (app.isPackaged && updateStatus.state === "ready") {
+    const stagedVersion = updateStatus.latestVersion;
+    await checkForUpdates();
+    if (isQuitting || updateStatus.state !== "ready" || updateStatus.latestVersion !== stagedVersion) {
+      return "unavailable";
+    }
     if (process.platform === "darwin") {
       try {
         launchMacUpdateHelper();
@@ -578,6 +595,12 @@ function createWindow() {
       event.preventDefault();
       window.hide();
       return;
+    }
+  });
+
+  window.on("focus", () => {
+    if (!isQuitting && mainWindowReady && Date.now() - lastUpdateCheckAt >= UPDATE_FOCUS_CHECK_INTERVAL_MS) {
+      void checkForUpdates();
     }
   });
 

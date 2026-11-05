@@ -446,11 +446,11 @@ function initUpdateIndicator() {
     if (refresh) {
       const busy = manualCheckPending || checking;
       refresh.hidden = typeof updates.checkForUpdates !== 'function';
-      refresh.disabled = busy || downloading || ready || installing || (available && !canOpenDevelopmentRelease);
+      refresh.disabled = busy || downloading || installing || (available && !ready && !canOpenDevelopmentRelease);
       refresh.classList.toggle('is-checking', busy);
       refresh.setAttribute('aria-busy', String(busy));
       refresh.title = busy ? 'Checking for updates…'
-        : (ready ? 'Update ready—restart to install'
+        : (ready ? 'Check for a newer update'
           : (installing ? 'Installing update…'
             : (downloading || available && !canOpenDevelopmentRelease ? 'An update is already downloading' : 'Check for updates now')));
     }
@@ -1493,8 +1493,7 @@ function initSettings() {
 }
 
 function _getMzAddPolarity() {
-  const sel = document.getElementById('mz-add-polarity');
-  return sel ? sel.value : 'positive';
+  return document.getElementById('mz-add-negative')?.checked ? 'negative' : 'positive';
 }
 
 function addMzTargetFromInput(inputRef) {
@@ -2802,11 +2801,9 @@ async function addSmilesMzTarget(smilesOverride = '') {
   try {
     const result = await computeSmilesMz(smiles, adductKey);
     mzInput.value = result.mz.toFixed(4);
-    // Set polarity selector to match the adduct before adding
-    const polaritySel = document.getElementById('mz-add-polarity');
-    if (polaritySel) {
-      polaritySel.value = result.adductKey.includes('-') && result.adductKey.includes('[M') ? 'negative' : 'positive';
-    }
+    const polarity = result.adductKey.includes('-') && result.adductKey.includes('[M') ? 'negative' : 'positive';
+    const polarityButton = document.getElementById(`mz-add-${polarity}`);
+    if (polarityButton) polarityButton.checked = true;
     const added = addMzTargetFromInput(mzInput);
     const massText = result.netCharge !== 0
       ? `Exact ion mass ${result.exactMass.toFixed(5)} Da | Neutralized mass ${result.neutralizedMass.toFixed(5)} Da`
@@ -5823,9 +5820,10 @@ function updateAreaCalculationModeUI() {
   if (normalize) normalize.disabled = isUv;
   if (runButton) runButton.textContent = isUv ? 'Load UV Area' : 'Run Area Analysis';
   if (note) {
+    note.classList.toggle('hidden', !isUv);
     note.textContent = isUv
       ? 'UV mode uses a checked wavelength available in this sample, or its recorded default. Drag on the UV trace to add area windows, or add one manually and adjust start/end.'
-      : 'EIC mode uses the current m/z targets and keeps the existing peak-area workflow.';
+      : '';
   }
 }
 

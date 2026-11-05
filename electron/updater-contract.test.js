@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
 const { assertInstallRequest, normalizeVersion } = require("./mac-update-helper");
+const { isNewerVersion } = require("./update-checker");
 
 const root = path.join(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -44,17 +45,30 @@ function indicatorFixture({ initial = { state: "current" }, check = async () => 
 
 function checkFixture() {
   let checks = 0;
+  let installed = 0;
+  const downloads = [];
+  const handlers = new Map();
   const gate = deferred();
   const context = vm.createContext({ console: { warn() {} },
     app: { isPackaged: true, getVersion: () => "0.2.55" },
     updateStatus: { state: "current", available: false },
+    isQuitting: false, downloadedUpdateFile: "", lastUpdateCheckAt: 0,
+    isNewerVersion, releaseUrlForVersion: version => `https://example.test/v${version}`,
+    process: { platform: "win32" }, setImmediate: fn => fn(), stopBackend: async () => {},
+    ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
     configurePackagedUpdater() {}, cleanupStartupUpdates: () => gate.promise,
-    autoUpdater: { async checkForUpdates() { checks += 1; } },
+    autoUpdater: {
+      async checkForUpdates() { checks += 1; return { isUpdateAvailable: false, updateInfo: { version: "0.2.55" } }; },
+      async downloadUpdate(token) { downloads.push(token); },
+      quitAndInstall() { installed += 1; },
+    },
   });
   context.sendUpdateStatus = status => (context.updateStatus = { ...context.updateStatus, ...status });
   const main = read("electron/main.js");
-  vm.runInContext("let updateCheckPromise = null;\n" + main.slice(main.indexOf("function checkForUpdates()"), main.indexOf("function startUpdateChecks()")), context);
-  return { context, gate, checks: () => checks, run: () => vm.runInContext("checkForUpdates()", context) };
+  vm.runInContext("let updateCheckPromise = null, updateDownloadPromise = null;\n" + main.slice(main.indexOf("function checkForUpdates()"), main.indexOf("function startUpdateChecks()")), context);
+  vm.runInContext(main.slice(main.indexOf('ipcMain.handle("updates:perform-action"'), main.indexOf("// Backend lifecycle")), context);
+  return { context, gate, downloads, installed: () => installed, checks: () => checks,
+    run: () => vm.runInContext("checkForUpdates()", context), install: handlers.get("updates:perform-action") };
 }
 
 test("refresh bridge requests a fresh check rather than cached status or installation", async () => {
@@ -111,15 +125,19 @@ test("a failed manual check turns grey and can be retried", async () => {
   assert.equal(f.badge.classList.contains("is-current"), true);
 });
 
-test("refresh never interrupts preparation, download, ready-to-install or installation states", async () => {
+test("refresh can check for a newer release while an update is staged", async () => {
   let calls = 0;
   const f = indicatorFixture({ check: async () => { calls += 1; } }); await settle();
-  for (const state of ["checking", "available", "downloading", "ready", "installing"]) {
+  for (const state of ["checking", "available", "downloading", "installing"]) {
     f.emit({ state, available: state !== "checking", installable: true });
     assert.equal(f.refresh.disabled, true, state);
     await f.refresh.handlers.click();
   }
   assert.equal(calls, 0);
+  f.emit({ state: "ready", available: true, installable: true });
+  assert.equal(f.refresh.disabled, false);
+  await f.refresh.handlers.click();
+  assert.equal(calls, 1);
   f.emit({ state: "offline", available: false });
   assert.equal(f.refresh.disabled, false);
 });
@@ -146,20 +164,54 @@ test("main process deduplicates manual and automatic checks across startup clean
   await f.run(); assert.equal(f.checks(), 2);
 });
 
-test("main process preserves downloaded and in-progress updates when asked to refresh", async () => {
+test("main process leaves in-progress downloads and installs alone during a refresh", async () => {
   const f = checkFixture(); f.gate.resolve();
-  for (const state of ["available", "downloading", "ready", "installing"]) {
+  for (const state of ["available", "downloading", "installing"]) {
     f.context.updateStatus = { state, available: true };
     assert.equal((await f.run()).state, state);
   }
   assert.equal(f.checks(), 0);
 });
 
+test("a startup check downloads the latest stable release directly", async () => {
+  const f = checkFixture(); f.gate.resolve();
+  f.context.autoUpdater.checkForUpdates = async () => ({ isUpdateAvailable: true,
+    updateInfo: { version: "0.2.57" }, cancellationToken: "0.2.57" });
+  assert.equal((await f.run()).latestVersion, "0.2.57");
+  assert.deepEqual(f.downloads, ["0.2.57"]);
+});
+
+test("Restart to update downloads a newer release instead of installing the older staged one", async () => {
+  const f = checkFixture(); f.gate.resolve();
+  f.context.updateStatus = { state: "ready", available: true, latestVersion: "0.2.56" };
+  f.context.downloadedUpdateFile = "/cache/old.exe";
+  f.context.autoUpdater.autoInstallOnAppQuit = true;
+  f.context.autoUpdater.checkForUpdates = async () => ({ isUpdateAvailable: true,
+    updateInfo: { version: "0.2.57" }, cancellationToken: "0.2.57" });
+  assert.equal(await f.install(), "unavailable");
+  assert.equal(f.installed(), 0);
+  assert.equal(f.context.updateStatus.latestVersion, "0.2.57");
+  assert.equal(f.context.autoUpdater.autoInstallOnAppQuit, false);
+  assert.equal(f.context.downloadedUpdateFile, "");
+  assert.deepEqual(f.downloads, ["0.2.57"]);
+});
+
+test("the same staged release remains installable without downloading it again, including offline", async () => {
+  const f = checkFixture(); f.gate.resolve();
+  f.context.updateStatus = { state: "ready", available: true, latestVersion: "0.2.56" };
+  f.context.autoUpdater.checkForUpdates = async () => ({ isUpdateAvailable: true, updateInfo: { version: "0.2.56" } });
+  assert.equal((await f.run()).state, "ready");
+  f.context.autoUpdater.checkForUpdates = async () => { throw new Error("Offline"); };
+  assert.equal(await f.install(), "installing");
+  assert.equal(f.installed(), 1);
+  assert.deepEqual(f.downloads, []);
+});
+
 test("a main-process check error is retryable", async () => {
   const f = checkFixture(); f.gate.resolve();
   f.context.autoUpdater.checkForUpdates = async () => { throw new Error("Offline"); };
   assert.equal((await f.run()).state, "offline");
-  f.context.autoUpdater.checkForUpdates = async () => { f.context.updateStatus = { state: "current" }; };
+  f.context.autoUpdater.checkForUpdates = async () => ({ isUpdateAvailable: false, updateInfo: { version: "0.2.55" } });
   assert.equal((await f.run()).state, "current");
 });
 
@@ -188,7 +240,8 @@ test("packaged app downloads updates and installs them internally", () => {
   const main = read("electron/main.js");
   const macHelper = read("electron/mac-update-helper.js");
   const preload = read("electron/preload.js");
-  assert.match(main, /autoUpdater\.autoDownload = true/);
+  assert.match(main, /autoUpdater\.autoDownload = false/);
+  assert.match(main, /autoUpdater\.downloadUpdate\(result\.cancellationToken\)/);
   assert.match(main, /autoUpdater\.autoInstallOnAppQuit = process\.platform !== "darwin"/);
   assert.match(main, /autoUpdater\.quitAndInstall\(true, true\)/);
   assert.match(main, /launchMacUpdateHelper\(\)/);

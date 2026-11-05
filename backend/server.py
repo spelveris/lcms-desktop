@@ -4355,6 +4355,7 @@ def export_deconvolution_spectrum(payload: dict = Body(...)):
         spectrum=spectrum,
         title=title,
         style=style,
+        x_axis_width_multiplier=2.0 if export_format == "pdf" else 1.0,
     )
     try:
         if export_format == "svg":

@@ -223,7 +223,9 @@ def _get_deconvolution_panel_dimensions(base_fig_width: float = 8.0) -> tuple[fl
     )
 
 
-def _apply_locked_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> None:
+def _apply_locked_deconvolution_export_layout(
+    fig: matplotlib.figure.Figure, *, x_axis_width_multiplier: float = 1.0,
+) -> None:
     """Lock the single-panel deconvolution export axes box to a stable size.
 
     The default ``tight_layout`` solver can subtly resize the plotting area based
@@ -231,12 +233,13 @@ def _apply_locked_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> 
     exports we want the physical plot box to remain fixed between samples and
     between standard/dense variants so exported PDFs and images compare directly.
     """
-    fig.subplots_adjust(
-        left=0.25,
-        right=0.93,
-        bottom=0.18,
-        top=0.83,
-    )
+    left, right = 0.25, 0.93
+    extra = (right - left) * (x_axis_width_multiplier - 1)
+    canvas_multiplier = 1 + extra
+    if extra:
+        fig.set_figwidth(fig.get_figwidth() * canvas_multiplier)
+    fig.subplots_adjust(left=left / canvas_multiplier, right=(right + extra) / canvas_multiplier,
+                        bottom=0.18, top=0.83)
 
 
 def _apply_side_by_side_deconvolution_export_layout(fig: matplotlib.figure.Figure) -> None:
@@ -2855,6 +2858,8 @@ def create_deconvolution_mass_spectrum_figure(
     spectrum: Optional[dict],
     title: str = "Mass Spectrum",
     style: Optional[dict] = None,
+    *,
+    x_axis_width_multiplier: float = 1.0,
 ) -> matplotlib.figure.Figure:
     """Create a clean standalone deconvolution spectrum without ion guides."""
     style = style or {}
@@ -2900,7 +2905,7 @@ def create_deconvolution_mass_spectrum_figure(
     _apply_safe_scientific_y_format(ax, scilimits=(0, 0))
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    _apply_locked_deconvolution_export_layout(fig)
+    _apply_locked_deconvolution_export_layout(fig, x_axis_width_multiplier=x_axis_width_multiplier)
     return fig
 
 
