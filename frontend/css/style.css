@@ -172,6 +172,30 @@ table.data-table.peptide-results-table th { letter-spacing: 0; text-transform: n
 
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 
+.btn[data-format]::before {
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  background-color: currentColor;
+  -webkit-mask: var(--export-icon) center / contain no-repeat;
+  mask: var(--export-icon) center / contain no-repeat;
+}
+
+.btn[data-format^="pdf"]::before {
+  content: "";
+  --export-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 18' fill='none' stroke='white' stroke-width='1.2'%3E%3Cpath d='M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5'/%3E%3C/svg%3E");
+}
+
+.btn:is([data-format="jpg"], [data-format="jpeg"], [data-format="png"], [data-format="svg"])::before {
+  content: "";
+  --export-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 18' fill='none' stroke='white' stroke-width='1.2'%3E%3Cpath d='M1.5 3.5h13v11h-13zM1.5 12l4-4 3 3 2-2 4 4'/%3E%3Ccircle cx='11' cy='6.5' r='1'/%3E%3C/svg%3E");
+}
+
+.btn[data-format="csv"]::before {
+  content: "";
+  --export-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 18' fill='none' stroke='white' stroke-width='1.2'%3E%3Cpath d='M1.5 3h13v12h-13zM1.5 7h13M1.5 11h13M6 3v12M10 3v12'/%3E%3C/svg%3E");
+}
+
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 
@@ -882,7 +906,6 @@ body.sidebar-resizing .sidebar {
 .timechange-plot-downloads { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .timechange-plot-downloads[hidden], .timechange-plot-downloads [hidden] { display: none; }
 .timechange-plot-downloads .btn { gap: 6px; max-width: 100%; white-space: normal; }
-.pdf-document-icon { width: 14px; height: 16px; flex: 0 0 14px; }
 
 .timechange-eic-controls {
   display: flex;
@@ -1007,9 +1030,10 @@ body.sidebar-resizing .sidebar {
 }
 
 /* Single Sample keeps its additional space-saving graph layout. */
-#tab-single > .metrics-bar { margin-bottom: 6px; }
+#single-metrics { margin: 0; gap: 4px 6px; min-width: 0; }
+#single-metrics[hidden] { display: none; }
+#single-metrics .metric { padding: 4px 8px; font-size: 12px; }
 #tab-single > .mz-toolbar { margin-bottom: 6px; }
-#tab-single > .metrics-bar { row-gap: 6px; }
 #tab-single .plot-stack { row-gap: 4px; }
 #single-results { gap: 8px; }
 #single-results > .col { display: flex; flex-direction: column; gap: 6px; }
@@ -1677,13 +1701,27 @@ body.sidebar-resizing .sidebar {
 .deconv-controls .input-row {
   margin-bottom: 6px;
   flex-wrap: wrap;
+  column-gap: 12px;
 }
-.deconv-time-field { flex: 1 1 220px; min-width: 0; }
-.deconv-time-adjuster { display: flex; align-items: stretch; gap: 4px; }
-.deconv-time-adjuster input { flex: 1; min-width: 0; appearance: textfield; }
+.deconv-time-field { min-width: 0; }
+.deconv-time-adjuster {
+  display: grid;
+  grid-template-columns: 28px minmax(0, calc(5em + 14px)) 28px;
+  gap: 4px;
+}
+.deconv-time-adjuster input {
+  min-width: 0;
+  padding-inline: 6px;
+  font-variant-numeric: tabular-nums;
+  appearance: textfield;
+}
 .deconv-time-adjuster input::-webkit-inner-spin-button,
 .deconv-time-adjuster input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.deconv-time-nudge { flex: 0 0 28px; justify-content: center; padding: 0; min-height: 30px; font-size: 16px; }
+.deconv-time-nudge { justify-content: center; padding: 0; min-height: 30px; font-size: 16px; color: #f3f3f6; }
+.deconv-time-nudge[data-time-direction="-1"] { background: #633c42; border-color: #86535a; }
+.deconv-time-nudge[data-time-direction="-1"]:hover { background: #73464d; }
+.deconv-time-nudge[data-time-direction="1"] { background: #34554a; border-color: #4d7564; }
+.deconv-time-nudge[data-time-direction="1"]:hover { background: #3f6457; }
 .deconv-time-nudge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .toggle-expert {
   font-weight: 600;
@@ -1758,8 +1796,6 @@ body.sidebar-resizing .sidebar {
   max-width: 100%;
   white-space: normal;
 }
-
-.chromatogram-download-icon { width: 1em; height: 1em; flex: 0 0 1em; }
 
 #tab-deconv {
   container-type: inline-size;

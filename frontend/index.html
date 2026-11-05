@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.70">
+  <link rel="stylesheet" href="css/style.css?v=0.2.71">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -352,7 +352,7 @@
       <p id="peptide-status" class="toolbar-note" role="status"></p>
       <details id="peptide-analysis-details" class="toolbar-note" hidden><summary>Analysis details</summary><p id="peptide-analysis-warning"></p></details>
       <div id="peptide-map-export" class="peptide-export-toolbar" hidden>
-        <button id="btn-peptide-map-pdf" class="btn btn-sm" type="button" disabled>Download map PDF</button>
+        <button id="btn-peptide-map-pdf" class="btn btn-sm" type="button" data-format="pdf" disabled>Download map PDF</button>
         <span class="toolbar-note">PDFs use Deconvolution export styling.</span>
       </div>
       <div id="peptide-coverage"></div>
@@ -370,7 +370,7 @@
         <p id="peptide-chromatogram-status" class="toolbar-note" role="status"></p>
       </section>
       <div id="peptide-spectrum-export" class="peptide-export-toolbar" hidden>
-        <button id="btn-peptide-spectrum-pdf" class="btn btn-sm" type="button" disabled>Download spectrum PDF</button>
+        <button id="btn-peptide-spectrum-pdf" class="btn btn-sm" type="button" data-format="pdf" disabled>Download spectrum PDF</button>
       </div>
       <p id="peptide-spectrum-status" class="toolbar-note"></p>
       <div id="peptide-spectrum-card" class="plot-container peptide-spectrum-card" hidden>
@@ -414,6 +414,7 @@
           <select id="single-sample-select"><option value="">-- Load samples --</option></select>
         </label>
         <button id="btn-load-single" class="btn btn-primary">Load &amp; Analyze</button>
+        <div id="single-metrics" class="metrics-bar" role="status" hidden></div>
         <div class="export-group">
           <button class="btn btn-sm btn-export" data-format="png">PNG</button>
           <button class="btn btn-sm btn-export" data-format="svg">SVG</button>
@@ -460,7 +461,6 @@
           <iframe id="single-sketcher-frame" src="jsme-frame.html" style="width:100%;height:420px;border:none;background:#e0e0e0;"></iframe>
         </div>
       </div>
-      <div id="single-metrics" class="metrics-bar"></div>
       <div id="single-empty-state" class="quote-empty-stack"></div>
       <div id="single-results" class="two-col hidden">
         <div class="col" id="single-left">
@@ -485,7 +485,6 @@
           <select id="bgsub-background-select"><option value="">-- Choose two files first --</option></select>
         </label>
         <button id="btn-run-bgsub" class="btn btn-primary">Subtract Background</button>
-        <span class="toolbar-note">Choose two already selected files, then mark which one should be treated as the background trace.</span>
       </div>
       <div id="bgsub-metrics" class="metrics-bar"></div>
       <div id="bgsub-empty-state" class="quote-empty-stack"></div>
@@ -542,7 +541,7 @@
         </label>
         <button id="btn-uptake-assay-auto-window" class="btn btn-sm">Auto Window</button>
         <button id="btn-uptake-assay-run" class="btn btn-primary">Build Graphs</button>
-        <button id="btn-uptake-assay-export-pdf" class="btn btn-sm">Export PDF</button>
+        <button id="btn-uptake-assay-export-pdf" class="btn btn-sm" data-format="pdf">Export PDF</button>
       </div>
       <div class="toolbar-note">Uses the currently selected files. Mark rows as calibration controls or assay samples. Calibration controls are fit from the selected EIC and time window. Assay samples use that same window to calculate intracellular concentration. Matching sample names are grouped as replicates and shown with mean plus SD error bars.</div>
       <div id="uptake-assay-samples" class="uptake-assay-samples"></div>
@@ -576,8 +575,8 @@
         <button id="btn-run-eic" class="btn btn-primary">Run Area Analysis</button>
         <label class="checkbox-label" id="eic-overlay-wrap"><input type="checkbox" id="eic-overlay"> Overlay</label>
         <label class="checkbox-label" id="eic-normalize-wrap"><input type="checkbox" id="eic-normalize"> Normalize</label>
-        <button id="btn-export-eic-csv" class="btn btn-sm">Export CSV</button>
-        <button id="btn-export-uv-area-pdf" class="btn btn-sm hidden"
+        <button id="btn-export-eic-csv" class="btn btn-sm" data-format="csv">Export CSV</button>
+        <button id="btn-export-uv-area-pdf" class="btn btn-sm hidden" data-format="pdf"
                 title="Export the UV area graph with Time Change axis and font sizing">PDF UV area</button>
       </div>
       <div id="eic-batch-mode-note" class="toolbar-note">EIC mode uses the current m/z targets. UV mode uses a checked wavelength available in the sample, or its recorded default, and lets you drag windows to calculate area.</div>
@@ -699,7 +698,7 @@
               </label>
               <div id="deconv-spectrum-plot" class="deconv-plot-inner"></div>
               <div class="deconv-mass-download-row" aria-label="Mass spectrum downloads">
-                <button id="btn-export-deconv-spectrum-pdf" class="btn btn-sm">Download PDF</button>
+                <button id="btn-export-deconv-spectrum-pdf" class="btn btn-sm" data-format="pdf">Download PDF</button>
               </div>
             </div>
           </div>
@@ -758,7 +757,7 @@
         <label>Top N masses:
           <input type="number" id="batch-deconv-top-n" min="1" max="20" step="1" value="5" style="width:90px;">
         </label>
-        <button id="btn-export-batch-deconv-csv" class="btn btn-sm">Export CSV</button>
+        <button id="btn-export-batch-deconv-csv" class="btn btn-sm" data-format="csv">Export CSV</button>
         <div class="export-group">
           <button class="btn btn-sm btn-export-batch-deconv" data-format="png">PNG</button>
           <button class="btn btn-sm btn-export-batch-deconv" data-format="svg">SVG</button>
@@ -801,41 +800,40 @@
         </div>
         <button id="btn-run-time-change-uv" class="btn btn-primary">Generate UV</button>
         <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
-        <div class="export-group">
-          <button class="btn btn-sm btn-export-timechange" data-format="png">PNG</button>
-          <button class="btn btn-sm btn-export-timechange" data-format="svg">SVG</button>
-        </div>
       </div>
       <div id="timechange-empty-state" class="quote-empty-stack"></div>
       <div id="timechange-content" class="hidden">
         <div class="timechange-plot-card">
           <div id="timechange-ms-plot" class="plot-container"></div>
           <div id="timechange-overlap-downloads" class="timechange-plot-downloads" aria-label="Overlay graph downloads" hidden>
-            <button id="btn-export-timechange-overlap-pdf" class="btn btn-sm" type="button" title="Download the overlay graph as PDF">
-              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+            <button id="btn-export-timechange-overlap-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the overlay graph as PDF">
               <span id="timechange-overlap-pdf-label">Overlay PDF</span>
+            </button>
+            <button id="btn-export-timechange-overlap-jpg" class="btn btn-sm" type="button" data-format="jpg" title="Download the overlay graph as JPG">
+              <span id="timechange-overlap-jpg-label">Overlay JPG</span>
+            </button>
+            <button id="btn-export-timechange-overlap-csv" class="btn btn-sm" type="button" data-format="csv" title="Download the overlay data as CSV">
+              <span id="timechange-overlap-csv-label">Overlay CSV</span>
             </button>
           </div>
         </div>
         <div class="timechange-plot-card">
           <div id="timechange-ms-offset-plot" class="plot-container"></div>
           <div id="timechange-offset-downloads" class="timechange-plot-downloads" aria-label="Diagonal graph downloads" hidden>
-            <button id="btn-export-timechange-ms-pdf" class="btn btn-sm" type="button" title="Download the diagonal summed mass graph as PDF" hidden>
-              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+            <button id="btn-export-timechange-ms-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the diagonal summed mass graph as PDF" hidden>
               <span>Diagonal summed mass PDF</span>
             </button>
-            <button id="btn-export-timechange-tic-pdf" class="btn btn-sm" type="button" title="Download the diagonal TIC graph as PDF" hidden>
-              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+            <button id="btn-export-timechange-tic-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the diagonal TIC graph as PDF" hidden>
               <span>Diagonal TIC PDF</span>
             </button>
-            <button id="btn-export-timechange-eic-pdf" class="btn btn-sm" type="button" title="Download the diagonal EIC graph as PDF" hidden>
-              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+            <button id="btn-export-timechange-eic-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the diagonal EIC graph as PDF" hidden>
               <span>Diagonal EIC PDF</span>
             </button>
-            <button id="btn-export-timechange-uv-pdf" class="btn btn-sm" type="button" title="Download the diagonal UV graph as PDF" hidden>
-              <svg class="pdf-document-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5"/></svg>
+            <button id="btn-export-timechange-uv-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the diagonal UV graph as PDF" hidden>
               <span>Diagonal UV PDF</span>
             </button>
+            <button id="btn-export-timechange-offset-jpg" class="btn btn-sm" type="button" data-format="jpg" title="Download the diagonal graph as JPG">Diagonal JPG</button>
+            <button id="btn-export-timechange-offset-csv" class="btn btn-sm" type="button" data-format="csv" title="Download the original trace data as CSV">Diagonal CSV</button>
           </div>
         </div>
         <div id="timechange-ms-table-container"></div>
@@ -1011,9 +1009,9 @@
         </select>
         <label class="checkbox-label"><input type="checkbox" id="report-include-uv" checked> Include UV chromatogram</label>
         <label class="checkbox-label"><input type="checkbox" id="report-include-deconv" checked> Include deconvolution results</label>
-        <button id="btn-export-report-pdf" class="btn btn-sm btn-primary">Export PDF Report</button>
+        <button id="btn-export-report-pdf" class="btn btn-sm btn-primary" data-format="pdf">Export PDF Report</button>
         <button id="btn-export-session-json" class="btn btn-primary">Export Session JSON</button>
-        <button id="btn-export-report-summary-csv" class="btn btn-sm">Export Summary CSV</button>
+        <button id="btn-export-report-summary-csv" class="btn btn-sm" data-format="csv">Export Summary CSV</button>
       </div>
       <div id="report-empty-state" class="quote-empty-stack"></div>
       <div id="report-summary" class="plot-container hidden">
@@ -1084,13 +1082,13 @@
 
   <!-- JSME loaded in iframe -->
   <script src="js/api.js?v=0.2.63"></script>
-  <script src="js/charts.js?v=0.2.70"></script>
+  <script src="js/charts.js?v=0.2.71"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.70"></script>
+  <script src="js/app.js?v=0.2.71"></script>
 </body>
 </html>

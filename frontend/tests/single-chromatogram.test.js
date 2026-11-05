@@ -18,9 +18,9 @@ function fixture() {
     addEventListener(event, callback) { this.listeners[event] = callback; }
     setAttribute(name, value) { this.attributes[name] = value; }
   }
-  for (const id of ['single-sample-select', 'single-metrics', 'single-uv-plots', 'single-tic-plot',
+  for (const id of ['btn-load-single', 'single-sample-select', 'single-metrics', 'single-uv-plots', 'single-tic-plot',
     'single-eic-plots', 'fig-width', 'line-width', 'show-grid', 'mass-axis-min', 'mass-axis-max', 'export-dpi',
-    'deconv-start','deconv-end','deconv-uv-plot','deconv-tic-plot','deconv-uv-downloads','deconv-tic-downloads','uv-smoothing']) {
+    'deconv-start','deconv-end','deconv-uv-plot','deconv-tic-plot','deconv-uv-downloads','deconv-tic-downloads','uv-smoothing', 'eic-smoothing']) {
     nodes.set(id, new Element());
   }
   nodes.get('single-sample-select').value = '/data/first.sirslt';
@@ -29,7 +29,8 @@ function fixture() {
   const context = vm.createContext({console, setTimeout, clearTimeout,
     localStorage: {getItem: () => null}, window: {},
     document: {getElementById: id => nodes.get(id) || null,
-      createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => []},
+      createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => [],
+      querySelector: () => ({ value: 'positive' })},
     api: {exportSingleChromatogram: async payload => { requests.push(JSON.parse(JSON.stringify(payload))); return response(); }},
     Plotly: {}, requests, downloads, messages,
   });
@@ -57,9 +58,8 @@ test('Deconvolution downloads export each complete displayed trace with its save
     for(const kind of ['uv','tic']){
       const host=nodes.get(`deconv-${kind}-downloads`);assert.equal(host.hidden,false);
       const buttons=host.children[0].children;assert.equal(buttons.length,3);
-      assert.match(buttons[0].innerHTML, /<svg class="chromatogram-download-icon"[^>]*aria-hidden="true"[^>]*>.*<span>Download PDF<\/span>/);
-      assert.match(buttons[1].innerHTML, /<svg class="chromatogram-download-icon"[^>]*aria-hidden="true"[^>]*>.*<span>Download JPG<\/span>/);
-      assert.equal(buttons[2].textContent, 'Download CSV');
+      assert.deepEqual(buttons.map(button => button.dataset.format), ['pdf', 'jpg', 'csv']);
+      assert.deepEqual(buttons.map(button => button.textContent), ['Download PDF', 'Download JPG', 'Download CSV']);
       for(const button of buttons)await button.listeners.click();
     }
     assert.deepEqual(requests.map(r=>r.format),['pdf','jpg','csv','pdf','jpg','csv']);
@@ -100,6 +100,39 @@ test('an earlier chromatogram load cannot replace the new graph downloads, and m
 const uv = [{nm: 278, wavelength: 278, times: [0, .1234567890123, 1], intensities: [-.01, 2.3456789012345, .1]}];
 const tic = {times: [0, .1, .2], intensities: [3, 4, 5], has_dual_polarity: true,
   times_pos: [0, .1, .2], intensities_pos: [3, 4, 5], times_neg: [.02, .14], intensities_neg: [7, 9]};
+
+test('Single Sample badges follow the current selection even when a previous analysis is still loading', async () => {
+  const { context, nodes, run } = fixture();
+  const pending = [];
+  context.api.getSingleSampleData = ({ path }) => new Promise(resolve => pending.push({ path, resolve }));
+  run(`renderReportSummary=()=>{};
+    state.singleSampleData={analysisSettings:{path:'/data/first.sirslt'},tic:{times:[0]},ms_scan_count:510};
+    syncSingleSampleMetrics(); initSingleSample();`);
+  const metrics = nodes.get('single-metrics');
+  const select = nodes.get('single-sample-select');
+  assert.equal(metrics.hidden, false);
+  assert.match(metrics.innerHTML, /510 MS Scans/);
+
+  const first = run('loadSingleSample()');
+  select.value = '/data/second.sirslt';
+  select.listeners.change();
+  assert.equal(metrics.hidden, true);
+  pending[0].resolve({ uv: { wavelengths: uv }, tic, ms_scan_count: 400 });
+  await first;
+  assert.equal(metrics.hidden, true);
+  assert.equal(pending[1].path, '/data/second.sirslt');
+  pending[1].resolve({ tic, ms_scan_count: 176 });
+  await new Promise(setImmediate);
+  assert.equal(metrics.hidden, false);
+  assert.match(metrics.innerHTML, /UV Data Not found/);
+  assert.match(metrics.innerHTML, /MS Data Available/);
+  assert.match(metrics.innerHTML, /176 MS Scans/);
+
+  select.value = '';
+  select.listeners.change();
+  assert.equal(metrics.hidden, true);
+  assert.equal(metrics.innerHTML, '');
+});
 
 function windowControls(nodes) {
   for (const id of ['mz-window', 'mz-window-number']) {
@@ -162,6 +195,7 @@ test('UV and each TIC have their own downloads directly beneath the correspondin
   assert.equal(uvChildren[0].id, 'uv-plot-0');
   assert.equal(uvChildren[1].dataset.plotId, 'uv-plot-0');
   assert.deepEqual(uvChildren[1].children.map(b => b.textContent), ['Download CSV', 'Download PDF', 'Download PNG']);
+  assert.deepEqual(uvChildren[1].children.map(b => b.dataset.format), ['csv', 'pdf', 'png']);
   const ticChildren = nodes.get('single-tic-plot').children;
   assert.equal(ticChildren[0].id, 'single-tic-pos-plot');
   assert.equal(ticChildren[1].dataset.plotId, 'single-tic-pos-plot');

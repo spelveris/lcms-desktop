@@ -58,13 +58,13 @@ def prepare_chromatogram(payload):
             'y_label': 'Absorbance (mAU)' if kind == 'uv' else 'Intensity (counts)'}
 
 
-def chromatogram_csv(traces):
-    """Keep each channel's original pairs, including unequal/duplicate times."""
+def chromatogram_csv(traces, *, x_label='Elution time (min)'):
+    """Keep each channel's original pairs, including unequal or duplicate coordinates."""
     output = io.StringIO(newline='')
     writer = csv.writer(output)
     headers = []
     for trace in traces:
-        time_label = 'Elution time (min)'
+        time_label = x_label
         if len(traces) > 1:
             time_label += f" - {trace['label']}"
         headers.extend([time_label, trace['column']])
@@ -78,3 +78,30 @@ def chromatogram_csv(traces):
             row.extend(['', ''] if pair is None else [float(pair[0]), float(pair[1])])
         writer.writerow(row)
     return output.getvalue().encode('utf-8')
+
+
+def time_change_csv(traces, signal_kind):
+    """Export each sample's coordinates and intensity before display normalization."""
+    signal_columns = {'uv': 'UV absorbance (mAU)', 'tic': 'TIC intensity (counts)',
+                      'eic': 'EIC intensity (counts)'}
+    x_label = 'Elution time (min)' if signal_kind in signal_columns else 'm/z'
+    y_label = signal_columns.get(signal_kind, 'Intensity (counts)')
+    channels = []
+    for index, trace in enumerate(traces, 1):
+        if not isinstance(trace, dict):
+            raise ValueError('Invalid Time Change trace')
+        try:
+            x = np.asarray(trace.get('x', []), dtype=float)
+            y = np.asarray(trace.get('intensities', []), dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('Time Change coordinates and intensities must be numeric') from exc
+        if x.ndim != 1 or y.ndim != 1 or x.size != y.size:
+            raise ValueError('Time Change coordinates and intensities must be equally sized lists')
+        finite = np.isfinite(x) & np.isfinite(y)
+        if finite.any():
+            label = str(trace.get('label') or f'Sample {index}')
+            channels.append({'times': x[finite], 'intensities': y[finite],
+                             'label': label, 'column': f'{y_label} - {label}'})
+    if not channels:
+        raise ValueError('No Time Change data available for export')
+    return chromatogram_csv(channels, x_label=x_label)

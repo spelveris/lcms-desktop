@@ -1,4 +1,5 @@
 """EIC window values survive extraction and vector PDF exports."""
+import csv
 import io
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ import sys
 import unittest
 from unittest.mock import patch
 import numpy as np
+from PIL import Image
 from pypdf import PdfReader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -60,6 +62,46 @@ class EicExportSettingsTests(unittest.TestCase):
                 'points': [{'x': 0., 'y': 1.}, {'x': 10., 'y': 11.}],
                 'style': {'fig_width': 6.}})
             self.assert_pdf(response, width)
+
+    def test_time_change_csv_preserves_sample_pairs_without_resampling_or_normalizing(self):
+        traces = [
+            {'label': 'First, "A".D', 'x': [0.1234567890123, 0.5, 0.5], 'intensities': [12.25, 0, -3]},
+            {'label': 'Second.D', 'x': [0.1, 0.35], 'intensities': [24.5, 1.5]},
+        ]
+        for kind, x_label, y_label in [
+            ('tic', 'Elution time (min)', 'TIC intensity (counts)'),
+            ('uv', 'Elution time (min)', 'UV absorbance (mAU)'),
+            ('eic', 'Elution time (min)', 'EIC intensity (counts)'),
+            ('ms', 'm/z', 'Intensity (counts)'),
+        ]:
+            with self.subTest(kind=kind):
+                response = server.export_time_change({'format': 'csv', 'filename_base': f'{kind}_overlap',
+                    'traces': traces, 'style': {'signal_kind': kind, 'normalize': True}})
+                self.assertTrue(response.headers['content-type'].startswith('text/csv'))
+                self.assertIn(f'{kind}_overlap.csv', response.headers['content-disposition'])
+                header, *rows = csv.reader(io.StringIO(response.body.decode('utf-8')))
+                self.assertEqual(header, [f'{axis} - {trace["label"]}' for trace in traces
+                                         for axis in (x_label, y_label)])
+                self.assertEqual(rows, [['0.1234567890123', '12.25', '0.1', '24.5'],
+                                        ['0.5', '0.0', '0.35', '1.5'], ['0.5', '-3.0', '', '']])
+
+    def test_time_change_jpg_uses_pdf_dimensions_and_an_opaque_white_background(self):
+        payload = {'filename_base': 'tic_overlap', 'dpi': 144,
+            'traces': [{'label': 'Sample A', 'x': [0, 1, 2], 'intensities': [1, 8, 4]},
+                       {'label': 'Sample B', 'x': [0, 0.75, 2.25], 'intensities': [1, 5, 2]}],
+            'style': {'signal_kind': 'tic', 'fig_width': 6, 'normalize': True,
+                      'x_offset_step': 0, 'y_offset_step': 0, 'offset_guide': False}}
+        pdf = server.export_time_change({**payload, 'format': 'pdf'})
+        jpg = server.export_time_change({**payload, 'format': 'jpg'})
+        self.assertEqual(jpg.headers['content-type'], 'image/jpeg')
+        self.assertIn('tic_overlap.jpg', jpg.headers['content-disposition'])
+        page = PdfReader(io.BytesIO(pdf.body)).pages[0]
+        with Image.open(io.BytesIO(jpg.body)) as image:
+            self.assertEqual(image.format, 'JPEG')
+            self.assertEqual(image.mode, 'RGB')
+            self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
+            for pixels, points in zip(image.size, (page.mediabox.width, page.mediabox.height)):
+                self.assertAlmostEqual(pixels, float(points) * 2, delta=1)
 
 
 if __name__ == '__main__':

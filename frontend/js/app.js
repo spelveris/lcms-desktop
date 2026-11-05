@@ -608,13 +608,11 @@ function setQuoteContainerState(emptyId, keyPrefix, isEmpty, forceNew = false) {
 function setSingleEmptyState(isEmpty, forceNew = false) {
   const empty = document.getElementById('single-empty-state');
   const results = document.getElementById('single-results');
-  const metrics = document.getElementById('single-metrics');
   if (empty) {
     empty.classList.toggle('hidden', !isEmpty);
     if (isEmpty) renderQuoteEmptyState('single-empty-state', 'single', forceNew);
   }
   if (results) results.classList.toggle('hidden', isEmpty);
-  if (metrics) metrics.classList.toggle('hidden', isEmpty);
 }
 
 function setBackgroundSubtractionEmptyState(isEmpty, forceNew = false) {
@@ -729,7 +727,10 @@ function resetSingleSampleView() {
   const tic = document.getElementById('single-tic-plot');
   const eic = document.getElementById('single-eic-plots');
   state.singleSpectrumSelections = {};
-  if (metrics) metrics.innerHTML = '';
+  if (metrics) {
+    metrics.innerHTML = '';
+    metrics.hidden = true;
+  }
   if (uv) uv.innerHTML = '';
   if (tic) {
     tic.innerHTML = '';
@@ -2250,6 +2251,7 @@ function updateSampleDropdowns() {
     }
   });
 
+  syncSingleSampleMetrics();
   syncBackgroundSubtractionSelections();
   syncDeconvBackgroundSelection();
   syncDeconvMwAlgorithmDefault(document.getElementById('deconv-sample-select')?.value || '');
@@ -2672,6 +2674,7 @@ function initSingleSample() {
   const singleSelect = document.getElementById('single-sample-select');
   if (singleSelect) {
     singleSelect.addEventListener('change', () => {
+      syncSingleSampleMetrics();
       if (!singleSelect.value) return;
       loadSingleSample({ silentNoSelection: true });
     });
@@ -3030,7 +3033,8 @@ async function useDrawnStructureForSequenceMod() {
 
 async function loadSingleSample(options = {}) {
   if (state.singleLoadInFlight) return;
-  const samplePath = document.getElementById('single-sample-select').value;
+  const sampleSelect = document.getElementById('single-sample-select');
+  const samplePath = sampleSelect.value;
   if (!samplePath) {
     if (!options.silentNoSelection) toast('Select a sample first', 'warning');
     return;
@@ -3051,37 +3055,49 @@ async function loadSingleSample(options = {}) {
   try {
     state.singleSpectrumSelections = {};
     const data = await api.getSingleSampleData(analysisSettings);
+    if (sampleSelect.value !== samplePath) return;
     state.singleSampleData = { ...data, analysisSettings };
     renderSingleSample(state.singleSampleData);
     renderReportSummary();
     toast('Sample loaded successfully', 'success');
   } catch (err) {
-    toast(`Analysis failed: ${err.message}`, 'error');
+    if (sampleSelect.value === samplePath) toast(`Analysis failed: ${err.message}`, 'error');
   } finally {
     state.singleLoadInFlight = false;
     hideLoading();
+    if (sampleSelect.value && sampleSelect.value !== samplePath) {
+      loadSingleSample({ silentNoSelection: true });
+    }
   }
+}
+
+function syncSingleSampleMetrics() {
+  const metricsBar = document.getElementById('single-metrics');
+  if (!metricsBar) return;
+  const samplePath = document.getElementById('single-sample-select')?.value || '';
+  const data = state.singleSampleData;
+  metricsBar.hidden = !samplePath || data?.analysisSettings?.path !== samplePath;
+  if (metricsBar.hidden) {
+    metricsBar.innerHTML = '';
+    return;
+  }
+
+  const uvAvail = data.uv?.wavelengths?.length > 0;
+  const msAvail = data.tic?.times?.length > 0;
+  const scanCount = Number(data.ms_scan_count) || (msAvail ? data.tic.times.length : 0);
+  metricsBar.innerHTML = `
+    <div class="metric"><span class="dot ${uvAvail ? 'green' : 'red'}" aria-hidden="true"></span> UV Data ${uvAvail ? 'Available' : 'Not found'}</div>
+    <div class="metric"><span class="dot ${msAvail ? 'green' : 'red'}" aria-hidden="true"></span> MS Data ${msAvail ? 'Available' : 'Not found'}</div>
+    ${msAvail ? `<div class="metric"><span class="dot blue" aria-hidden="true"></span> ${scanCount} MS Scans</div>` : ''}
+  `;
 }
 
 function renderSingleSample(data) {
   setSingleEmptyState(false);
+  syncSingleSampleMetrics();
   const samplePath = document.getElementById('single-sample-select')?.value || '';
   const sampleName = state.loadedSamples[samplePath]?.name || samplePath.split(/[\\/]/).pop() || 'sample';
   const singlePlotIds = [];
-
-  // Metrics
-  const metricsBar = document.getElementById('single-metrics');
-  metricsBar.innerHTML = '';
-
-  const uvAvail = data.uv && data.uv.wavelengths && data.uv.wavelengths.length > 0;
-  const msAvail = data.tic && data.tic.times && data.tic.times.length > 0;
-  const scanCount = data.ms_scan_count || (msAvail ? data.tic.times.length : 0);
-
-  metricsBar.innerHTML = `
-    <div class="metric"><span class="dot ${uvAvail ? 'green' : 'red'}"></span> UV Data ${uvAvail ? 'Available' : 'Not found'}</div>
-    <div class="metric"><span class="dot ${msAvail ? 'green' : 'red'}"></span> MS Data ${msAvail ? 'Available' : 'Not found'}</div>
-    ${msAvail ? `<div class="metric"><span class="dot blue"></span> ${scanCount} MS Scans</div>` : ''}
-  `;
 
   // UV plots
   const uvContainer = document.getElementById('single-uv-plots');
@@ -3293,22 +3309,13 @@ function appendSingleChromatogramDownloads(container, options) {
   row.dataset.plotId = options.plotId;
   row.setAttribute('role', 'group');
   row.setAttribute('aria-label', `${options.title} downloads`);
-  const iconPaths = {
-    pdf: 'M9.5 1.5h-7v15h11v-11zM9.5 1.5v4h4M5 9h5M5 12h5',
-    jpg: 'M1.5 3.5h13v11h-13zM1.5 12l4-4 3 3 2-2 4 4M12 6.5a1 1 0 1 1-2 0 1 1 0 1 1 2 0z',
-  };
   const buttons = [];
   for (const format of options.formats || ['csv', 'pdf', 'png']) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'btn btn-sm';
-    const label = `Download ${format.toUpperCase()}`;
-    const iconPath = options.deconvolution && iconPaths[format];
-    if (iconPath) {
-      button.innerHTML = `<svg class="chromatogram-download-icon" viewBox="0 0 16 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true" focusable="false"><path d="${iconPath}"/></svg><span>${label}</span>`;
-    } else {
-      button.textContent = label;
-    }
+    button.dataset.format = format;
+    button.textContent = `Download ${format.toUpperCase()}`;
     button.addEventListener('click', async () => {
       if (row.dataset.busy === 'true') return;
       row.dataset.busy = 'true';
@@ -4674,7 +4681,7 @@ function appendProgressionDownloadRow(container, onClick) {
   if (!container || typeof onClick !== 'function') return;
   const downloadRow = document.createElement('div');
   downloadRow.className = 'single-eic-download-row';
-  downloadRow.innerHTML = '<button class="btn btn-sm">Download PDF</button>';
+  downloadRow.innerHTML = '<button class="btn btn-sm" data-format="pdf">Download PDF</button>';
   downloadRow.querySelector('button')?.addEventListener('click', onClick);
   container.appendChild(downloadRow);
 }
@@ -8742,14 +8749,20 @@ function initTimeChangeMS() {
       hideLoading();
     }
   });
-  document.querySelectorAll('.btn-export-timechange').forEach(btn => {
-    btn.addEventListener('click', () => exportTimeChangeOffset(btn.dataset.format));
-  });
   document.getElementById('btn-export-timechange-ms-pdf')?.addEventListener('click', exportTimeChangeSummedMassPdf);
   document.getElementById('btn-export-timechange-tic-pdf')?.addEventListener('click', exportTimeChangeTICPdf);
   document.getElementById('btn-export-timechange-eic-pdf')?.addEventListener('click', exportTimeChangeEICPdf);
   document.getElementById('btn-export-timechange-uv-pdf')?.addEventListener('click', exportTimeChangeUVPdf);
-  document.getElementById('btn-export-timechange-overlap-pdf')?.addEventListener('click', () => exportTimeChangeOffset('pdf', { view: 'overlap' }));
+  for (const format of ['pdf', 'jpg', 'csv']) {
+    document.getElementById(`btn-export-timechange-overlap-${format}`)?.addEventListener(
+      'click', () => exportTimeChangeOffset(format, { view: 'overlap' }),
+    );
+  }
+  for (const format of ['jpg', 'csv']) {
+    document.getElementById(`btn-export-timechange-offset-${format}`)?.addEventListener(
+      'click', () => exportTimeChangeOffset(format),
+    );
+  }
 }
 
 function getTimeChangeSignalKind() {
@@ -9115,8 +9128,14 @@ function syncTimeChangeDownloads(data = null) {
     const button = document.getElementById(`btn-export-timechange-${signal}-pdf`);
     if (button) button.hidden = !ready || signal !== kind;
   }
-  const caption = document.getElementById('timechange-overlap-pdf-label');
-  if (caption) caption.textContent = `${label} overlay PDF`;
+  for (const format of ['pdf', 'jpg', 'csv']) {
+    const caption = document.getElementById(`timechange-overlap-${format}-label`);
+    if (caption) caption.textContent = `${label} overlay ${format.toUpperCase()}`;
+  }
+  for (const format of ['jpg', 'csv']) {
+    const button = document.getElementById(`btn-export-timechange-offset-${format}`);
+    if (button) button.textContent = `Diagonal ${label} ${format.toUpperCase()}`;
+  }
 }
 
 function renderTimeChangeMS(data) {

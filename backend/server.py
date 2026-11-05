@@ -68,7 +68,7 @@ import config as lcms_config
 from reference_masses import filter_sample, normalize_policy, ReferenceSettingsStore
 from protein_databases import ProteinDatabaseStore
 from database_search import DatabaseSearchStore
-from chromatogram_export import prepare_chromatogram, chromatogram_csv
+from chromatogram_export import prepare_chromatogram, chromatogram_csv, time_change_csv
 
 # ---------------------------------------------------------------------------
 # App
@@ -4381,24 +4381,34 @@ def export_deconvolution_spectrum(payload: dict = Body(...)):
 
 @app.post("/api/export-time-change")
 def export_time_change(payload: dict = Body(...)):
-    """Export the Time Change diagonal offset plot with deconvolution export sizing."""
+    """Export a Time Change graph or its original coordinate and intensity pairs."""
     traces = payload.get("traces", [])
     if not isinstance(traces, list):
         raise HTTPException(status_code=400, detail="traces must be a list")
 
     export_format = str(payload.get("format", "png")).lower()
-    if export_format not in {"png", "svg", "pdf"}:
-        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf")
+    if export_format not in {"png", "svg", "pdf", "jpg", "csv"}:
+        raise HTTPException(status_code=400, detail="format must be one of: png, svg, pdf, jpg, csv")
+
+    style = payload.get("style", {})
+    if not isinstance(style, dict):
+        style = {}
+
+    filename_base = str(payload.get("filename_base") or "time_change_offset")
+    safe_name = _sanitize_filename(filename_base, fallback="time_change_offset")
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}.{export_format}"'}
+    if export_format == "csv":
+        try:
+            content = time_change_csv(traces, str(style.get("signal_kind", "ms")).lower())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(content=content, media_type="text/csv", headers=headers)
 
     try:
         dpi = int(payload.get("dpi", lcms_config.EXPORT_DPI))
     except Exception:
         dpi = lcms_config.EXPORT_DPI
     dpi = max(72, min(600, dpi))
-
-    style = payload.get("style", {})
-    if not isinstance(style, dict):
-        style = {}
 
     fig = plotting.create_time_change_offset_figure(traces, style)
     try:
@@ -4410,20 +4420,12 @@ def export_time_change(payload: dict = Body(...)):
                 metadata=_eic_pdf_metadata(payload.get("eic_settings")))
             media_type = "application/pdf"
         else:
-            content = plotting.export_figure(fig, dpi=dpi, format="png", tight=False)
-            media_type = "image/png"
+            content = plotting.export_figure(fig, dpi=dpi, format=export_format, tight=False)
+            media_type = "image/jpeg" if export_format == "jpg" else "image/png"
     finally:
         plt.close(fig)
 
-    filename_base = str(payload.get("filename_base") or "time_change_offset")
-    safe_name = _sanitize_filename(filename_base, fallback="time_change_offset")
-    filename = f"{safe_name}.{export_format}"
-
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return Response(content=content, media_type=media_type, headers=headers)
 
 
 @app.post("/api/export-uv-area")

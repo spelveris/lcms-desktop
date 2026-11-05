@@ -168,7 +168,8 @@ test('Single Sample uses compact cards and preserves molecule controls',()=>{
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
   assert.match(css,/\.tab-toolbar\s*\{[^}]*margin-bottom: 8px;[^}]*padding: 6px 12px;/);
   assert.match(css,/#tab-single > \.mz-toolbar\s*\{ margin-bottom: 6px; \}/);
-  assert.match(css,/#tab-single > \.metrics-bar\s*\{ row-gap: 6px; \}/);
+  assert.match(css,/#single-metrics\s*\{ margin: 0;/);
+  assert.match(html,/id="btn-load-single"[^>]*>[^<]+<\/button>\s*<div id="single-metrics"[^>]*hidden><\/div>/);
   assert.match(css,/#tab-single \.plot-stack\s*\{ row-gap: 4px; \}/);
   assert.match(css,/#single-results\s*\{ gap: 8px; \}/);
   assert.match(css,/\.mz-toolbar\s*\{[^}]*margin-bottom: 6px;[^}]*padding: 6px 12px;/);
