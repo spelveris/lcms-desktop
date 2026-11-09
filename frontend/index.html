@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.72">
+  <link rel="stylesheet" href="css/style.css?v=0.2.73">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -553,7 +553,6 @@
         <button id="btn-uptake-assay-run" class="btn btn-primary">Build Graphs</button>
         <button id="btn-uptake-assay-export-pdf" class="btn btn-sm" data-format="pdf">Export PDF</button>
       </div>
-      <div class="toolbar-note">Uses the currently selected files. Mark rows as calibration controls or assay samples. Calibration controls are fit from the selected EIC and time window. Assay samples use that same window to calculate intracellular concentration. Matching sample names are grouped as replicates and shown with mean plus SD error bars.</div>
       <div id="uptake-assay-samples" class="uptake-assay-samples"></div>
       <div id="uptake-assay-empty-state" class="quote-empty-stack"></div>
       <div id="uptake-assay-content" class="uptake-assay-layout hidden">
@@ -704,6 +703,7 @@
                 <select id="deconv-spectrum-view">
                   <option value="summed">Summed time window</option>
                   <option value="measured">Measured centroids (unrounded, before blank subtraction)</option>
+                  <option value="profile" disabled>Measured profile (apex scan, before blank subtraction)</option>
                 </select>
               </label>
               <div id="deconv-spectrum-plot" class="deconv-plot-inner"></div>
@@ -784,14 +784,18 @@
 
     <!-- Tab: Time Change -->
     <div id="tab-time-change-ms" class="tab-panel hidden">
-      <div class="tab-toolbar">
-        <span class="toolbar-note">Requires 2+ selected samples</span>
-        <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS</button>
+      <section class="tab-toolbar timechange-ms-panel" aria-label="Mass spectrum controls">
+        <span id="timechange-sample-requirement" class="toolbar-note" hidden>Requires 2+ selected samples</span>
         <div class="timechange-ms-window">
           <label>MS Start (min)<input type="number" id="timechange-ms-start" step="0.05" value="0" min="0"></label>
           <label>MS End (min)<input type="number" id="timechange-ms-end" step="0.05" value="30" min="0"></label>
         </div>
+        <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS</button>
+      </section>
+      <section class="tab-toolbar timechange-tic-panel" aria-label="TIC chromatogram controls">
         <button id="btn-run-time-change-tic" class="btn btn-primary">Generate TIC</button>
+      </section>
+      <section class="tab-toolbar timechange-eic-panel" aria-label="EIC chromatogram controls">
         <div class="timechange-eic-controls">
           <label>EIC m/z<input type="number" id="timechange-eic-mz" step="0.01" min="0.01" placeholder="e.g. 203.00"></label>
           <label class="timechange-eic-window-control">m/z Window (± Da)
@@ -808,11 +812,17 @@
           </label>
           <button id="btn-run-time-change-eic" class="btn btn-primary">Generate EIC</button>
         </div>
-        <button id="btn-run-time-change-uv" class="btn btn-primary">Generate UV</button>
-        <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
-      </div>
+      </section>
+      <section class="tab-toolbar timechange-uv-panel" aria-label="UV chromatogram controls">
+        <span class="timechange-uv-label">UV wavelength</span>
+        <div id="timechange-uv-wavelengths" class="timechange-uv-wavelengths" role="radiogroup" aria-label="UV wavelength"></div>
+        <button id="btn-run-time-change-uv" class="btn btn-primary" type="button" disabled>Generate UV</button>
+      </section>
       <div id="timechange-empty-state" class="quote-empty-stack"></div>
       <div id="timechange-content" class="hidden">
+        <div class="timechange-display-controls">
+          <label class="checkbox-label"><input type="checkbox" id="timechange-normalize"> Normalize</label>
+        </div>
         <div class="timechange-plot-card">
           <div id="timechange-ms-plot" class="plot-container"></div>
           <div id="timechange-overlap-downloads" class="timechange-plot-downloads" aria-label="Overlay graph downloads" hidden>
@@ -1091,14 +1101,14 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.63"></script>
-  <script src="js/charts.js?v=0.2.72"></script>
+  <script src="js/api.js?v=0.2.73"></script>
+  <script src="js/charts.js?v=0.2.73"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.72"></script>
+  <script src="js/app.js?v=0.2.73"></script>
 </body>
 </html>

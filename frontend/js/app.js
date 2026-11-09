@@ -82,6 +82,7 @@ const state = {
   batchDeconvAutoRunInFlight: false,
   eicCollapsedSections: {},
   timeChangeMSData: null,
+  timeChangeUvWavelength: null,
   sequenceModSelectedIndices: [149],
   sequenceModActiveIndex: 149,
   sequenceModReplacementMode: 'standard',
@@ -2112,9 +2113,12 @@ function renderSelectedFiles() {
   const container = document.getElementById('selected-files-list');
   const count = document.getElementById('selected-count');
   const clearBtn = document.getElementById('btn-clear-all');
+  const timeChangeRequirement = document.getElementById('timechange-sample-requirement');
 
   count.textContent = state.selectedFiles.length;
   clearBtn.style.display = state.selectedFiles.length > 0 ? 'block' : 'none';
+  if (timeChangeRequirement) timeChangeRequirement.hidden = state.selectedFiles.length !== 1;
+  renderTimeChangeUvControls();
 
   if (state.selectedFiles.length === 0) {
     container.innerHTML = '<p class="muted">No files selected</p>';
@@ -2151,6 +2155,7 @@ async function loadSampleMeta(path, options = {}) {
     state.loadedSamples[path] = meta;
     qtofSyncSamples(state.selectedFiles, state.loadedSamples);
     updateWavelengthCheckboxes();
+    renderTimeChangeUvControls();
     const sampleLabel = meta.name || path.split(/[\\/]/).pop();
     if (silent) {
       return meta;
@@ -6876,9 +6881,46 @@ function getIntactAnalysisMethod(samplePath) {
 }
 
 function getDisplayedDeconvSpectrum(data=state.deconvResults) {
-  return ['qtof-envelope','qtof-profile'].includes(data?.workflow?.id)
-    && document.getElementById('deconv-spectrum-view')?.value==='measured'
-    && data.measured_spectrum ? data.measured_spectrum : data?.spectrum;
+  if (['qtof-envelope','qtof-profile'].includes(data?.workflow?.id)) {
+    const view = document.getElementById('deconv-spectrum-view')?.value;
+    if (view === 'profile' && data.measured_profile) return data.measured_profile;
+    if (view === 'measured' && data.measured_spectrum) return data.measured_spectrum;
+  }
+  return data?.spectrum;
+}
+
+function initialiseDeconvSpectrumView(data) {
+  const view = document.getElementById('deconv-spectrum-view');
+  if (view && data?.workflow?.id === 'qtof-envelope') {
+    view.value = data.measured_spectrum ? 'measured' : 'summed';
+  }
+}
+
+async function changeDeconvSpectrumView() {
+  const data = state.deconvResults;
+  const view = document.getElementById('deconv-spectrum-view');
+  if (!data || !view) return;
+  if (view.value === 'profile' && !data.measured_profile) {
+    const path = state.deconvSamplePath;
+    const range = data.time_range || state.deconvTimeRange;
+    if (!data.profile_spectrum_available || !path || !Array.isArray(range)) {
+      view.value = data.measured_spectrum ? 'measured' : 'summed';
+    } else {
+      view.disabled = true;
+      try {
+        const profile = await api.getQtofProfileSpectrum(path, range[0], range[1], data.min_input_mz);
+        if (data !== state.deconvResults) return;
+        data.measured_profile = profile;
+      } catch (err) {
+        if (data !== state.deconvResults) return;
+        view.value = data.measured_spectrum ? 'measured' : 'summed';
+        toast(`Measured profile unavailable: ${err.message}`, 'warning');
+      } finally {
+        if (data === state.deconvResults) view.disabled = false;
+      }
+    }
+  }
+  if (data === state.deconvResults) renderDeconvResults(data);
 }
 
 function getCurrentDeconvolutionParameters(samplePath = '') {
@@ -7186,9 +7228,7 @@ function initDeconvolution() {
     state.deconvAutoRunSignature='';
     if(path)await runDeconvolution({useOverlay:false,silentSuccess:true});
   });
-  document.getElementById('deconv-spectrum-view')?.addEventListener('change', () => {
-    if(state.deconvResults)renderDeconvResults(state.deconvResults);
-  });
+  document.getElementById('deconv-spectrum-view')?.addEventListener('change', changeDeconvSpectrumView);
   document.getElementById('btn-dense-focus')?.addEventListener('click', () => setDenseProfileView('focus'));
   document.getElementById('btn-dense-full-range')?.addEventListener('click', () => setDenseProfileView('full'));
   document.getElementById('btn-refresh-deconv')?.addEventListener('click', refreshCurrentDeconvolutionSample);
@@ -7562,6 +7602,7 @@ async function runDeconvolution(options = {}) {
       Number.isFinite(params.end_time) ? params.end_time : (resultRange ? resultRange[1] : null),
     ];
     state.deconvAutoRunSignature = requestSignature;
+    initialiseDeconvSpectrumView(data);
     renderDeconvResults(data);
     renderReportSummary();
     if (!silentSuccess) {
@@ -7691,13 +7732,16 @@ function renderDeconvResults(data) {
     for(const option of Array.from(view.options || [])){
       if(option.value==='summed')option.textContent=profileFit?'Window-mean profile':'Summed time window';
       if(option.value==='measured')option.textContent=profileFit?'Native apex profile (display selection, before blank subtraction)':'Measured centroids (unrounded, before blank subtraction)';
+      if(option.value==='measured')option.disabled=!data.measured_spectrum;
+      if(option.value==='profile')option.disabled=data.profile_spectrum_available!==true;
     }
-    view.disabled=!data.measured_spectrum;
+    view.disabled=!data.measured_spectrum && !data.profile_spectrum_available;
     view.title=data.measured_spectrum ? '' : 'Use a narrower time window to inspect unrounded centroids (up to 500,000 points).';
     if(!data.measured_spectrum)view.value='summed';
   }
   const displayedSpectrum=getDisplayedDeconvSpectrum(data);
-  const measuredView=displayedSpectrum===data.measured_spectrum && !!displayedSpectrum;
+  const nativeProfile=displayedSpectrum===data.measured_profile && !!displayedSpectrum;
+  const measuredView=nativeProfile || (displayedSpectrum===data.measured_spectrum && !!displayedSpectrum);
   const profileDescription=document.getElementById('deconv-profile-description');
   if(profileDescription){
     profileDescription.hidden=!isotopeAware && !profileFit && !chargeProfile;
@@ -7744,13 +7788,15 @@ function renderDeconvResults(data) {
       });
     }
     charts.plotMassSpectrum('deconv-spectrum-plot', displayedSpectrum.mz, displayedSpectrum.intensities, [], {
-      title: profileFit ? (measuredView
+      title: nativeProfile ? `Measured profile · ${displayedSpectrum.time.toFixed(4)} min`
+        : profileFit ? (measuredView
         ? `Native apex profile · ${data.measured_spectrum.time.toFixed(3)} min · display selection · before blank subtraction`
         : `Window-mean profile${hasBackground?' · blank subtracted':''} · ${data.spectrum.mz_grid_step} m/z integrated grid`)
         : measuredView ? 'Measured centroids · selected time window · before blank subtraction'
         : (hasBackground ? 'Background-Subtracted Mass Spectrum' : 'Mass Spectrum')
         + (isotopeAware ? ` · MS1 scan ${data.workflow.display_scan_id} (${data.workflow.display_time.toFixed(3)} min)` : data.spectrum.mz_grid_step ? ` · summed window · ${data.spectrum.mz_grid_step} m/z grid` : ''),
-      centroidSticks:chargeCentroids || isotopeAware || (measuredView && !profileFit),
+      centroidSticks:!nativeProfile && (chargeCentroids || isotopeAware || (measuredView && !profileFit)),
+      breakAfter: displayedSpectrum.break_after,
       primaryLabel: hasBackground ? 'Subtracted' : 'Spectrum',
       mzGridStep: displayedSpectrum.mz_grid_step,
       primaryColor: '#1f77b4',
@@ -7851,7 +7897,9 @@ function applyDenseDeconvProfileStyle(style = {}, { includeView = true } = {}) {
   style.deconv_mass_decimals = qtof || state.deconvResults?.workflow?.id==='charge-profile' ? 2 : 1;
   style.deconv_profile_smooth_sigma_da = qtof ? 1.0 : 2.0;
   style.deconv_profile_min_charge = Number.isFinite(Number(params.min_charge)) ? Number(params.min_charge) : 1;
-  style.deconv_profile_max_charge = Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
+  const effectiveMaxCharge = qtof ? state.deconvResults?.effective_max_charge : null;
+  style.deconv_profile_max_charge = Number.isFinite(effectiveMaxCharge) ? effectiveMaxCharge
+    : Number.isFinite(Number(params.max_charge)) ? Number(params.max_charge) : 50;
   style.deconv_profile_use_monoisotopic = params.monoisotopic === true;
   const component = getSelectedDeconvComponent();
   style.deconv_profile_selected_mass = component?.mass;
@@ -8068,7 +8116,9 @@ async function exportDeconvSpectrumPdf() {
 
   const dpi = parseInt(document.getElementById('export-dpi').value, 10) || 300;
   const sampleName = state.selectedFiles.find((f) => f.path === samplePath)?.name || samplePath.split('/').pop() || 'sample';
-  const title = spectrum===state.deconvResults?.measured_spectrum
+  const title = spectrum===state.deconvResults?.measured_profile
+    ? `Measured profile (${spectrum.time.toFixed(4)} min, before blank)`
+    : spectrum===state.deconvResults?.measured_spectrum
     ? state.deconvResults?.workflow?.id==='qtof-profile' ? 'Native apex profile (display selection, before blank)' : 'Centroids (before blank)'
     : state.deconvResults?.background_path
     ? 'Background-Subtracted Mass Spectrum'
@@ -8728,6 +8778,7 @@ function exportBatchDeconvCSV() {
 function initTimeChangeMS() {
   initMzWindowControls('timechange-eic-window');
   syncTimeChangeDownloads();
+  renderTimeChangeUvControls();
   document.getElementById('btn-run-time-change-ms').addEventListener('click', () => runTimeChangeMS('ms'));
   document.getElementById('btn-run-time-change-tic')?.addEventListener('click', () => runTimeChangeMS('tic'));
   document.getElementById('btn-run-time-change-eic')?.addEventListener('click', () => runTimeChangeMS('eic'));
@@ -8810,22 +8861,52 @@ function getTimeChangeEICSettings() {
   };
 }
 
-async function resolveTimeChangeUvWavelength() {
+function getTimeChangeUvWavelengths() {
   let common = null;
   for (const file of state.selectedFiles) {
-    let meta = state.loadedSamples[file.path];
-    if (!meta) {
-      try {
-        meta = await loadSampleMeta(file.path, { silent: true });
-      } catch (_) {
-        meta = null;
-      }
-    }
-    const wavelengths = availableUvWavelengths(meta);
+    const wavelengths = availableUvWavelengths(state.loadedSamples[file.path]);
     common = common === null ? wavelengths : common.filter(wl=>wavelengths.includes(wl));
   }
-  // An overlay must compare the same recorded wavelength in every run.
-  return preferredUvWavelength({uv_wavelengths:common || []},getSelectedWavelengths()) ?? NaN;
+  return common || [];
+}
+
+function renderTimeChangeUvControls() {
+  const container = document.getElementById('timechange-uv-wavelengths');
+  if (!container) return;
+  const wavelengths = getTimeChangeUvWavelengths();
+  if (!wavelengths.includes(state.timeChangeUvWavelength) && wavelengths.length) {
+    state.timeChangeUvWavelength = preferredUvWavelength({ uv_wavelengths: wavelengths }, getSelectedWavelengths());
+  }
+  container.innerHTML = '';
+  for (const wavelength of wavelengths) {
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="radio" name="timechange-uv-wavelength" value="${wavelength}" ${wavelength === state.timeChangeUvWavelength ? 'checked' : ''}><span>${wavelength} nm</span>`;
+    label.querySelector('input').addEventListener('change', (event) => {
+      if (event.target.checked) state.timeChangeUvWavelength = Number(event.target.value);
+    });
+    container.appendChild(label);
+  }
+  const generate = document.getElementById('btn-run-time-change-uv');
+  if (generate) {
+    generate.disabled = state.selectedFiles.length < 2 || !wavelengths.length;
+    generate.title = generate.disabled ? 'Select at least two samples with a shared UV wavelength' : 'Generate UV traces at the selected wavelength';
+  }
+}
+
+async function resolveTimeChangeUvWavelength() {
+  for (const file of state.selectedFiles) {
+    if (!state.loadedSamples[file.path]) {
+      try {
+        await loadSampleMeta(file.path, { silent: true });
+      } catch (_) {
+        // Unavailable metadata leaves this run without a shared UV channel.
+      }
+    }
+  }
+  renderTimeChangeUvControls();
+  const common = getTimeChangeUvWavelengths();
+  if (common.includes(state.timeChangeUvWavelength)) return state.timeChangeUvWavelength;
+  return preferredUvWavelength({ uv_wavelengths: common }, getSelectedWavelengths()) ?? NaN;
 }
 
 async function runTimeChangeMS(kind = 'ms') {
@@ -8838,7 +8919,7 @@ async function runTimeChangeMS(kind = 'ms') {
   const signalLabel = getTimeChangeSignalLabel(kind);
   const wavelength = kind === 'uv' ? await resolveTimeChangeUvWavelength() : null;
   if (kind === 'uv' && !Number.isFinite(wavelength)) {
-    toast('Select a UV wavelength in Settings first', 'warning');
+    toast('Select a shared UV wavelength first', 'warning');
     return false;
   }
   const msWindow = kind === 'ms' ? getTimeChangeMSWindow() : null;
@@ -9343,7 +9424,7 @@ async function exportTimeChangeEICPdf() {
 async function exportTimeChangeUVPdf() {
   const wavelength = await resolveTimeChangeUvWavelength();
   if (!Number.isFinite(wavelength)) {
-    toast('Select a UV wavelength in Settings first', 'warning');
+    toast('Select a shared UV wavelength first', 'warning');
     return;
   }
   const current = state.timeChangeMSData;

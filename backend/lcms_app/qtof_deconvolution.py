@@ -50,6 +50,47 @@ def measured_window_spectrum(sample, start, end, minimum_mz=100., limit=500000):
             'scans_analyzed': len(scans), 'before_background_subtraction': True}
 
 
+def validate_charge_envelopes(components, cutoff=.5):
+    """QTOF-only acceptance check; retain smooth truncated charge envelopes.
+
+    A Gaussian fit alone rejects real adduct series whose observed charges
+    cover only a tail. For four or more distinct charges, also compare each
+    interior log height with its two neighbours, respecting charge spacing.
+    A periodic comb of unrelated peaks fails both checks. One height per
+    charge prevents repeated maxima from voting as independent evidence.
+    This validates completed assignments without changing accepted masses or
+    recycling rejected ions into additional speculative components.
+    """
+    from analysis import _gaussian_fit_r2
+    cutoff = float(np.clip(cutoff, 0., 1.))
+    local_cutoff = .5 + cutoff / 2
+    accepted, rejected = [], []
+    for component in components:
+        by_charge = {}
+        for z, y in zip(component.get('ion_charges', []), component.get('ion_intensities', [])):
+            if z >= 2 and np.isfinite(y) and y > 0:
+                by_charge[int(z)] = max(by_charge.get(int(z), 0.), float(y))
+        if len(by_charge) < 4 or cutoff == 0:
+            accepted.append(component)
+            continue
+        charges = np.array(sorted(by_charge), dtype=float)
+        heights = np.array([by_charge[z] for z in charges])
+        logged = np.log(heights)
+        fraction = (charges[1:-1] - charges[:-2]) / (charges[2:] - charges[:-2])
+        predicted = logged[:-2] + fraction * (logged[2:] - logged[:-2])
+        agreement = float(np.exp(-np.median(np.abs(logged[1:-1] - predicted))))
+        r2 = _gaussian_fit_r2(charges.tolist(), heights.tolist())
+        evidence = {'envelope_r2': r2, 'neighbour_agreement': agreement,
+                    'distinct_charges': len(charges)}
+        if r2 < cutoff and agreement < local_cutoff:
+            rejected.append({'mass': float(component['mass']), **evidence,
+                             'reason': 'Inconsistent charge-envelope intensities'})
+        else:
+            accepted.append({**component, 'charge_envelope_check': evidence})
+    return accepted, {'method': 'qtof-charge-envelope-coherence', 'envelope_cutoff': cutoff,
+                      'neighbour_cutoff': local_cutoff, 'rejected': rejected}
+
+
 def flag_charge_ambiguities(components):
     """Flag overlapping integer-multiple mass assignments; never delete a mass.
 

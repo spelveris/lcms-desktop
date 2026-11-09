@@ -9,7 +9,7 @@ function fixture() {
   for (const [id, value] of Object.entries({
     'timechange-eic-mz':'247.1', 'timechange-eic-polarity':'positive',
     'timechange-eic-window-number':'.5', 'timechange-eic-window':'.5',
-    'mz-window-number':'3', 'mz-window':'1', 'eic-smoothing':'1',
+    'mz-window-number':'3', 'mz-window':'1', 'eic-smoothing':'1', 'uv-smoothing':'0',
     'btn-run-time-change-ms':'', 'timechange-normalize':'', 'export-dpi':'300',
     'timechange-overlap-downloads':'', 'timechange-offset-downloads':'', 'timechange-overlap-pdf-label':'',
     'timechange-overlap-jpg-label':'', 'timechange-overlap-csv-label':'',
@@ -28,6 +28,12 @@ function fixture() {
         const width = Number(parsed.searchParams.get('window'));
         return {ok:true, headers:{get:()=> 'application/json'},
           json:async()=>({times:[0,.5,1],intensities:[width,10+width,width]})};
+      }
+      if (parsed.pathname === '/api/uv-chromatogram') {
+        requests.push(parsed);
+        const wavelength = Number(parsed.searchParams.get('wavelength'));
+        return {ok:true, headers:{get:()=> 'application/json'},
+          json:async()=>({times:[0,.5,1],intensities:[1,wavelength,1],wavelength})};
       }
       assert.equal(parsed.pathname,'/api/export-time-change');
       exports.push(JSON.parse(options.body));
@@ -60,6 +66,31 @@ test('Time Change has an independent window and retains zero and manually entere
     assert.deepEqual(exports[0].traces[0].intensities,[width,10+width,width]);
     assert.equal(nodes.get('mz-window-number').value,'3');
   }
+});
+
+test('the Time Change UV choice controls extraction and stays with the generated exports', async () => {
+  const {requests,exports,run} = fixture();
+  run(`state.loadedSamples={
+    '/first.D':{uv_wavelengths:[214,278]}, '/second.D':{uv_wavelengths:[214,278]}};
+    getSelectedWavelengths=()=>[194];
+    state.timeChangeUvWavelength=278;`);
+  assert.equal(await run('runTimeChangeMS("uv")'), true);
+  assert.ok(requests.every(request => request.searchParams.get('wavelength') === '278'));
+  assert.equal(run('state.timeChangeMSData.wavelength'), 278);
+  run('state.timeChangeUvWavelength=214');
+  for (const format of ['jpg', 'csv']) {
+    await run(`exportTimeChangeOffset("${format}", {view:"overlap"})`);
+    assert.equal(exports.at(-1).style.uv_wavelength_nm, 278);
+    assert.deepEqual(exports.at(-1).traces[0].intensities, [1,278,1]);
+  }
+  await run('exportTimeChangeUVPdf()');
+  assert.equal(exports.at(-1).format, 'pdf');
+  assert.equal(exports.at(-1).style.uv_wavelength_nm, 214);
+  assert.deepEqual(exports.at(-1).traces[0].intensities, [1,214,1]);
+  assert.equal(requests.length, 4);
+  run('state.loadedSamples["/second.D"].uv_wavelengths=[194]');
+  assert.equal(await run('runTimeChangeMS("uv")'), false);
+  assert.equal(requests.length, 4);
 });
 
 test('PDF EIC regenerates when its local window changes; PNG and SVG retain the current plotted data', async () => {

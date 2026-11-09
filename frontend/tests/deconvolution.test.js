@@ -846,3 +846,43 @@ test('Deconvolution requests QTOF UV instead of an unavailable wavelength from a
   await run('refreshDeconvWindowContext("qtof")');
   assert.equal(requested,214);
 });
+
+test('QTOF automatically starts with measured centroids without changing other workflows',()=>{
+ const {run,elements,context}=fixture();const view={value:'summed'};elements.set('deconv-spectrum-view',view);
+ context.data={workflow:{id:'qtof-envelope'},spectrum:{mz:[500.123],intensities:[30]},measured_spectrum:{mz:[500.123456789],intensities:[30]}};
+ run('initialiseDeconvSpectrumView(data)');assert.equal(view.value,'measured');
+ assert.equal(run('getDisplayedDeconvSpectrum(data)'),context.data.measured_spectrum);
+ for(const workflow of [null,{id:'charge-profile'},{id:'qtof-isotope-aware'}]){
+  context.data.workflow=workflow;view.value='summed';run('initialiseDeconvSpectrumView(data)');assert.equal(view.value,'summed');
+ }
+ context.data.workflow={id:'qtof-envelope'};context.data.measured_spectrum=null;
+ run('initialiseDeconvSpectrumView(data)');assert.equal(view.value,'summed');
+});
+
+test('native QTOF profile loads on demand for the result window, caches, and rejects stale responses',async()=>{
+ const {run,elements,context}=fixture();const view={value:'profile',disabled:false};elements.set('deconv-spectrum-view',view);
+ const pending=[],requests=[],renders=[];
+ context.api={getQtofProfileSpectrum:(...args)=>{requests.push(args);return new Promise(resolve=>pending.push(resolve));}};
+ context.rendered=data=>renders.push(data);
+ run('renderDeconvResults=rendered;state.deconvSamplePath="sample";state.deconvResults={workflow:{id:"qtof-envelope"},time_range:[1.2,1.4],min_input_mz:2000,profile_spectrum_available:true,spectrum:{mz:[2001],intensities:[30]}}');
+ const calculation=run('state.deconvResults.spectrum');
+ const first=run('changeDeconvSpectrumView()');assert.equal(view.disabled,true);
+ assert.deepEqual(requests,[['sample',1.2,1.4,2000]]);
+ const profile={mz:[2001.123456789,2001.13],intensities:[12,13],representation:'native measured QTOF profile'};
+ pending[0](profile);await first;
+ assert.equal(view.disabled,false);assert.equal(run('getDisplayedDeconvSpectrum()'),profile);
+ assert.equal(run('state.deconvResults.spectrum'),calculation);
+ await run('changeDeconvSpectrumView()');assert.equal(requests.length,1);
+ run('delete state.deconvResults.measured_profile');const stale=run('changeDeconvSpectrumView()');
+ run('state.deconvResults={id:"new result"}');pending[1](profile);await stale;
+ assert.equal(run('state.deconvResults.measured_profile'),undefined);
+ assert.equal(renders.length,2);
+});
+
+test('native QTOF curve has reference gaps and no fabricated centroid sticks',()=>{
+ const {run,plots}=fixture();
+ run('charts.plotMassSpectrum("native",[900,922.4,950.123456789,1000],[12,4,400,0],[],{breakAfter:[0]})');
+ const trace=plots.get('native').data[0];
+ assert.deepEqual(Array.from(trace.x),[900,null,922.4,950.123456789,1000]);
+ assert.deepEqual(Array.from(trace.y),[12,null,4,400,0]);assert.equal(trace.connectgaps,false);
+});

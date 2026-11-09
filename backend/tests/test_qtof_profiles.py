@@ -11,7 +11,7 @@ import numpy as np
 from pypdf import PdfReader
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import server
-from qtof_profiles import decode_rle
+from qtof_profiles import decode_rle, measured_apex_spectrum
 import qtof_profile_fit as pf
 
 
@@ -20,6 +20,46 @@ def blob(tokens, count=8, leading=0):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_native_display_selects_recorded_apex_preserves_values_and_breaks_reference_gaps(self):
+        x=np.array([900.,921.8,922.009798,922.2,922.4,950.123456789,1000.])
+        y=np.array([12.,20.,10000.,20.,4.,400.,0.]); original=y.copy(); calls=[]
+        source=SimpleNamespace(available=True, records=[
+            {'MSLevel':1,'IonPolarity':0,'ScanTime':1.,'ScanID':11,'TIC':100.,'spectra':[{'PointCount':7}]},
+            {'MSLevel':1,'IonPolarity':0,'ScanTime':1.1,'ScanID':12,'TIC':200.,'spectra':[{'PointCount':7}]}])
+        def window(start,end):
+            calls.append((start,end))
+            return iter([{'scan_id':12,'time':1.1,'mz':x,'intensities':y}])
+        source.window=window
+        s=SimpleNamespace(qtof_profile_source=source,qtof_info={'reference_filter':{
+            'targets':[{'mz':922.009798,'charge':1,'polarity':'positive'}], 'policy':{'isotopes':False}}})
+        result=measured_apex_spectrum(s,.9,1.2)
+        self.assertEqual(result['scan_id'],12);self.assertEqual(result['break_after'],[0])
+        self.assertEqual(result['mz'],[900.,922.4,950.123456789,1000.])
+        self.assertEqual(result['intensities'],[12.,4.,400.,0.])
+        self.assertEqual(len(calls),1);self.assertLess(calls[0][1]-calls[0][0],1e-7)
+        np.testing.assert_array_equal(y,original)
+        result2=measured_apex_spectrum(s,.9,1.2,minimum_mz=940.)
+        self.assertEqual(result2['mz'],[950.123456789,1000.]);self.assertFalse(result2['break_after'])
+        with self.assertRaises(ValueError):measured_apex_spectrum(s,2.,3.)
+        with self.assertRaises(ValueError):measured_apex_spectrum(s,.9,1.2,limit=2)
+
+    def test_native_display_endpoint_rejects_other_instrument_families_and_digest(self):
+        for info in [None,{'instrument':'G6120'},
+                     {'instrument':'G6545XT','is_protein_digest':True,'acquisition_method':'Protein_Digest'}]:
+            with patch.object(server,'_get_sample',return_value=SimpleNamespace(qtof_info=info)):
+                with self.assertRaises(server.HTTPException):server.qtof_profile_spectrum('sample.sirslt',1.,2.,100.)
+
+    def test_native_profile_export_keeps_measured_curve_and_reference_gaps(self):
+        spectrum={'mz':[900.,922.4,950.123456789,1000.],'intensities':[12.,4.,400.,0.],
+                  'break_after':[0],'representation':'native measured QTOF profile'}
+        fig=server.plotting.create_deconvolution_mass_spectrum_figure('Synthetic',spectrum,title='Measured profile')
+        try:
+            line=fig.axes[0].lines[0]
+            np.testing.assert_array_equal(line.get_xdata(),[900.,np.nan,922.4,950.123456789,1000.])
+            self.assertFalse(fig.axes[0].collections)
+            self.assertIn('Measured profile',PdfReader(io.BytesIO(server.plotting.export_figure_pdf(fig,tight=False))).pages[0].extract_text())
+        finally:server.plt.close(fig)
+
     def test_packaged_smoke_entrypoint(self):
         self.assertEqual(pf.smoke_test()['profile_reconstruction'], 'ok')
 

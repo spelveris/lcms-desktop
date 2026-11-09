@@ -2163,6 +2163,7 @@ def _serialize_deconvolution_components(components: list[dict]) -> list[dict]:
             "ion_intensities": comp.get("ion_intensities", []),
             **({'ion_display_peaks':comp['ion_display_peaks']} if 'ion_display_peaks' in comp else {}),
             **({'mass_display_decimals':comp['mass_display_decimals']} if 'mass_display_decimals' in comp else {}),
+            **({'charge_envelope_check': comp['charge_envelope_check']} if 'charge_envelope_check' in comp else {}),
             **({key:comp[key] for key in ('charge_profile','profile_agreement','reconstruction_kind') if key in comp} if comp.get('charge_profile') else {}),
             **({key:comp.get(key) for key in ('isotope_aware','fit_score','scan_count','ion_mono_mzs','envelopes','isotope_ambiguous')} if comp.get('isotope_aware') else {}),
         })
@@ -2221,6 +2222,9 @@ def _run_report_deconvolution(
         use_monoisotopic_proton=bool(params["use_monoisotopic"]),
         smoothing_reference_step=0.01 if qtof else None,
     )
+
+    if qtof:
+        components, _ = qtof_deconvolution.validate_charge_envelopes(components, float(params['envelope_cutoff']))
 
     if params['intact_method'] == 'charge-profile':
         components = charge_profile.reconstruct(mz_arr, intensity_arr, components,
@@ -3311,6 +3315,20 @@ def detect_deconv_window(path: str = Query(...)):
     return {"start": auto_start, "end": auto_end}
 
 
+@app.get('/api/qtof-profile-spectrum')
+def qtof_profile_spectrum(path: str = Query(...), start: float = Query(...),
+                          end: float = Query(...), min_input_mz: float = Query(100.)):
+    """Load a native intact-QTOF profile only when its display is requested."""
+    sample = _get_sample(path)
+    if not qtof_deconvolution.is_intact_qtof(sample):
+        raise HTTPException(status_code=400, detail='Measured profile display requires supported intact QTOF metadata')
+    from qtof_profiles import measured_apex_spectrum
+    try:
+        return measured_apex_spectrum(sample, start, end, min_input_mz)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/smiles-mz")
 def smiles_mz(payload: dict = Body(...)):
     """Calculate exact mass/formula/charge from SMILES using OpenChemLib in Node."""
@@ -3477,6 +3495,9 @@ def deconvolute(
     )
 
     # Optionally detect singly charged species
+    charge_validation = None
+    if qtof_deconvolution.is_intact_qtof(sample):
+        components, charge_validation = qtof_deconvolution.validate_charge_envelopes(components, envelope_cutoff)
     reconstructed = None
     if precision:
         try:
@@ -3573,6 +3594,9 @@ def deconvolute(
         "time_range": [start, end],
         "background_path": normalized_background_path or None,
         "effective_max_charge": effective_max_charge,
+        "charge_validation": charge_validation,
+        "profile_spectrum_available": intact_qtof and bool((sample.qtof_info or {}).get('profile_available')),
+        "min_input_mz": float(min_input_mz),
         "mw_algorithm": normalized_mw_algorithm,
         "spectrum_source": spectrum_source,
         "reference_filter": (getattr(sample, 'qtof_info', None) or {}).get('reference_filter'),

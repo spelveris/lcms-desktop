@@ -1348,6 +1348,14 @@ const charts = {
         trace.x.forEach((mz,i)=>{x.push(mz,mz,null);y.push(0,trace.y[i],null);text.push(String(mz),String(mz),'');});
         Object.assign(trace,{x,y,text});
       }
+    } else if (Array.isArray(options.breakAfter) && options.breakAfter.length) {
+      const breaks = new Set(options.breakAfter);
+      const trace = traces[traces.length - 1], x = [], y = [], text = [];
+      trace.x.forEach((mz, i) => {
+        x.push(mz); y.push(trace.y[i]); text.push(trace.text[i]);
+        if (breaks.has(i)) { x.push(null); y.push(null); text.push(''); }
+      });
+      Object.assign(trace, {x, y, text, connectgaps:false});
     }
     const plotAnnotations = (annotations || []).map(a => ({
       x: a.mz, y: a.intensity,

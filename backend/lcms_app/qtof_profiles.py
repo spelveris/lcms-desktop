@@ -10,6 +10,42 @@ import numpy as np
 from qtof_reader import read_records, calibration_flags, calibrate
 
 
+def measured_apex_spectrum(sample, start, end, minimum_mz=100., limit=500000):
+    """Return one native profile for display, without changing deconvolution.
+
+    Select the measured scan with highest recorded TIC in the requested time
+    window. Keep every calibrated coordinate and intensity outside reference
+    exclusions; explicitly break the curve across excluded reference regions.
+    No smoothing, rebinning or profile fitting is performed.
+    """
+    source = getattr(sample, 'qtof_profile_source', None)
+    if source is None or not source.available:
+        raise ValueError('This run has no supported measured QTOF profile')
+    if not np.isfinite([start, end, minimum_mz]).all() or end <= start or minimum_mz < 0:
+        raise ValueError('Choose a valid time window and minimum m/z')
+    records = [r for r in source.records if r['MSLevel'] == 1 and r['IonPolarity'] == 0
+               and start <= r['ScanTime'] <= end and r['spectra'][0]['PointCount'] > 0]
+    if not records:
+        raise ValueError('No measured QTOF MS1 profiles in this time window')
+    record = max(records, key=lambda r: r['TIC'])
+    scan = next(s for s in source.window(record['ScanTime']-1e-9, record['ScanTime']+1e-9)
+                if s['scan_id'] == record['ScanID'])
+    # The same reference-wing mask used by the optional profile fit applies
+    # only to this display copy. Exclusions remain visible as gaps, not zeros.
+    from qtof_profile_fit import reference_mask
+    x, y = scan['mz'], scan['intensities']
+    indices = np.flatnonzero((x >= minimum_mz) & ~reference_mask(sample, x))
+    if not len(indices):
+        raise ValueError('No profile points remain above the minimum m/z')
+    if len(indices) > limit:
+        raise ValueError('The measured profile exceeds 500,000 points; raise the minimum m/z')
+    return {'mz': x[indices].tolist(), 'intensities': y[indices].tolist(),
+            'break_after': np.flatnonzero(np.diff(indices) > 1).tolist(),
+            'scan_id': int(scan['scan_id']), 'time': float(scan['time']),
+            'time_range': [float(start), float(end)], 'before_background_subtraction': True,
+            'representation': 'native measured QTOF profile', 'mz_grid_step': None}
+
+
 def decode_rle(blob, count):
     if not 0 < count <= 1_000_000 or len(blob) < 24:
         raise ValueError('Invalid QTOF profile size')

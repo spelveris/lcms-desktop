@@ -2878,7 +2878,12 @@ def create_deconvolution_mass_spectrum_figure(
         if spectrum.get('representation') == 'calibrated centroid sticks':
             ax.vlines(normalized_spectrum['mz'],0,normalized_spectrum['intensities'],color='#1f77b4',linewidth=line_width)
         else:
-            ax.plot(normalized_spectrum['mz'],normalized_spectrum['intensities'],color='#1f77b4',linewidth=line_width)
+            x, y = normalized_spectrum['mz'], normalized_spectrum['intensities']
+            if spectrum.get('representation') == 'native measured QTOF profile':
+                breaks = sorted({i+1 for i in spectrum.get('break_after', [])
+                                 if isinstance(i, int) and 0 <= i < len(x)-1})
+                x, y = np.insert(x, breaks, np.nan), np.insert(y, breaks, np.nan)
+            ax.plot(x,y,color='#1f77b4',linewidth=line_width)
         ax.set_ylim(bottom=0)
     else:
         ax.text(0.5, 0.5, 'No mass spectrum available', ha='center', va='center', transform=ax.transAxes)

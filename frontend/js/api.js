@@ -91,6 +91,10 @@ const api = {
     return apiFetch(`/api/tic?path=${encodeURIComponent(path)}`);
   },
 
+  getQtofProfileSpectrum(path, start, end, minInputMz) {
+    return apiFetch(`/api/qtof-profile-spectrum?${qs({path, start, end, min_input_mz: minInputMz})}`);
+  },
+
   getEIC(path, mz, window_, smooth, ionMode = 'positive') {
     return apiFetch(`/api/eic?${qs({ path, mz, window: window_, smooth, ion_mode: ionMode })}`);
   },
