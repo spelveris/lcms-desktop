@@ -1447,7 +1447,32 @@ const charts = {
       showlegend: true, height: getContainerHeight(divId, 350),
     });
 
-    Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+    const hasMin = options.yMin !== null && options.yMin !== undefined;
+    const hasMax = options.yMax !== null && options.yMax !== undefined;
+    if (hasMin && hasMax) {
+      layout.yaxis.range = [options.yMin, options.yMax];
+      layout.yaxis.autorange = false;
+    }
+    const container = document.getElementById(divId);
+    const renderGeneration = (container._overlayRenderGeneration || 0) + 1;
+    container._overlayRenderGeneration = renderGeneration;
+    const rendered = Plotly.newPlot(divId, traces, layout, PLOT_CONFIG);
+    if (hasMin !== hasMax) {
+      return rendered.then((plot) => {
+        // A later render or Default must take precedence over a pending axis update.
+        if (container._overlayRenderGeneration !== renderGeneration) return plot;
+        const [autoMin, autoMax] = plot._fullLayout.yaxis.range;
+        let bottom = hasMin ? options.yMin : autoMin;
+        let top = hasMax ? options.yMax : autoMax;
+        if (bottom >= top) {
+          const span = Math.max(autoMax - autoMin, Math.abs(hasMin ? bottom : top) * 0.05, 1);
+          if (hasMin) top = bottom + span;
+          else bottom = top - span;
+        }
+        return Plotly.relayout(plot, { 'yaxis.range': [bottom, top], 'yaxis.autorange': false });
+      });
+    }
+    return rendered;
   },
 
   plotDeconvMasses(divId, components, options = {}) {

@@ -890,6 +890,52 @@ body.sidebar-resizing .sidebar {
   pointer-events: none;
 }
 
+.timechange-controls-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.timechange-generation-controls { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.timechange-generation-controls > .tab-toolbar {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.timechange-generation-controls .btn-primary {
+  margin-left: auto;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 34px;
+  justify-content: center;
+}
+.timechange-generation-controls .timechange-eic-controls { flex: 1; min-width: 0; }
+.timechange-generation-controls .timechange-ms-window { min-width: 0; }
+.timechange-axis-panel {
+  min-width: 0;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.timechange-axis-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.timechange-axis-header h3 { font-size: 14px; font-weight: 600; }
+.timechange-axis-table { width: 100%; table-layout: fixed; margin-bottom: 4px; border-collapse: collapse; }
+.timechange-axis-table th, .timechange-axis-table td { padding: 3px 6px; text-align: left; border: 0; }
+.timechange-axis-table thead th { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.timechange-axis-table th:first-child { width: 20%; }
+.timechange-axis-table tbody th { font-size: 13px; font-weight: 500; }
+.timechange-axis-table input { width: 100%; min-width: 0; height: 28px; padding: 4px 8px; }
+.timechange-axis-error { margin-top: 8px; font-size: 13px; color: var(--warning); }
+.timechange-axis-error[hidden] { display: none; }
+
+@media (max-width: 1100px) {
+  .timechange-controls-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 .timechange-ms-window {
   display: flex;
   align-items: center;
@@ -912,18 +958,41 @@ body.sidebar-resizing .sidebar {
 .timechange-uv-panel .btn:disabled { opacity: 0.5; cursor: default; }
 
 .timechange-display-controls { display: flex; justify-content: flex-end; margin-bottom: 6px; }
-.timechange-plot-card { min-width: 0; margin-bottom: 8px; }
-.timechange-plot-card > .plot-container { margin-bottom: 4px; }
+.timechange-plot-card {
+  min-width: 0;
+  margin-bottom: 8px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+#tab-time-change-ms .timechange-plot-card > .plot-container {
+  margin-bottom: 4px;
+  padding: 0;
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
 .timechange-plot-downloads { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .timechange-plot-downloads[hidden], .timechange-plot-downloads [hidden] { display: none; }
 .timechange-plot-downloads .btn { gap: 6px; max-width: 100%; white-space: normal; }
 
 .timechange-eic-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  align-items: stretch;
+  gap: 8px;
+}
+.timechange-eic-inputs {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
+.timechange-eic-inputs > label:last-child { flex-basis: 100%; }
+.timechange-generation-controls .timechange-eic-controls .btn-primary { height: auto; }
 
 .timechange-eic-controls input[type="number"] {
   width: 100px;

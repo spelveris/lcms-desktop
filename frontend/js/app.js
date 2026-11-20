@@ -8783,6 +8783,31 @@ function initTimeChangeMS() {
   document.getElementById('btn-run-time-change-tic')?.addEventListener('click', () => runTimeChangeMS('tic'));
   document.getElementById('btn-run-time-change-eic')?.addEventListener('click', () => runTimeChangeMS('eic'));
   document.getElementById('btn-run-time-change-uv')?.addEventListener('click', () => runTimeChangeMS('uv'));
+  for (const kind of ['ms', 'tic', 'eic', 'uv']) {
+    for (const bound of ['min', 'max']) {
+      document.getElementById(`timechange-${kind}-y-${bound}`)?.addEventListener('change', () => {
+        try {
+          getTimeChangeAxisLimits(kind);
+          setTimeChangeAxisError();
+          if (state.timeChangeMSData && getTimeChangeSignalKind() === kind) {
+            renderTimeChangeMS(state.timeChangeMSData);
+          }
+        } catch (err) {
+          setTimeChangeAxisError(err.message);
+        }
+      });
+    }
+  }
+  document.getElementById('btn-timechange-reset-axes')?.addEventListener('click', () => {
+    for (const kind of ['ms', 'tic', 'eic', 'uv']) {
+      for (const bound of ['min', 'max']) {
+        const input = document.getElementById(`timechange-${kind}-y-${bound}`);
+        if (input) input.value = '';
+      }
+    }
+    setTimeChangeAxisError();
+    if (state.timeChangeMSData) renderTimeChangeMS(state.timeChangeMSData);
+  });
   document.getElementById('timechange-normalize').addEventListener('change', async () => {
     if (!state.timeChangeMSData) return;
     const panel = document.getElementById('tab-time-change-ms');
@@ -8801,6 +8826,9 @@ function initTimeChangeMS() {
   document.getElementById('btn-export-timechange-ms-pdf')?.addEventListener('click', exportTimeChangeSummedMassPdf);
   document.getElementById('btn-export-timechange-tic-pdf')?.addEventListener('click', exportTimeChangeTICPdf);
   document.getElementById('btn-export-timechange-eic-pdf')?.addEventListener('click', exportTimeChangeEICPdf);
+  document.getElementById('btn-export-timechange-eic-names-pdf')?.addEventListener(
+    'click', exportTimeChangeEICNamesPdf,
+  );
   document.getElementById('btn-export-timechange-uv-pdf')?.addEventListener('click', exportTimeChangeUVPdf);
   for (const format of ['pdf', 'jpg', 'csv']) {
     document.getElementById(`btn-export-timechange-overlap-${format}`)?.addEventListener(
@@ -8817,6 +8845,31 @@ function initTimeChangeMS() {
 function getTimeChangeSignalKind() {
   const kind = state.timeChangeMSData?.kind;
   return kind === 'uv' || kind === 'tic' || kind === 'eic' ? kind : 'ms';
+}
+
+function getTimeChangeAxisLimits(kind = getTimeChangeSignalKind()) {
+  const limits = ['min', 'max'].map((bound) => {
+    const input = document.getElementById(`timechange-${kind}-y-${bound}`);
+    const text = input?.value.trim() || '';
+    const value = text === '' ? null : Number(text);
+    if (input?.validity?.badInput || (value !== null && !Number.isFinite(value))) {
+      throw new Error(`${kind.toUpperCase()} Y limits must be finite numbers or blank.`);
+    }
+    return value;
+  });
+  const [yMin, yMax] = limits;
+  if (yMin !== null && yMax !== null && yMin >= yMax) {
+    throw new Error(`${kind.toUpperCase()} Y minimum must be lower than Y maximum.`);
+  }
+  return { yMin, yMax };
+}
+
+function setTimeChangeAxisError(message = '') {
+  const error = document.getElementById('timechange-axis-error');
+  if (error) {
+    error.textContent = message;
+    error.hidden = !message;
+  }
 }
 
 function getTimeChangeSignalLabel(kind = getTimeChangeSignalKind()) {
@@ -8916,6 +8969,13 @@ async function runTimeChangeMS(kind = 'ms') {
   }
 
   kind = kind === 'uv' || kind === 'tic' || kind === 'eic' ? kind : 'ms';
+  try {
+    getTimeChangeAxisLimits(kind);
+    setTimeChangeAxisError();
+  } catch (err) {
+    setTimeChangeAxisError(err.message);
+    return false;
+  }
   const signalLabel = getTimeChangeSignalLabel(kind);
   const wavelength = kind === 'uv' ? await resolveTimeChangeUvWavelength() : null;
   if (kind === 'uv' && !Number.isFinite(wavelength)) {
@@ -9207,6 +9267,18 @@ function syncTimeChangeDownloads(data = null) {
     const button = document.getElementById(`btn-export-timechange-${signal}-pdf`);
     if (button) button.hidden = !ready || signal !== kind;
   }
+  const namedEicPdf = document.getElementById('btn-export-timechange-eic-names-pdf');
+  if (namedEicPdf) {
+    namedEicPdf.hidden = !ready || kind !== 'eic';
+    if (ready && kind === 'eic') {
+      const originalSize = document.getElementById('btn-export-timechange-eic-pdf')?.getBoundingClientRect?.();
+      if (originalSize?.width > 0) {
+        namedEicPdf.style.width = `${originalSize.width}px`;
+        namedEicPdf.style.height = `${originalSize.height}px`;
+        namedEicPdf.style.justifyContent = 'center';
+      }
+    }
+  }
   for (const format of ['pdf', 'jpg', 'csv']) {
     const caption = document.getElementById(`timechange-overlap-${format}-label`);
     if (caption) caption.textContent = `${label} overlay ${format.toUpperCase()}`;
@@ -9221,6 +9293,7 @@ function renderTimeChangeMS(data) {
   syncTimeChangeDownloads(data);
   const spectra = data.spectra || [];
   const kind = data.kind === 'uv' || data.kind === 'tic' || data.kind === 'eic' ? data.kind : 'ms';
+  const axisLimits = getTimeChangeAxisLimits(kind);
   const isTimeSeries = kind === 'uv' || kind === 'tic' || kind === 'eic';
   const normalize = document.getElementById('timechange-normalize').checked;
   const plotContainer = document.getElementById('timechange-ms-plot');
@@ -9247,8 +9320,15 @@ function renderTimeChangeMS(data) {
       data.targetMz,
       data.ionMode,
     );
-    charts.plotMassSpectraOverlay('timechange-ms-plot', plotSpectra, {
-      normalize,
+    const displaySpectra = normalize ? plotSpectra.map((s) => ({
+      ...s,
+      intensities: s.maxIntensity > 0
+        ? s.intensities.map(value => value * (100 / s.maxIntensity))
+        : s.intensities,
+    })) : plotSpectra;
+    charts.plotMassSpectraOverlay('timechange-ms-plot', displaySpectra, {
+      normalize: false,
+      ...axisLimits,
       title: offsetConfig.overlapTitle,
       xTitle: offsetConfig.xTitle,
       yTitle: kind === 'uv'
@@ -9260,16 +9340,14 @@ function renderTimeChangeMS(data) {
             : (normalize ? 'Relative Intensity' : 'Intensity'))),
     });
 
-    const shifted = plotSpectra.map((s, i) => ({
+    const shifted = displaySpectra.map((s, i) => ({
       label: s.label,
       color: charts.getColor(i),
       mz: (s.x || []).map(v => v + i * offsetConfig.xOffsetStep),
       intensities: (s.intensities || []).map((v) => {
         const raw = Number(v);
         const base = Number.isFinite(raw) ? raw : 0;
-        if (!normalize) return base + i * offsetConfig.yOffsetStep;
-        const scale = s.maxIntensity > 0 ? (100 / s.maxIntensity) : 1;
-        return base * scale + i * offsetConfig.yOffsetStep;
+        return base + i * offsetConfig.yOffsetStep;
       }),
     }));
     const guideTrace = buildTimeChangeOffsetGuideTrace(plotSpectra, offsetConfig, normalize, kind);
@@ -9277,6 +9355,7 @@ function renderTimeChangeMS(data) {
 
     charts.plotMassSpectraOverlay('timechange-ms-offset-plot', shiftedBackToFront, {
       normalize: false,
+      ...axisLimits,
       title: offsetConfig.offsetTitle,
       xTitle: offsetConfig.xTitle,
       yTitle: offsetConfig.yTitle,
@@ -9311,7 +9390,7 @@ function renderTimeChangeMS(data) {
   tableContainer.innerHTML = html;
 }
 
-async function exportTimeChangeOffset(format, { view = 'offset' } = {}) {
+async function exportTimeChangeOffset(format, { view = 'offset', traceLabels = false } = {}) {
   if (!state.timeChangeMSData) {
     toast('Generate Time Change first', 'warning');
     return;
@@ -9320,6 +9399,15 @@ async function exportTimeChangeOffset(format, { view = 'offset' } = {}) {
   const kind = state.timeChangeMSData.kind === 'uv' || state.timeChangeMSData.kind === 'tic' || state.timeChangeMSData.kind === 'eic'
     ? state.timeChangeMSData.kind
     : 'ms';
+  let axisLimits;
+  try {
+    axisLimits = getTimeChangeAxisLimits(kind);
+    setTimeChangeAxisError();
+  } catch (err) {
+    setTimeChangeAxisError(err.message);
+    if (format !== 'csv') return;
+    axisLimits = { yMin: null, yMax: null };
+  }
   const normalize = document.getElementById('timechange-normalize')?.checked === true;
   const plotSpectra = getTimeChangePlotSpectra(state.timeChangeMSData);
   if (plotSpectra.length === 0) {
@@ -9346,7 +9434,8 @@ async function exportTimeChangeOffset(format, { view = 'offset' } = {}) {
         ? `time_change_eic_${Number(state.timeChangeMSData.targetMz).toFixed(2).replace('.', '_')}_${state.timeChangeMSData.ionMode === 'negative' ? 'neg' : 'pos'}_offset`
         : 'time_change_mass_offset'));
 
-  const exportFilenameBase = overlap ? `${filenameBase.replace(/_offset$/, '')}_overlap` : filenameBase;
+  let exportFilenameBase = overlap ? `${filenameBase.replace(/_offset$/, '')}_overlap` : filenameBase;
+  if (traceLabels) exportFilenameBase += '_with_names';
   showLoading(`Exporting ${String(format || '').toUpperCase()}...`);
   try {
     const response = await api.exportTimeChange({
@@ -9367,7 +9456,10 @@ async function exportTimeChangeOffset(format, { view = 'offset' } = {}) {
         show_grid: false,
         show_title: baseStyle.deconv_show_title !== false,
         signal_kind: kind,
+        ...(traceLabels ? { trace_labels: true } : {}),
         normalize,
+        y_min: axisLimits.yMin,
+        y_max: axisLimits.yMax,
         x_axis_width_multiplier: 2.0,
         offset_angle_degrees: overlap ? null : 45.0,
         offset_guide: !overlap,
@@ -9419,6 +9511,25 @@ async function exportTimeChangeEICPdf() {
     if (!generated) return;
   }
   await exportTimeChangeOffset('pdf');
+}
+
+async function exportTimeChangeEICNamesPdf() {
+  const requested = getTimeChangeEICSettings();
+  if (!requested) {
+    toast('Enter a valid positive m/z value for Time Change EIC', 'warning');
+    return;
+  }
+  const current = state.timeChangeMSData;
+  const matchesCurrent = current?.kind === 'eic'
+    && Math.abs(Number(current.targetMz) - requested.mz) < 1e-9
+    && current.ionMode === requested.ionMode
+    && Math.abs(Number(current.mzWindow) - requested.mzWindow) < 1e-9
+    && Number(current.smoothing) === requested.smoothing;
+  if (!matchesCurrent) {
+    const generated = await runTimeChangeMS('eic');
+    if (!generated) return;
+  }
+  await exportTimeChangeOffset('pdf', { traceLabels: true });
 }
 
 async function exportTimeChangeUVPdf() {

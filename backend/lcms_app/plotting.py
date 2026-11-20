@@ -336,6 +336,152 @@ def _fit_time_change_legend_in_canvas(
         _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
 
 
+def _get_time_change_visible_endpoint(line, y_limits: tuple[float, float]) -> Optional[tuple[float, float]]:
+    """Find the final visible point, including a crossing of a manual Y limit."""
+    x_values, y_values = line.get_data()
+    bottom, top = y_limits
+    if bottom <= y_values[-1] <= top:
+        return float(x_values[-1]), float(y_values[-1])
+    for index in range(len(y_values) - 2, -1, -1):
+        y_start, y_end = float(y_values[index]), float(y_values[index + 1])
+        delta = y_end - y_start
+        if delta == 0:
+            continue
+        entry, exit = sorted(((bottom - y_start) / delta, (top - y_start) / delta))
+        visible_start, visible_end = max(0.0, entry), min(1.0, exit)
+        if visible_start <= visible_end:
+            x_start, x_end = float(x_values[index]), float(x_values[index + 1])
+            return x_start + visible_end * (x_end - x_start), y_start + visible_end * delta
+    return None
+
+
+def _space_time_change_trace_ends(
+    fig: matplotlib.figure.Figure,
+    trace_lines: dict[int, object],
+    labels: list,
+    y_offset_step: float,
+    offset_guide_line,
+    expand_y_lower: bool,
+    expand_y_upper: bool,
+) -> None:
+    """Translate named runs vertically while retaining their original shapes."""
+    if len(labels) < 2:
+        return
+    ax = fig.axes[0]
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    points_per_pixel = 72.0 / fig.dpi
+    axis_height = ax.bbox.height * points_per_pixel
+    label_height = max(label.get_window_extent(renderer).height for label in labels) * points_per_pixel
+    lower, upper = ax.get_ylim()
+    original_span = upper - lower
+    native_pitch = abs(y_offset_step) / original_span * axis_height
+    label_padding = label_height / 2.0 + 1.0
+    # Fixed axes, fonts and manual bounds take priority for unusually dense sets.
+    # Such sets retain equal rows even when a full text-height gap cannot fit.
+    pitch = min(max(native_pitch, label_height + 3.0),
+                max(0.0, axis_height - 2.0 * label_padding) / (len(labels) - 1))
+    row_fraction = np.arange(len(labels)) * pitch / axis_height
+    if y_offset_step < 0:
+        row_fraction = -row_fraction
+    indices = [int(label.get_gid().rsplit('-', 1)[-1]) for label in labels]
+    lines = [trace_lines[index] for index in indices]
+    original_y = [np.asarray(line.get_ydata(), dtype=float) for line in lines]
+    tails = np.array([values[-1] for values in original_y])
+    profile_lower = np.array([np.min(values) - tail for values, tail in zip(original_y, tails)])
+    profile_upper = np.array([np.max(values) - tail for values, tail in zip(original_y, tails)])
+    padding_fraction = label_padding / axis_height
+
+    if expand_y_lower or expand_y_upper:
+        # With a fixed physical row pitch, data offsets grow with the Y span.
+        # Solve the required span directly rather than repeatedly autoscaling.
+        lower_constant = np.concatenate((profile_lower, np.zeros(len(labels))))
+        upper_constant = np.concatenate((profile_upper, np.zeros(len(labels))))
+        lower_fraction = np.concatenate((row_fraction, row_fraction - padding_fraction))
+        upper_fraction = np.concatenate((row_fraction, row_fraction + padding_fraction))
+        denominator = 1.0 - upper_fraction[:, None] + lower_fraction[None, :]
+        numerator = upper_constant[:, None] - lower_constant[None, :]
+        feasible = denominator > 1e-12
+        required_span = max(original_span, float(np.max(numerator[feasible] / denominator[feasible])))
+        if required_span > original_span * (1.0 + 1e-9):
+            required_span *= 1.02
+            if expand_y_upper:
+                upper = lower + required_span
+            else:
+                lower = upper - required_span
+            ax.set_ylim(lower, upper)
+
+    span = upper - lower
+    row_offsets = row_fraction * span
+    padding = padding_fraction * span
+    tail_lower = float(np.max(lower + padding - row_offsets))
+    tail_upper = float(np.min(upper - padding - row_offsets))
+    shape_lower = max(tail_lower, float(np.max(lower - profile_lower - row_offsets)))
+    shape_upper = min(tail_upper, float(np.min(upper - profile_upper - row_offsets)))
+    # Prefer an anchor that keeps every peak visible. If manual bounds prevent
+    # that, keep the chosen bounds and all tail/name centres inside the axes.
+    anchor_lower, anchor_upper = ((shape_lower, shape_upper) if shape_lower <= shape_upper
+                                  else (tail_lower, tail_upper))
+    anchor = float(np.clip(np.median(tails - row_offsets), anchor_lower, anchor_upper))
+    shifts = {}
+    for row, (index, line, label, values) in enumerate(zip(indices, lines, labels, original_y)):
+        shift = anchor + row_offsets[row] - tails[row]
+        line.set_ydata(values + shift)
+        label.xy = (float(line.get_xdata()[-1]), float(line.get_ydata()[-1]))
+        shifts[index] = shift
+    if offset_guide_line is not None:
+        guide_y = np.asarray(offset_guide_line.get_ydata(), dtype=float).copy()
+        for index, shift in shifts.items():
+            guide_y[index] += shift
+        offset_guide_line.set_ydata(guide_y)
+
+
+def _add_time_change_trace_labels(
+    fig: matplotlib.figure.Figure,
+    trace_lines: dict[int, object],
+    plot_area_width_in: float,
+    panel_height_in: float,
+    font_size_pt: float,
+    y_offset_step: float,
+    offset_guide_line=None,
+    expand_y_lower: bool = False,
+    expand_y_upper: bool = False,
+) -> None:
+    """Center each name on its own line end with a three-point horizontal gap."""
+    ax = fig.axes[0]
+    labels = []
+    for index, line in sorted(trace_lines.items()):
+        endpoint = _get_time_change_visible_endpoint(line, ax.get_ylim())
+        if endpoint is None:
+            continue
+        annotation = ax.annotate(
+            line.get_label(), xy=endpoint, xytext=(3, 0), textcoords='offset points',
+            ha='left', va='center', fontsize=font_size_pt, color='black',
+            parse_math=False, annotation_clip=False, clip_on=False,
+        )
+        annotation.set_gid(f'timechange-trace-label-{index}')
+        labels.append(annotation)
+    if not labels:
+        return
+
+    _space_time_change_trace_ends(
+        fig, trace_lines, labels, y_offset_step, offset_guide_line,
+        expand_y_lower, expand_y_upper,
+    )
+
+    # Extra right margin accommodates the full names at the original plot size.
+    for _ in range(3):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        boxes = [label.get_window_extent(renderer=renderer) for label in labels]
+        width, height = fig.get_size_inches()
+        required_width = max(box.x1 for box in boxes) / fig.dpi + 0.12
+        if required_width <= width:
+            break
+        fig.set_size_inches(required_width, height, forward=True)
+        _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
+
+
 def create_single_panel(
     ax: plt.Axes,
     times: np.ndarray,
@@ -2446,10 +2592,27 @@ def create_time_change_offset_figure(
 ) -> matplotlib.figure.Figure:
     """Create the Time Change diagonal offset export with deconvolution panel sizing."""
     style = style or {}
+    y_limits = []
+    for field in ('y_min', 'y_max'):
+        value = style.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            y_limits.append(None)
+            continue
+        try:
+            limit = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f'{field} must be a finite number or blank') from exc
+        if isinstance(value, bool) or not np.isfinite(limit):
+            raise ValueError(f'{field} must be a finite number or blank')
+        y_limits.append(limit)
+    y_min, y_max = y_limits
+    if y_min is not None and y_max is not None and y_min >= y_max:
+        raise ValueError('Y-axis minimum must be less than its maximum')
     base_fig_width = max(1.0, _coerce_finite_float(style.get('fig_width', 8), 8.0))
     panel_width_in, panel_height_in = _get_deconvolution_panel_dimensions(base_fig_width)
     x_axis_width_multiplier = max(1.0, _coerce_finite_float(style.get('x_axis_width_multiplier', 2.0), 2.0))
     normalized_traces = _normalize_time_change_trace_payload(traces)
+    trace_labels = _coerce_bool(style.get('trace_labels', False), False)
     legend_font_size = max(5.0, _coerce_finite_float(style.get('legend_font_size'), 7.0))
     plot_area_width_in = panel_width_in * x_axis_width_multiplier
     left_in, _bottom_in, axis_width_in, axis_height_in = _get_time_change_axis_box_inches(
@@ -2458,7 +2621,7 @@ def create_time_change_offset_figure(
     )
     default_legend_max_rows = _get_time_change_legend_max_rows(axis_height_in, legend_font_size)
     legend_max_rows = int(max(1.0, _coerce_finite_float(style.get('legend_max_rows'), default_legend_max_rows)))
-    legend_columns = _get_time_change_legend_columns(len(normalized_traces), legend_max_rows)
+    legend_columns = 1 if trace_labels else _get_time_change_legend_columns(len(normalized_traces), legend_max_rows)
     legend_gap_in = 0.10 if normalized_traces else 0.0
     legend_width_in = _estimate_time_change_legend_width_in(
         [trace['label'] for trace in normalized_traces],
@@ -2510,8 +2673,12 @@ def create_time_change_offset_figure(
         default_anchor = 0.0 if is_time_series else (min(starts) if starts else 0.0)
         return _coerce_finite_float(style.get('offset_guide_anchor_x'), default_anchor)
 
+    offset_guide_line = None
+
     def _plot_offset_traces(current_y_offset: float) -> dict[int, object]:
+        nonlocal offset_guide_line
         ax.cla()
+        offset_guide_line = None
         legend_handles = {}
         for index, trace in reversed(list(enumerate(normalized_traces))):
             x_values = trace['x'] + (index * x_offset_step)
@@ -2543,7 +2710,7 @@ def create_time_change_offset_figure(
             for index, _trace in enumerate(normalized_traces):
                 guide_x.append(anchor_x + (index * x_offset_step))
                 guide_y.append(base_y + (index * current_y_offset))
-            ax.plot(
+            (offset_guide_line,) = ax.plot(
                 guide_x,
                 guide_y,
                 color='#8c8c8c',
@@ -2601,7 +2768,7 @@ def create_time_change_offset_figure(
     ax.set_ylabel(y_label)
     if show_title:
         ax.set_title(title, fontweight='bold', y=1.03)
-    if normalized_traces:
+    if normalized_traces and not trace_labels:
         ordered_indexes = sorted(legend_handles)
         legend = ax.legend(
             [legend_handles[index] for index in ordered_indexes],
@@ -2633,6 +2800,22 @@ def create_time_change_offset_figure(
         _apply_safe_scientific_y_format(ax, scilimits=(0, 0))
 
     _apply_time_change_export_layout(fig, plot_area_width_in, panel_height_in)
+    if y_min is not None or y_max is not None:
+        auto_min, auto_max = ax.get_ylim()
+        bottom = auto_min if y_min is None else y_min
+        top = auto_max if y_max is None else y_max
+        if bottom >= top:
+            span = max(auto_max - auto_min, abs(bottom if y_min is not None else top) * 0.05, 1.0)
+            if y_max is None:
+                top = bottom + span
+            else:
+                bottom = top - span
+        ax.set_ylim(bottom, top)
+    if trace_labels:
+        _add_time_change_trace_labels(
+            fig, legend_handles, plot_area_width_in, panel_height_in, legend_font_size,
+            y_offset_step, offset_guide_line, y_min is None, y_max is None,
+        )
     return fig
 
 

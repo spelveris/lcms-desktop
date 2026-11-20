@@ -4435,7 +4435,10 @@ def export_time_change(payload: dict = Body(...)):
         dpi = lcms_config.EXPORT_DPI
     dpi = max(72, min(600, dpi))
 
-    fig = plotting.create_time_change_offset_figure(traces, style)
+    try:
+        fig = plotting.create_time_change_offset_figure(traces, style)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         if export_format == "svg":
             content = plotting.export_figure_pdf_matching_svg(fig, dpi=dpi, tight=False)

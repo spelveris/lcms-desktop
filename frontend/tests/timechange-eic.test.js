@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function fixture() {
-  const nodes = new Map(), requests = [], exports = [], downloads = [];
+function fixture({ renderPlots = false } = {}) {
+  const nodes = new Map(), requests = [], exports = [], downloads = [], plots = [], messages = [];
   for (const [id, value] of Object.entries({
     'timechange-eic-mz':'247.1', 'timechange-eic-polarity':'positive',
     'timechange-eic-window-number':'.5', 'timechange-eic-window':'.5',
@@ -17,6 +17,13 @@ function fixture() {
     'btn-export-timechange-overlap-jpg':'', 'btn-export-timechange-overlap-csv':'',
     'btn-export-timechange-offset-jpg':'', 'btn-export-timechange-offset-csv':'',
     'btn-export-timechange-tic-pdf':'', 'btn-export-timechange-eic-pdf':'', 'btn-export-timechange-uv-pdf':'',
+    'btn-export-timechange-eic-names-pdf':'',
+    'timechange-ms-plot':'', 'timechange-ms-offset-plot':'', 'timechange-ms-table-container':'',
+    'timechange-axis-error':'', 'btn-timechange-reset-axes':'',
+    'timechange-ms-y-min':'', 'timechange-ms-y-max':'',
+    'timechange-tic-y-min':'', 'timechange-tic-y-max':'',
+    'timechange-eic-y-min':'', 'timechange-eic-y-max':'',
+    'timechange-uv-y-min':'', 'timechange-uv-y-max':'',
   })) nodes.set(id, {value, handlers:{}, addEventListener(name, handler) { this.handlers[name] = handler; }});
   const context = vm.createContext({console, setTimeout, clearTimeout, Blob,
     localStorage:{getItem:()=>null}, window:{},
@@ -38,17 +45,31 @@ function fixture() {
       assert.equal(parsed.pathname,'/api/export-time-change');
       exports.push(JSON.parse(options.body));
       return {ok:true,headers:{get:()=>null},blob:async()=>Buffer.from('PDF fixture')};
-    }, downloads,
+    }, downloads, messages,
+    Plotly: {
+      newPlot(id, traces, layout) {
+        const plot = { id, traces, layout, _fullLayout: { yaxis: { range: layout.yaxis.range || [-2, 45] } } };
+        plots.push(plot);
+        return Promise.resolve(plot);
+      },
+      relayout(plot, updates) {
+        plot.layout.yaxis.range = updates['yaxis.range'];
+        plot.layout.yaxis.autorange = updates['yaxis.autorange'];
+        return Promise.resolve(plot);
+      },
+    },
   });
   const run = source => vm.runInContext(source, context);
-  for (const file of ['api.js','app.js']) run(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'));
-  run(`showLoading=()=>{};hideLoading=()=>{};toast=()=>{};
+  for (const file of ['api.js','charts.js','app.js']) run(fs.readFileSync(path.join(__dirname,'../js',file),'utf8'));
+  run(`const renderGeneratedTimeChangeMS=renderTimeChangeMS;
+    showLoading=()=>{};hideLoading=()=>{};toast=(...args)=>messages.push(args);escapeHtml=value=>String(value);
     renderTimeChangeMS=()=>{};renderReportSummary=()=>{};
     buildCurrentDeconvStyle=()=>({fig_width:6,line_width:.8});
     downloadBlob=(blob,name)=>downloads.push({blob,name});
     state.selectedFiles=[{path:'/first.D',name:'first.D'},{path:'/second.D',name:'second.D'}];
     initTimeChangeMS();`);
-  return {nodes,requests,exports,downloads,run};
+  if (renderPlots) run('renderTimeChangeMS=renderGeneratedTimeChangeMS;setTimeChangeEmptyState=()=>{};');
+  return {nodes,requests,exports,downloads,plots,messages,run,context};
 }
 
 test('Time Change has an independent window and retains zero and manually entered larger values', async () => {
@@ -122,6 +143,7 @@ test('graph downloads stay hidden until usable data exist and follow the display
     run(`syncTimeChangeDownloads(${JSON.stringify(data)})`);
     for(const row of ['timechange-overlap-downloads','timechange-offset-downloads'])assert.equal(nodes.get(row).hidden,false);
     for(const signal of kinds)assert.equal(nodes.get(`btn-export-timechange-${signal}-pdf`).hidden,signal!==kind);
+    assert.equal(nodes.get('btn-export-timechange-eic-names-pdf').hidden, kind !== 'eic');
     for (const format of ['pdf', 'jpg', 'csv']) {
       assert.match(nodes.get(`timechange-overlap-${format}-label`).textContent, new RegExp(`overlay ${format.toUpperCase()}$`));
     }
@@ -134,7 +156,45 @@ test('graph downloads stay hidden until usable data exist and follow the display
   assert.equal(nodes.get('timechange-overlap-downloads').hidden,true);
   assert.equal(nodes.get('timechange-offset-downloads').hidden,true);
   run('syncTimeChangeDownloads()');
+  assert.equal(nodes.get('btn-export-timechange-eic-names-pdf').hidden, true);
   for(const kind of kinds)assert.equal(nodes.get(`btn-export-timechange-${kind}-pdf`).hidden,true);
+});
+
+test('the named diagonal EIC PDF keeps experiment names, extraction settings and manual axes', async () => {
+  const {nodes, requests, exports, run} = fixture();
+  assert.equal(nodes.get('btn-export-timechange-eic-names-pdf').hidden, true);
+  await run('runTimeChangeMS("eic")');
+  const originalButton = nodes.get('btn-export-timechange-eic-pdf');
+  originalButton.style = {};
+  originalButton.getBoundingClientRect = () => ({width:139,height:25});
+  const newButton = nodes.get('btn-export-timechange-eic-names-pdf');
+  newButton.style = {};
+  run('syncTimeChangeDownloads(state.timeChangeMSData)');
+  assert.deepEqual(newButton.style, {width:'139px',height:'25px',justifyContent:'center'});
+  assert.deepEqual(originalButton.style, {});
+  nodes.get('timechange-eic-y-min').value = '-5';
+  nodes.get('timechange-eic-y-max').value = '200';
+  await nodes.get('btn-export-timechange-eic-names-pdf').handlers.click();
+  await nodes.get('btn-export-timechange-eic-pdf').handlers.click();
+  assert.equal(requests.length, 2);
+  assert.equal(exports.length, 2);
+  const [named, standard] = exports;
+  assert.equal(named.format, 'pdf');
+  assert.equal(named.style.trace_labels, true);
+  assert.equal(standard.style.trace_labels, undefined);
+  assert.equal(named.filename_base, `${standard.filename_base}_with_names`);
+  assert.equal(named.style.y_min, -5);
+  assert.equal(named.style.y_max, 200);
+  assert.deepEqual(named.traces, standard.traces);
+  assert.deepEqual(named.traces.map(trace => trace.label), ['first.D','second.D']);
+  assert.deepEqual(named.eic_settings, standard.eic_settings);
+  assert.equal(named.style.offset_angle_degrees, 45);
+  assert.equal(named.style.offset_guide, true);
+  nodes.get('timechange-eic-window-number').value = '0';
+  await nodes.get('btn-export-timechange-eic-names-pdf').handlers.click();
+  assert.equal(requests.length, 4);
+  assert.equal(exports.at(-1).style.trace_labels, true);
+  assert.equal(exports.at(-1).eic_settings.mz_window, 0);
 });
 
 test('overlay and diagonal downloads use the loaded traces and their own graph settings',async()=>{
@@ -172,4 +232,135 @@ test('overlay and diagonal downloads use the loaded traces and their own graph s
     for(const payload of exports){assert.equal(payload.style.fig_width,6);assert.equal(payload.style.x_axis_width_multiplier,2);}
     assert.equal(overlap.eic_settings?.mz_window,kind==='eic'?.5:undefined);
   }
+});
+
+test('per-kind Y limits update both views and all PDF/JPG buttons without loading traces again', async () => {
+  for (const kind of ['ms', 'tic', 'eic', 'uv']) {
+    const {nodes, exports, requests, plots, run} = fixture({renderPlots:true});
+    run(`state.timeChangeMSData=${JSON.stringify({kind, wavelength:214,
+      targetMz:247.1, mzWindow:.5, smoothing:1, ionMode:'positive', spectra:[
+        {name:'first', mz:[100,200], times:[0,1], intensities:[10,20]},
+        {name:'second', mz:[100,200], times:[0,1], intensities:[30,40]},
+      ]})}`);
+    nodes.get(`timechange-${kind}-y-min`).value = '-10';
+    const upper = nodes.get(`timechange-${kind}-y-max`);
+    upper.value = '25';
+    upper.handlers.change();
+    assert.equal(nodes.get('timechange-axis-error').hidden, true);
+    assert.equal(plots.length, 2);
+    for (const plot of plots) {
+      assert.deepEqual(Array.from(plot.layout.yaxis.range), [-10,25]);
+      assert.equal(plot.layout.yaxis.autorange, false);
+    }
+    for (const format of ['pdf','jpg']) {
+      await nodes.get(`btn-export-timechange-overlap-${format}`).handlers.click();
+      await run(`exportTimeChangeOffset('${format}')`);
+    }
+    assert.equal(requests.length, 0);
+    assert.equal(exports.length, 4);
+    for (const payload of exports) {
+      assert.equal(payload.style.y_min, -10);
+      assert.equal(payload.style.y_max, 25);
+      assert.deepEqual(payload.traces[1].intensities, [30,40]);
+    }
+    // Another signal retains its own automatic limits.
+    assert.equal(run(`getTimeChangeAxisLimits('${kind === 'uv' ? 'ms' : 'uv'}').yMax`), null);
+  }
+});
+
+test('Default clears all bounds and restores automatic axes in view and export', async () => {
+  const {nodes, plots, exports, run} = fixture({renderPlots:true});
+  await run('runTimeChangeMS("eic")');
+  for (const kind of ['ms','tic','eic','uv']) {
+    nodes.get(`timechange-${kind}-y-min`).value = '0';
+    nodes.get(`timechange-${kind}-y-max`).value = '5';
+  }
+  nodes.get('timechange-eic-y-max').handlers.change();
+  assert.deepEqual(Array.from(plots.at(-1).layout.yaxis.range), [0,5]);
+  nodes.get('btn-timechange-reset-axes').handlers.click();
+  for (const kind of ['ms','tic','eic','uv']) {
+    assert.equal(nodes.get(`timechange-${kind}-y-min`).value, '');
+    assert.equal(nodes.get(`timechange-${kind}-y-max`).value, '');
+  }
+  assert.equal(plots.at(-1).layout.yaxis.range, undefined);
+  assert.equal(nodes.get('timechange-axis-error').hidden, true);
+  await run('exportTimeChangeOffset("pdf")');
+  assert.equal(exports[0].style.y_min, null);
+  assert.equal(exports[0].style.y_max, null);
+});
+
+test('invalid Y limits show validation and prevent misleading graph downloads', async () => {
+  const {nodes, plots, exports, run} = fixture({renderPlots:true});
+  await run('runTimeChangeMS("eic")');
+  for (const [minimum, maximum] of [['10','5'], ['5','5'], ['','Infinity'], ['NaN','20']]) {
+    const before = plots.length;
+    nodes.get('timechange-eic-y-min').value = minimum;
+    nodes.get('timechange-eic-y-max').value = maximum;
+    nodes.get('timechange-eic-y-max').handlers.change();
+    assert.equal(nodes.get('timechange-axis-error').hidden, false);
+    assert.equal(plots.length, before);
+    await run('exportTimeChangeOffset("jpg")');
+    assert.equal(exports.length, 0);
+  }
+  await run('exportTimeChangeOffset("csv")');
+  assert.equal(exports.length, 1);
+  assert.deepEqual(exports[0].traces[0].intensities, [.5,10.5,.5]);
+  nodes.get('btn-timechange-reset-axes').handlers.click();
+  await run('exportTimeChangeOffset("jpg")');
+  assert.equal(exports.length, 2);
+});
+
+test('normalized overlay, diagonal and downloads use the same percent scale', async () => {
+  const {nodes, plots, exports, run} = fixture({renderPlots:true});
+  nodes.get('timechange-normalize').checked = true;
+  nodes.get('timechange-eic-y-min').value = '0';
+  nodes.get('timechange-eic-y-max').value = '150';
+  await run('runTimeChangeMS("eic")');
+  const [overlay, diagonal] = plots;
+  assert.equal(Math.max(...overlay.traces[0].y), 100);
+  assert.ok(diagonal.traces.some(trace => Math.max(...trace.y) === 100));
+  for (const plot of plots) assert.deepEqual(Array.from(plot.layout.yaxis.range), [0,150]);
+  await run('exportTimeChangeOffset("pdf", {view:"overlap"})');
+  assert.equal(exports[0].style.normalize, true);
+  assert.equal(exports[0].style.y_max, 150);
+});
+
+test('one-sided limits remain ordered even outside the automatic data extent', async () => {
+  for (const [bound, value, expected] of [['min',0,[0,45]], ['min',100,[100,147]],
+    ['max',20,[-2,20]], ['max',-100,[-147,-100]]]) {
+    const {nodes, plots, run} = fixture({renderPlots:true});
+    nodes.get(`timechange-eic-y-${bound}`).value = String(value);
+    await run('runTimeChangeMS("eic")');
+    for (const plot of plots) assert.deepEqual(Array.from(plot.layout.yaxis.range), expected);
+  }
+});
+
+test('normalized negative UV stays negative in both views and retains raw export values', async () => {
+  const {nodes, plots, exports, run} = fixture({renderPlots:true});
+  nodes.get('timechange-normalize').checked = true;
+  run(`state.timeChangeMSData={kind:'uv', wavelength:214, spectra:[
+    {name:'negative', times:[0,1], intensities:[-4,-2]},
+    {name:'positive', times:[0,1], intensities:[5,10]},
+  ]};renderTimeChangeMS(state.timeChangeMSData);`);
+  assert.deepEqual(Array.from(plots[0].traces[0].y), [-4,-2]);
+  assert.deepEqual(Array.from(plots[1].traces.find(trace => trace.name === 'negative').y), [-4,-2]);
+  await run('exportTimeChangeOffset("pdf", {view:"overlap"})');
+  assert.equal(exports[0].style.normalize, true);
+  assert.deepEqual(exports[0].traces[0].intensities, [-4,-2]);
+});
+
+test('a delayed one-sided axis update cannot override a newer automatic render', async () => {
+  const {context, run} = fixture();
+  const pending = [], applied = [];
+  context.Plotly.newPlot = (id, traces, layout) => new Promise(resolve => pending.push({
+    resolve, plot:{id, traces, layout, _fullLayout:{yaxis:{range:[-2,45]}}},
+  }));
+  context.Plotly.relayout = (plot, settings) => applied.push(settings);
+  const first = run('charts.plotMassSpectraOverlay("timechange-ms-plot", [], {yMax:10})');
+  const latest = run('charts.plotMassSpectraOverlay("timechange-ms-plot", [], {})');
+  pending[1].resolve(pending[1].plot);
+  await latest;
+  pending[0].resolve(pending[0].plot);
+  await first;
+  assert.equal(applied.length, 0);
 });

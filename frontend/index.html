@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CATrupole</title>
-  <link rel="stylesheet" href="css/style.css?v=0.2.73">
+  <link rel="stylesheet" href="css/style.css?v=0.2.74">
   <!-- JSME loaded in iframe (jsme-frame.html) for CSS isolation -->
   <script src="../node_modules/plotly.js-dist-min/plotly.min.js" charset="utf-8"></script>
   <script src="../node_modules/jspdf/dist/jspdf.umd.min.js" charset="utf-8"></script>
@@ -784,40 +784,81 @@
 
     <!-- Tab: Time Change -->
     <div id="tab-time-change-ms" class="tab-panel hidden">
-      <section class="tab-toolbar timechange-ms-panel" aria-label="Mass spectrum controls">
-        <span id="timechange-sample-requirement" class="toolbar-note" hidden>Requires 2+ selected samples</span>
-        <div class="timechange-ms-window">
-          <label>MS Start (min)<input type="number" id="timechange-ms-start" step="0.05" value="0" min="0"></label>
-          <label>MS End (min)<input type="number" id="timechange-ms-end" step="0.05" value="30" min="0"></label>
+      <div class="timechange-controls-grid">
+        <div class="timechange-generation-controls">
+          <section class="tab-toolbar timechange-ms-panel" aria-label="Mass spectrum controls">
+            <span id="timechange-sample-requirement" class="toolbar-note" hidden>Requires 2+ selected samples</span>
+            <div class="timechange-ms-window">
+              <label>MS Start (min)<input type="number" id="timechange-ms-start" step="0.05" value="0" min="0"></label>
+              <label>MS End (min)<input type="number" id="timechange-ms-end" step="0.05" value="30" min="0"></label>
+            </div>
+            <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS</button>
+          </section>
+          <section class="tab-toolbar timechange-tic-panel" aria-label="TIC chromatogram controls">
+            <button id="btn-run-time-change-tic" class="btn btn-primary">Generate TIC</button>
+          </section>
+          <section class="tab-toolbar timechange-eic-panel" aria-label="EIC chromatogram controls">
+            <div class="timechange-eic-controls">
+              <div class="timechange-eic-inputs">
+                <label>EIC m/z<input type="number" id="timechange-eic-mz" step="0.01" min="0.01" placeholder="e.g. 203.00"></label>
+                <label class="timechange-eic-window-control">m/z Window (± Da)
+                  <span class="timechange-eic-window-inputs">
+                    <input type="number" id="timechange-eic-window-number" min="0" value="0.5" step="0.1" aria-label="Time Change m/z window in Da">
+                    <input type="range" id="timechange-eic-window" min="0" max="1" value="0.5" step="0.1" aria-label="Time Change m/z window slider" title="Slider: 0–1 Da. Enter a larger window in the number field.">
+                  </span>
+                </label>
+                <label>Polarity
+                  <select id="timechange-eic-polarity">
+                    <option value="positive">Positive (+)</option>
+                    <option value="negative">Negative (−)</option>
+                  </select>
+                </label>
+              </div>
+              <button id="btn-run-time-change-eic" class="btn btn-primary">Generate EIC</button>
+            </div>
+          </section>
+          <section class="tab-toolbar timechange-uv-panel" aria-label="UV chromatogram controls">
+            <span class="timechange-uv-label">UV wavelength</span>
+            <div id="timechange-uv-wavelengths" class="timechange-uv-wavelengths" role="radiogroup" aria-label="UV wavelength"></div>
+            <button id="btn-run-time-change-uv" class="btn btn-primary" type="button" disabled>Generate UV</button>
+          </section>
         </div>
-        <button id="btn-run-time-change-ms" class="btn btn-primary">Generate MS</button>
-      </section>
-      <section class="tab-toolbar timechange-tic-panel" aria-label="TIC chromatogram controls">
-        <button id="btn-run-time-change-tic" class="btn btn-primary">Generate TIC</button>
-      </section>
-      <section class="tab-toolbar timechange-eic-panel" aria-label="EIC chromatogram controls">
-        <div class="timechange-eic-controls">
-          <label>EIC m/z<input type="number" id="timechange-eic-mz" step="0.01" min="0.01" placeholder="e.g. 203.00"></label>
-          <label class="timechange-eic-window-control">m/z Window (± Da)
-            <span class="timechange-eic-window-inputs">
-              <input type="number" id="timechange-eic-window-number" min="0" value="0.5" step="0.1" aria-label="Time Change m/z window in Da">
-              <input type="range" id="timechange-eic-window" min="0" max="1" value="0.5" step="0.1" aria-label="Time Change m/z window slider" title="Slider: 0–1 Da. Enter a larger window in the number field.">
-            </span>
-          </label>
-          <label>Polarity
-            <select id="timechange-eic-polarity">
-              <option value="positive">Positive (+)</option>
-              <option value="negative">Negative (−)</option>
-            </select>
-          </label>
-          <button id="btn-run-time-change-eic" class="btn btn-primary">Generate EIC</button>
-        </div>
-      </section>
-      <section class="tab-toolbar timechange-uv-panel" aria-label="UV chromatogram controls">
-        <span class="timechange-uv-label">UV wavelength</span>
-        <div id="timechange-uv-wavelengths" class="timechange-uv-wavelengths" role="radiogroup" aria-label="UV wavelength"></div>
-        <button id="btn-run-time-change-uv" class="btn btn-primary" type="button" disabled>Generate UV</button>
-      </section>
+        <section class="timechange-axis-panel" aria-labelledby="timechange-axis-title">
+          <div class="timechange-axis-header">
+            <h3 id="timechange-axis-title">Axis settings</h3>
+            <button id="btn-timechange-reset-axes" class="btn btn-sm" type="button">Default</button>
+          </div>
+          <table class="timechange-axis-table">
+            <thead>
+              <tr><th scope="col">Graph</th><th scope="col">Y minimum</th><th scope="col">Y maximum</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">MS</th>
+                <td><input type="number" id="timechange-ms-y-min" step="any" placeholder="Auto" aria-label="MS Y-axis minimum"></td>
+                <td><input type="number" id="timechange-ms-y-max" step="any" placeholder="Auto" aria-label="MS Y-axis maximum"></td>
+              </tr>
+              <tr>
+                <th scope="row">TIC</th>
+                <td><input type="number" id="timechange-tic-y-min" step="any" placeholder="Auto" aria-label="TIC Y-axis minimum"></td>
+                <td><input type="number" id="timechange-tic-y-max" step="any" placeholder="Auto" aria-label="TIC Y-axis maximum"></td>
+              </tr>
+              <tr>
+                <th scope="row">EIC</th>
+                <td><input type="number" id="timechange-eic-y-min" step="any" placeholder="Auto" aria-label="EIC Y-axis minimum"></td>
+                <td><input type="number" id="timechange-eic-y-max" step="any" placeholder="Auto" aria-label="EIC Y-axis maximum"></td>
+              </tr>
+              <tr>
+                <th scope="row">UV</th>
+                <td><input type="number" id="timechange-uv-y-min" step="any" placeholder="Auto" aria-label="UV Y-axis minimum"></td>
+                <td><input type="number" id="timechange-uv-y-max" step="any" placeholder="Auto" aria-label="UV Y-axis maximum"></td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="toolbar-note">Applies to the view and PDF/JPG exports. Leave blank for automatic limits.</p>
+          <p id="timechange-axis-error" class="timechange-axis-error" role="alert" hidden></p>
+        </section>
+      </div>
       <div id="timechange-empty-state" class="quote-empty-stack"></div>
       <div id="timechange-content" class="hidden">
         <div class="timechange-display-controls">
@@ -848,6 +889,9 @@
             </button>
             <button id="btn-export-timechange-eic-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the diagonal EIC graph as PDF" hidden>
               <span>Diagonal EIC PDF</span>
+            </button>
+            <button id="btn-export-timechange-eic-names-pdf" class="btn btn-sm" type="button" data-format="pdf" aria-label="Diagonal EIC PDF with names" title="Download the diagonal EIC PDF with each experiment name beside its trace" hidden>
+              <span>PDF with names</span>
             </button>
             <button id="btn-export-timechange-uv-pdf" class="btn btn-sm" type="button" data-format="pdf" title="Download the diagonal UV graph as PDF" hidden>
               <span>Diagonal UV PDF</span>
@@ -1101,14 +1145,14 @@
   </main>
 
   <!-- JSME loaded in iframe -->
-  <script src="js/api.js?v=0.2.73"></script>
-  <script src="js/charts.js?v=0.2.73"></script>
+  <script src="js/api.js?v=0.2.74"></script>
+  <script src="js/charts.js?v=0.2.74"></script>
   <script src="js/quotes.js?v=0.2.45"></script>
   <script src="js/qtof.js"></script>
   <script src="js/protein-databases.js"></script>
   <script src="js/peptides.js"></script>
   <script src="js/database-search.js"></script>
   <script src="js/reference-masses.js"></script>
-  <script src="js/app.js?v=0.2.73"></script>
+  <script src="js/app.js?v=0.2.74"></script>
 </body>
 </html>
